@@ -3,11 +3,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    restart: unless-stopped
     ports:
       - "${PORT:-80}:80"
     environment:
       - DEFAULT_API_URL=${DEFAULT_API_URL:-}
-      - API_PROXY_URL=${API_PROXY_URL:-}
+      - API_URL=${API_URL:-}
       - ENABLE_API_PROXY=${ENABLE_API_PROXY:-false}
       - LOCK_API_PROXY=${LOCK_API_PROXY:-false}
     depends_on:
@@ -15,8 +16,9 @@ services:
 
   auth:
     build:
-      context: ..
-      dockerfile: server/Dockerfile
+      context: ../server
+      dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       # 引导首批管理员；后续用户全部走邀请码注册
       - ADMIN_USERS=${ADMIN_USERS}
@@ -24,6 +26,12 @@ services:
       - JWT_EXPIRES_IN_SECONDS=${JWT_EXPIRES_IN_SECONDS:-2592000}
       - EVENT_RETENTION_DAYS=${EVENT_RETENTION_DAYS:-30}
       - PER_USER_PUBLIC_QUOTA_BYTES=${PER_USER_PUBLIC_QUOTA_BYTES:-524288000}
+      - API_URL=${API_URL:-}
+      - API_PROXY_URL=${API_PROXY_URL:-}
+      - API_PROXY_API_KEY=${API_PROXY_API_KEY:-}
+      - TEAM_API_BASE_URL=${TEAM_API_BASE_URL:-}
+      - TEAM_API_KEY=${TEAM_API_KEY:-}
+      - DEFAULT_HOURLY_IMAGE_QUOTA=${DEFAULT_HOURLY_IMAGE_QUOTA:-100}
       - DATA_DIR=/data
       - DB_PATH=/data/auth.db
     volumes:

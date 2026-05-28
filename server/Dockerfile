@@ -5,8 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libvips42 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json .
-RUN bun install --production
+COPY package.json bun.lock ./
+RUN bun install --production --frozen-lockfile
 
 COPY index.ts .
 
