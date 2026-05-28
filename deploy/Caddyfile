@@ -45,10 +45,6 @@
 		}
 	}
 
-	handle /api-proxy/ {
-		respond "Forbidden: API Proxy path required" 403
-	}
-
 	handle /api-proxy/* {
 		respond "Method Not Allowed" 405
 	}

@@ -1,39 +1,81 @@
 services:
+  # 外部 Caddy - 处理 HTTPS 和域名路由（可选）
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN:-localhost}", "--to", "frontend:80"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    networks:
+      - picpilot_net
+
+  # PicPilot 前端
   frontend:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    container_name: picpilot-frontend
     restart: unless-stopped
-    ports:
-      - "${PORT:-80}:80"
     environment:
       - DEFAULT_API_URL=${DEFAULT_API_URL:-}
-      - API_URL=${API_URL:-}
     depends_on:
       - auth
+    expose:
+      - "80"
+    networks:
+      - picpilot_net
 
+  # PicPilot 认证 API
   auth:
     build:
       context: ../server
       dockerfile: Dockerfile
+    container_name: picpilot-auth
     restart: unless-stopped
     environment:
-      # 引导首批管理员；后续用户全部走邀请码注册
       - ADMIN_USERS=${ADMIN_USERS}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN_SECONDS=${JWT_EXPIRES_IN_SECONDS:-2592000}
       - EVENT_RETENTION_DAYS=${EVENT_RETENTION_DAYS:-30}
       - PER_USER_PUBLIC_QUOTA_BYTES=${PER_USER_PUBLIC_QUOTA_BYTES:-524288000}
-      - API_URL=${API_URL:-}
+      - DEFAULT_HOURLY_IMAGE_QUOTA=${DEFAULT_HOURLY_IMAGE_QUOTA:-100}
+      - DEFAULT_MAX_BATCH_IMAGES=${DEFAULT_MAX_BATCH_IMAGES:-10}
       - API_PROXY_URL=${API_PROXY_URL:-}
       - API_PROXY_API_KEY=${API_PROXY_API_KEY:-}
-      - TEAM_API_BASE_URL=${TEAM_API_BASE_URL:-}
-      - TEAM_API_KEY=${TEAM_API_KEY:-}
-      - DEFAULT_HOURLY_IMAGE_QUOTA=${DEFAULT_HOURLY_IMAGE_QUOTA:-100}
       - DATA_DIR=/data
       - DB_PATH=/data/auth.db
     volumes:
       - auth_data:/data
+    expose:
+      - "3001"
+    networks:
+      - picpilot_net
+
+  # CLIProxyAPI（可选）
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cli-proxy-api
+    restart: unless-stopped
+    volumes:
+      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml:ro
+      - ./cliproxy/auths:/root/.cli-proxy-api
+      - ./cliproxy/logs:/CLIProxyAPI/logs
+    expose:
+      - "8317"
+    networks:
+      - picpilot_net
+
+networks:
+  picpilot_net:
 
 volumes:
+  caddy_data:
+  caddy_config:
   auth_data:
