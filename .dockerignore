@@ -2,6 +2,21 @@ node_modules
 dist
 .git
 .gitignore
+.github
 *.md
 Dockerfile
 .dockerignore
+
+# Local-only runtime data and editor state
+data
+.claude
+.vscode
+.idea
+.DS_Store
+.wrangler
+
+# Env / secrets / local overrides
+.env
+.env.*
+*.local
+dev-proxy.config.json
