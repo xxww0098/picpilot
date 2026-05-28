@@ -1,0 +1,33 @@
+services:
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "${PORT:-80}:80"
+    environment:
+      - DEFAULT_API_URL=${DEFAULT_API_URL:-}
+      - API_PROXY_URL=${API_PROXY_URL:-}
+      - ENABLE_API_PROXY=${ENABLE_API_PROXY:-false}
+      - LOCK_API_PROXY=${LOCK_API_PROXY:-false}
+    depends_on:
+      - auth
+
+  auth:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    environment:
+      # 引导首批管理员；后续用户全部走邀请码注册
+      - ADMIN_USERS=${ADMIN_USERS}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN_SECONDS=${JWT_EXPIRES_IN_SECONDS:-2592000}
+      - EVENT_RETENTION_DAYS=${EVENT_RETENTION_DAYS:-30}
+      - PER_USER_PUBLIC_QUOTA_BYTES=${PER_USER_PUBLIC_QUOTA_BYTES:-524288000}
+      - DATA_DIR=/data
+      - DB_PATH=/data/auth.db
+    volumes:
+      - auth_data:/data
+
+volumes:
+  auth_data:
