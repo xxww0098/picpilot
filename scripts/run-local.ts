@@ -1,0 +1,75 @@
+import { spawnSync } from 'node:child_process'
+import pino from 'pino'
+
+type CommandResult = ReturnType<typeof spawnSync>
+
+const bunCommand = process.platform === 'win32' ? 'bun.cmd' : 'bun'
+const PRODUCT = 'picpilot'
+const logger = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+  base: { app: PRODUCT, component: 'local-runner' },
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+      translateTime: 'SYS:standard',
+      ignore: 'pid,hostname,app,component',
+      messageFormat: '[{component}] {msg}',
+    },
+  },
+})
+
+function ensureSuccess(result: CommandResult, label: string): void {
+  if (result.error) {
+    throw new Error(`${label} 启动失败：${result.error.message}`)
+  }
+  if (result.status && result.status !== 0) {
+    process.exit(result.status)
+  }
+}
+
+function readCommandOutput(command: string, args: string[]): string | null {
+  const result = spawnSync(command, args, { encoding: 'utf8' })
+  if (result.error || result.status !== 0) return null
+  return result.stdout.trim()
+}
+
+function run(command: string, args: string[], label: string, cwd = process.cwd()): void {
+  const result = spawnSync(command, args, { stdio: 'inherit', cwd })
+  ensureSuccess(result, label)
+}
+
+const nodeVersion = readCommandOutput('node', ['-v'])
+if (!nodeVersion) {
+  logger.error({ scope: 'runtime' }, 'Node.js is not installed')
+  process.exit(1)
+}
+
+const bunVersion = readCommandOutput(bunCommand, ['-v'])
+if (!bunVersion) {
+  logger.error({ scope: 'runtime' }, 'Bun is not installed')
+  process.exit(1)
+}
+
+logger.info({ mode: 'local-hono', bun: bunVersion, node: nodeVersion }, 'Starting local picpilot')
+
+logger.info({ step: '1/3' }, 'Installing dependencies')
+run(bunCommand, ['install'], 'bun install')
+run(bunCommand, ['install'], 'bun install server', 'server')
+
+logger.info({ step: '2/3' }, 'Building frontend')
+run(bunCommand, ['run', 'build'], 'bun run build')
+
+const authPort = process.env.AUTH_PORT ?? '3001'
+const localEnv = {
+  ...process.env,
+  AUTH_PORT: authPort,
+  JWT_SECRET: process.env.JWT_SECRET ?? 'local-dev-jwt-secret-change-before-deploy',
+  ADMIN_USERS: process.env.ADMIN_USERS ?? 'admin:admin',
+  LOG_PRETTY: process.env.LOG_PRETTY ?? '1',
+}
+
+logger.info({ step: '3/3', url: `http://localhost:${authPort}` }, 'Starting Hono server')
+if (!process.env.ADMIN_USERS) logger.warn({ username: 'admin', password: 'admin' }, 'Using default local admin')
+const result = spawnSync(bunCommand, ['run', 'index.ts'], { stdio: 'inherit', cwd: 'server', env: localEnv })
+ensureSuccess(result, 'bun run server')

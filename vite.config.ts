@@ -17,8 +17,36 @@ function loadDevProxyConfig() {
   }
 }
 
+function createLocalAuthProxy() {
+  const target = process.env.LOCAL_AUTH_PROXY_URL
+  if (!target) return undefined
+
+  return {
+    '/api/auth': { target, changeOrigin: true },
+    '/api/admin': { target, changeOrigin: true },
+    '/api/telemetry': { target, changeOrigin: true },
+    '/api/gallery': { target, changeOrigin: true },
+    '/api-proxy': { target, changeOrigin: true },
+  }
+}
+
 export default defineConfig(({ command }) => {
   const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
+  const localAuthProxy = createLocalAuthProxy()
+  const devApiProxy = devProxyConfig?.enabled
+    ? {
+        [devProxyConfig.prefix]: {
+          target: devProxyConfig.target,
+          changeOrigin: devProxyConfig.changeOrigin,
+          secure: devProxyConfig.secure,
+          rewrite: (path: string) =>
+            path.replace(
+              new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+              '',
+            ),
+        },
+      }
+    : undefined
 
   return {
     plugins: [react()],
@@ -29,21 +57,32 @@ export default defineConfig(({ command }) => {
     },
     server: {
       host: true,
-      proxy:
-        devProxyConfig?.enabled
-          ? {
-              [devProxyConfig.prefix]: {
-                target: devProxyConfig.target,
-                changeOrigin: devProxyConfig.changeOrigin,
-                secure: devProxyConfig.secure,
-                rewrite: (path) =>
-                  path.replace(
-                    new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
-                    '',
-                  ),
-              },
+      proxy: localAuthProxy || devApiProxy ? { ...localAuthProxy, ...devApiProxy } : undefined,
+    },
+    preview: {
+      host: true,
+      proxy: localAuthProxy,
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+            if (id.includes('react-dom') || /\/react\//.test(id)) return 'vendor-react'
+            if (
+              id.includes('streamdown') ||
+              id.includes('mermaid') ||
+              id.includes('shiki') ||
+              id.includes('@shikijs')
+            ) {
+              return 'vendor-markdown'
             }
-          : undefined,
+            if (id.includes('@fal-ai')) return 'vendor-fal'
+            if (id.includes('fflate')) return 'vendor-fflate'
+            if (id.includes('zustand')) return 'vendor-zustand'
+          },
+        },
+      },
     },
   }
 })

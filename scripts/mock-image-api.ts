@@ -1,4 +1,33 @@
-import http from 'node:http'
+import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http'
+
+type BodyPayload = {
+  text: string
+  json: unknown | null
+}
+
+type SendJsonOptions = {
+  cors?: boolean
+  pretty?: boolean
+}
+
+type RandomImageShape = {
+  status: 'success'
+  data: {
+    id: number
+    name: string
+    url: string
+    width: number
+    height: number
+    mime: 'image/png'
+  }
+}
+
+type ResponseCompletedEvent = {
+  type: 'response.completed'
+  response: {
+    output: Array<Record<string, unknown>>
+  }
+}
 
 const port = Number(process.env.MOCK_IMAGE_API_PORT || 8787)
 const host = process.env.MOCK_IMAGE_API_HOST || '127.0.0.1'
@@ -22,7 +51,11 @@ const pathModes = new Set([
   'wrong-shape',
 ])
 
-function appendCors(headers, enabled = true) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function appendCors(headers: OutgoingHttpHeaders, enabled = true): OutgoingHttpHeaders {
   if (!enabled) return headers
   return {
     ...headers,
@@ -32,17 +65,17 @@ function appendCors(headers, enabled = true) {
   }
 }
 
-function send(res, status, headers, body) {
+function send(res: ServerResponse, status: number, headers: OutgoingHttpHeaders, body: string | Buffer): void {
   res.writeHead(status, headers)
   res.end(body)
 }
 
-function sendJson(res, status, payload, options = {}) {
+function sendJson(res: ServerResponse, status: number, payload: unknown, options: SendJsonOptions = {}): void {
   const body = JSON.stringify(payload, null, options.pretty ? 2 : 0)
   send(res, status, appendCors({ 'Content-Type': 'application/json; charset=utf-8' }, options.cors !== false), body)
 }
 
-async function sendSse(res, events, options = {}) {
+async function sendSse(res: ServerResponse, events: unknown[], options: SendJsonOptions = {}): Promise<void> {
   res.writeHead(200, appendCors({
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -57,10 +90,10 @@ async function sendSse(res, events, options = {}) {
   res.end()
 }
 
-function readBody(req) {
+function readBody(req: IncomingMessage): Promise<BodyPayload> {
   return new Promise((resolve) => {
-    const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
     req.on('end', () => {
       const text = Buffer.concat(chunks).toString('utf8')
       if (!text) {
@@ -68,7 +101,7 @@ function readBody(req) {
         return
       }
       try {
-        resolve({ text, json: JSON.parse(text) })
+        resolve({ text, json: JSON.parse(text) as unknown })
       } catch {
         resolve({ text, json: null })
       }
@@ -77,14 +110,14 @@ function readBody(req) {
   })
 }
 
-function getMode(url, body) {
+function getMode(url: URL, body: unknown): string {
   const queryMode = url.searchParams.get('mode')
   if (queryMode) return queryMode
 
   const firstSegment = url.pathname.split('/').filter(Boolean)[0]
-  if (pathModes.has(firstSegment)) return firstSegment
+  if (firstSegment && pathModes.has(firstSegment)) return firstSegment
 
-  if (body && typeof body === 'object') {
+  if (isRecord(body)) {
     if (typeof body.mode === 'string' && body.mode.trim()) return body.mode.trim()
     if (typeof body.model === 'string') {
       const match = body.model.match(/^mock:(.+)$/)
@@ -95,21 +128,21 @@ function getMode(url, body) {
   return defaultMode
 }
 
-function getRequestedN(url, body) {
-  const raw = url.searchParams.get('n') ?? (body && typeof body === 'object' ? body.n : undefined)
+function getRequestedN(url: URL, body: unknown): number {
+  const raw = url.searchParams.get('n') ?? (isRecord(body) ? body.n : undefined)
   const n = Number(raw)
   return Number.isFinite(n) ? Math.max(1, Math.min(10, Math.floor(n))) : 1
 }
 
-function getBaseUrl(req) {
+function getBaseUrl(req: IncomingMessage): string {
   return `http://${req.headers.host || `${host}:${port}`}`
 }
 
-function getImageUrl(req, cors, index = 0) {
+function getImageUrl(req: IncomingMessage, cors: boolean, index = 0): string {
   return `${getBaseUrl(req)}/images/mock.png?cors=${cors ? '1' : '0'}&i=${index}&t=${Date.now()}`
 }
 
-function createRandomShape(req, cors, index = 0) {
+function createRandomShape(req: IncomingMessage, cors: boolean, index = 0): RandomImageShape {
   return {
     status: 'success',
     data: {
@@ -123,7 +156,7 @@ function createRandomShape(req, cors, index = 0) {
   }
 }
 
-function createOpenAIResponse(req, mode, n = 1) {
+function createOpenAIResponse(req: IncomingMessage, mode: string, n = 1): unknown {
   const created = Math.floor(Date.now() / 1000)
 
   if (mode === 'b64') {
@@ -151,19 +184,19 @@ function createOpenAIResponse(req, mode, n = 1) {
   }
 }
 
-function isOpenAIImagesPath(pathname) {
+function isOpenAIImagesPath(pathname: string): boolean {
   return pathname.endsWith('/v1/images/generations') || pathname.endsWith('/v1/images/edits')
 }
 
-function isOpenAIResponsesPath(pathname) {
+function isOpenAIResponsesPath(pathname: string): boolean {
   return pathname.endsWith('/v1/responses')
 }
 
-function isCustomPath(pathname) {
+function isCustomPath(pathname: string): boolean {
   return pathname === '/custom/random-image' || pathname === '/custom/generate'
 }
 
-function createImagesStreamEvents(req, mode, n, isEdit) {
+function createImagesStreamEvents(mode: string, n: number, isEdit: boolean): Array<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000)
   const prefix = isEdit ? 'image_edit' : 'image_generation'
   const partialCount = mode === 'empty' ? 0 : 2
@@ -187,7 +220,7 @@ function createImagesStreamEvents(req, mode, n, isEdit) {
   return [...partials, ...completed]
 }
 
-function createResponsesStreamEvents(mode) {
+function createResponsesStreamEvents(mode: string): Array<Record<string, unknown> | ResponseCompletedEvent> {
   const partials = mode === 'empty'
     ? []
     : [0, 1].map((index) => ({
@@ -217,8 +250,8 @@ function createResponsesStreamEvents(mode) {
   ]
 }
 
-async function handleApi(req, res, url) {
-  const body = req.method === 'GET' ? { json: null } : await readBody(req)
+async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const body = req.method === 'GET' ? { text: '', json: null } : await readBody(req)
   const mode = getMode(url, body.json)
   const n = getRequestedN(url, body.json)
 
@@ -242,32 +275,34 @@ async function handleApi(req, res, url) {
     return
   }
 
-  const wantsStream = (body.json && typeof body.json === 'object' && body.json.stream === true) ||
+  const wantsStream = (isRecord(body.json) && body.json.stream === true) ||
     /name="stream"[\s\S]*?\r?\n\r?\ntrue/.test(body.text)
   if (wantsStream) {
-    await sendSse(res, createImagesStreamEvents(req, mode, n, url.pathname.endsWith('/v1/images/edits')))
+    await sendSse(res, createImagesStreamEvents(mode, n, url.pathname.endsWith('/v1/images/edits')))
     return
   }
 
   sendJson(res, 200, createOpenAIResponse(req, mode, n))
 }
 
-async function handleResponses(req, res, url) {
-  const body = req.method === 'GET' ? { json: null } : await readBody(req)
+async function handleResponses(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const body = req.method === 'GET' ? { text: '', json: null } : await readBody(req)
   const mode = getMode(url, body.json)
 
-  if (body.json && typeof body.json === 'object' && body.json.stream === true) {
+  if (isRecord(body.json) && body.json.stream === true) {
     await sendSse(res, createResponsesStreamEvents(mode))
     return
   }
 
+  const completed = createResponsesStreamEvents(mode)
+    .find((event): event is ResponseCompletedEvent => event.type === 'response.completed')
   sendJson(res, 200, {
-    output: createResponsesStreamEvents(mode).at(-1)?.response?.output ?? [],
+    output: completed?.response.output ?? [],
   })
 }
 
-async function handleCustom(req, res, url) {
-  const body = req.method === 'GET' ? { json: null } : await readBody(req)
+async function handleCustom(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const body = req.method === 'GET' ? { text: '', json: null } : await readBody(req)
   const mode = getMode(url, body.json)
   const n = getRequestedN(url, body.json)
 
@@ -294,7 +329,7 @@ async function handleCustom(req, res, url) {
   sendJson(res, 200, createRandomShape(req, mode === 'url-ok' || mode === 'b64'))
 }
 
-function handleImage(req, res, url) {
+function handleImage(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const cors = url.searchParams.get('cors') === '1'
   const headers = appendCors({
     'Cache-Control': 'no-store',
@@ -320,9 +355,9 @@ function handleImage(req, res, url) {
   send(res, 200, headers, tinyPng)
 }
 
-function handleIndex(req, res) {
+function handleIndex(req: IncomingMessage, res: ServerResponse): void {
   sendJson(res, 200, {
-    name: 'gpt-image-playground mock image API',
+    name: 'picpilot mock image API',
     openaiCompatibleBaseUrls: [
       `${getBaseUrl(req)}/url-cors-block`,
       `${getBaseUrl(req)}/url-ok`,
