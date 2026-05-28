@@ -1,34 +1,8 @@
-import { useEffect, useState } from 'react'
-import { authFetch } from '../../lib/auth'
-
-interface OverviewData {
-  totals: {
-    total: number
-    success: number
-    failure: number
-    avg_duration: number | null
-    total_output: number | null
-  }
-  errors: Array<{ error_type: string; n: number }>
-  providers: Array<{ provider: string; n: number }>
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  let n = bytes
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(1)} ${units[i]}`
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
+import { fetchAdminOverview } from '../../lib/adminApi'
+import { formatBytes, formatDurationMs } from '../../lib/format'
+import { getErrorTypeLabel, getProviderDisplayName } from '../../lib/userFacingText'
+import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import QueryState from './QueryState'
 
 function Bar({ label, value, max }: { label: string; value: number; max: number }) {
   const width = max > 0 ? (value / max) * 100 : 0
@@ -47,22 +21,18 @@ function Bar({ label, value, max }: { label: string; value: number; max: number 
 }
 
 export default function Overview() {
-  const [data, setData] = useState<OverviewData | null>(null)
-  const [error, setError] = useState('')
+  const { data, loading, error } = useAsyncQuery(() => fetchAdminOverview(), [])
 
-  useEffect(() => {
-    authFetch('/api/admin/overview')
-      .then(async (res) => {
-        if (!res.ok) throw new Error('加载失败')
-        const json = (await res.json()) as OverviewData
-        setData(json)
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : '加载失败'))
-  }, [])
+  return (
+    <QueryState loading={loading} error={error}>
+      {data && (
+        <OverviewContent data={data} />
+      )}
+    </QueryState>
+  )
+}
 
-  if (error) return <p className="text-sm text-red-500">{error}</p>
-  if (!data) return <p className="text-sm text-[hsl(var(--muted-foreground))]">加载中…</p>
-
+function OverviewContent({ data }: { data: NonNullable<Awaited<ReturnType<typeof fetchAdminOverview>>> }) {
   const { totals, errors, providers } = data
   const successRate = totals.total > 0 ? ((totals.success / totals.total) * 100).toFixed(1) : '—'
   const errorMax = errors.reduce((m, e) => Math.max(m, e.n), 0)
@@ -70,30 +40,30 @@ export default function Overview() {
 
   return (
     <div className="space-y-6">
-      <p className="text-xs text-[hsl(var(--muted-foreground))]">最近 7 天</p>
+      <p className="text-xs text-[hsl(var(--muted-foreground))]">最近 7 天请求统计</p>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="总请求" value={String(totals.total)} />
+        <Stat label="请求总数" value={String(totals.total)} />
         <Stat label="成功率" value={`${successRate}%`} />
-        <Stat label="平均耗时" value={formatDuration(totals.avg_duration ?? 0)} />
-        <Stat label="累计输出" value={formatBytes(totals.total_output ?? 0)} />
+        <Stat label="平均耗时" value={formatDurationMs(totals.avg_duration ?? 0)} />
+        <Stat label="累计图片大小" value={formatBytes(totals.total_output ?? 0)} />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-sm font-medium text-[hsl(var(--foreground))]">错误分布</h3>
           {errors.length === 0 ? (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">无错误</p>
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">暂无错误</p>
           ) : (
-            errors.map((e) => <Bar key={e.error_type} label={e.error_type} value={e.n} max={errorMax} />)
+            errors.map((e) => <Bar key={e.error_type} label={getErrorTypeLabel(e.error_type)} value={e.n} max={errorMax} />)
           )}
         </div>
         <div>
-          <h3 className="mb-3 text-sm font-medium text-[hsl(var(--foreground))]">Provider 分布</h3>
+          <h3 className="mb-3 text-sm font-medium text-[hsl(var(--foreground))]">服务商分布</h3>
           {providers.length === 0 ? (
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">无数据</p>
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">暂无数据</p>
           ) : (
-            providers.map((p) => <Bar key={p.provider} label={p.provider} value={p.n} max={providerMax} />)
+            providers.map((p) => <Bar key={p.provider} label={getProviderDisplayName(p.provider)} value={p.n} max={providerMax} />)
           )}
         </div>
       </div>

@@ -1,8 +1,9 @@
 import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
+import { loadImage } from './canvasImage'
 import { logger, serializeError } from './logger'
 import { namespacedStorageKey } from './auth'
 
-const DB_NAME = namespacedStorageKey('gpt-image-playground')
+const DB_NAME = namespacedStorageKey('picpilot')
 const DB_VERSION = 3
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
@@ -304,15 +305,6 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
     }
   }
   return id
-}
-
-function loadImage(dataUrl: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image()
-    image.onload = () => resolve(image)
-    image.onerror = () => reject(new Error('图片加载失败'))
-    image.src = dataUrl
-  })
 }
 
 async function createImageThumbnail(dataUrl: string): Promise<Omit<StoredImageThumbnail, 'id'>> {

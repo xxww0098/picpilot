@@ -31,12 +31,22 @@ describe('validateApiProfile', () => {
     }))).toBeNull()
   })
 
+  it('allows empty API key when API proxy is enabled and available', () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
+
+    expect(validateApiProfile(createDefaultOpenAIProfile({
+      baseUrl: '',
+      apiKey: '',
+      apiProxy: true,
+    }))).toBeNull()
+  })
+
   it('still requires API URL when API proxy is unavailable', () => {
     expect(validateApiProfile(createDefaultOpenAIProfile({
       baseUrl: '',
       apiKey: 'test-key',
       apiProxy: true,
-    }))).toBe('缺少 API URL')
+    }))).toBe('请填写 API 基础地址，或开启团队 API 代理。')
   })
 })
 

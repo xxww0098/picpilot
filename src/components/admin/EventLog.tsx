@@ -1,38 +1,21 @@
-import { useCallback, useEffect, useState } from 'react'
-import { authFetch } from '../../lib/auth'
-
-interface EventRow {
-  id: number
-  user_id: string
-  username: string
-  event_type: string
-  provider: string | null
-  api_mode: string | null
-  model: string | null
-  size: string | null
-  quality: string | null
-  n_images: number | null
-  has_input_image: number | null
-  has_mask: number | null
-  prompt: string | null
-  duration_ms: number | null
-  http_status: number | null
-  error_type: string | null
-  error_message: string | null
-  error_stack: string | null
-  output_count: number | null
-  output_bytes: number | null
-  user_agent: string | null
-  ip: string | null
-  client_version: string | null
-  created_at: number
-}
+import { useState } from 'react'
+import { downloadAdminEventsCsv, fetchAdminEvents, type AdminEventRow } from '../../lib/adminApi'
+import { formatBytes, formatTimestamp } from '../../lib/format'
+import {
+  getApiModeLabel,
+  getErrorTypeLabel,
+  getEventTypeLabel,
+  getHttpStatusLabel,
+  getParamValueLabel,
+  getProviderDisplayName,
+  getUserFacingErrorMessage,
+} from '../../lib/userFacingText'
+import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import { showAppToast } from '../../lib/dialog'
+import ModalShell from '../ModalShell'
 
 const PAGE_SIZE = 50
-
-function formatTs(ts: number): string {
-  return new Date(ts).toLocaleString()
-}
+const EXPORT_MAX_DAYS = 31
 
 function eventTypeColor(t: string): string {
   if (t === 'success') return 'text-green-600 dark:text-green-400'
@@ -40,58 +23,57 @@ function eventTypeColor(t: string): string {
   return 'text-red-500'
 }
 
+function todayString(): string {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function dayToRange(day: string): { since: number; until: number } | null {
+  if (!day) return null
+  const [y, m, d] = day.split('-').map(Number)
+  if (!y || !m || !d) return null
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+  const end = new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+  return { since: start, until: end }
+}
+
+function rangeToMs(from: string, to: string): { since: number; until: number } | null {
+  const a = dayToRange(from)
+  const b = dayToRange(to)
+  if (!a || !b) return null
+  return { since: a.since, until: b.until }
+}
+
 export default function EventLog() {
-  const [events, setEvents] = useState<EventRow[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
   const [eventType, setEventType] = useState('')
   const [errorType, setErrorType] = useState('')
-  const [detail, setDetail] = useState<EventRow | null>(null)
+  const [day, setDay] = useState<string>(todayString())
+  const [detail, setDetail] = useState<AdminEventRow | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) })
-      if (eventType) params.set('event_type', eventType)
-      if (errorType) params.set('error_type', errorType)
-      const res = await authFetch(`/api/admin/events?${params}`)
-      if (!res.ok) throw new Error('加载失败')
-      const data = (await res.json()) as { events: EventRow[]; total: number }
-      setEvents(data.events)
-      setTotal(data.total)
-      setError('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
+  const range = dayToRange(day)
+
+  const { data, loading, error } = useAsyncQuery(async () => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) })
+    if (eventType) params.set('event_type', eventType)
+    if (errorType) params.set('error_type', errorType)
+    if (range) {
+      params.set('since', String(range.since))
+      params.set('until', String(range.until))
     }
-  }, [page, eventType, errorType])
+    return fetchAdminEvents(params)
+  }, [page, eventType, errorType, day])
 
-  useEffect(() => {
-    void load()
-  }, [load])
+  const events = data?.events ?? []
+  const total = data?.total ?? 0
 
-  function exportCsv() {
-    const cols: Array<keyof EventRow> = ['created_at', 'username', 'event_type', 'provider', 'model', 'duration_ms', 'error_type', 'error_message', 'prompt']
-    const header = cols.join(',')
-    const rows = events.map((e) =>
-      cols.map((c) => {
-        const v = e[c]
-        if (v == null) return ''
-        const s = String(v).replace(/"/g, '""')
-        return `"${s}"`
-      }).join(','),
-    )
-    const csv = [header, ...rows].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `events-${Date.now()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  function changeDay(value: string) {
+    setPage(0)
+    setDay(value)
   }
 
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1)
@@ -104,34 +86,57 @@ export default function EventLog() {
           onChange={(e) => { setPage(0); setEventType(e.target.value) }}
           className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
         >
-          <option value="">所有类型</option>
-          <option value="success">success</option>
-          <option value="failure">failure</option>
-          <option value="timeout">timeout</option>
-          <option value="cancelled">cancelled</option>
+          <option value="">所有结果</option>
+          <option value="success">成功</option>
+          <option value="failure">失败</option>
+          <option value="timeout">超时</option>
+          <option value="cancelled">已取消</option>
         </select>
         <select
           value={errorType}
           onChange={(e) => { setPage(0); setErrorType(e.target.value) }}
           className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
         >
-          <option value="">所有错误</option>
-          <option value="timeout">timeout</option>
-          <option value="rate_limit">rate_limit</option>
-          <option value="invalid_request">invalid_request</option>
-          <option value="auth">auth</option>
-          <option value="server_error">server_error</option>
-          <option value="network">network</option>
-          <option value="unknown">unknown</option>
+          <option value="">所有错误类型</option>
+          <option value="timeout">请求超时</option>
+          <option value="rate_limit">额度或限流</option>
+          <option value="invalid_request">请求参数无效</option>
+          <option value="auth">认证失败</option>
+          <option value="server_error">服务端错误</option>
+          <option value="network">网络或跨域问题</option>
+          <option value="unknown">未知错误</option>
         </select>
+        <div className="flex items-center gap-1">
+          <input
+            type="date"
+            value={day}
+            max={todayString()}
+            onChange={(e) => changeDay(e.target.value)}
+            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm"
+          />
+          <button
+            type="button"
+            onClick={() => changeDay(todayString())}
+            className="rounded border border-[hsl(var(--border))] px-2 py-1.5 text-xs hover:bg-[hsl(var(--muted))]"
+          >
+            今天
+          </button>
+          <button
+            type="button"
+            onClick={() => changeDay('')}
+            className="rounded border border-[hsl(var(--border))] px-2 py-1.5 text-xs hover:bg-[hsl(var(--muted))]"
+          >
+            全部
+          </button>
+        </div>
         <span className="text-sm text-[hsl(var(--muted-foreground))]">共 {total} 条</span>
-        <button onClick={exportCsv} className="ml-auto rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))]">
-          导出 CSV
+        <button onClick={() => setExportOpen(true)} className="ml-auto rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))]">
+          批量导出 CSV
         </button>
       </div>
 
       {loading && <p className="text-sm text-[hsl(var(--muted-foreground))]">加载中…</p>}
-      {error && <p className="text-sm text-red-500">{error}</p>}
+      {error && <p className="text-sm text-red-500">{getUserFacingErrorMessage(error, '加载请求记录失败')}</p>}
 
       {!loading && !error && (
         <>
@@ -140,27 +145,27 @@ export default function EventLog() {
               <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
                 <th className="py-2 pr-3">时间</th>
                 <th className="py-2 pr-3">用户</th>
-                <th className="py-2 pr-3">类型</th>
-                <th className="py-2 pr-3">Provider</th>
-                <th className="py-2 pr-3">Model</th>
+                <th className="py-2 pr-3">结果</th>
+                <th className="py-2 pr-3">服务商</th>
+                <th className="py-2 pr-3">模型</th>
                 <th className="py-2 pr-3 text-right">耗时</th>
-                <th className="py-2 pr-3">错误</th>
+                <th className="py-2 pr-3">错误类型</th>
                 <th className="py-2 pr-3">操作</th>
               </tr>
             </thead>
             <tbody>
               {events.length === 0 && (
-                <tr><td colSpan={8} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">无数据</td></tr>
+                <tr><td colSpan={8} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
               )}
               {events.map((e) => (
                 <tr key={e.id} className="border-b border-[hsl(var(--border))] last:border-0">
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatTs(e.created_at)}</td>
+                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatTimestamp(e.created_at)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--foreground))]">{e.username}</td>
-                  <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{e.event_type}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{e.provider ?? '—'}</td>
+                  <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{getEventTypeLabel(e.event_type)}</td>
+                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getProviderDisplayName(e.provider)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{e.model ?? '—'}</td>
                   <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
-                  <td className="py-2 pr-3 max-w-xs truncate text-red-500" title={e.error_message ?? ''}>{e.error_type ?? '—'}</td>
+                  <td className="py-2 pr-3 max-w-xs truncate text-red-500" title={e.error_message ? getUserFacingErrorMessage(e.error_message) : ''}>{getErrorTypeLabel(e.error_type)}</td>
                   <td className="py-2 pr-3">
                     <button onClick={() => setDetail(e)} className="text-xs text-[hsl(var(--primary))] hover:underline">详情</button>
                   </td>
@@ -191,53 +196,181 @@ export default function EventLog() {
         </>
       )}
 
+      {exportOpen && (
+        <ExportDialog
+          defaultFrom={day || todayString()}
+          defaultTo={day || todayString()}
+          eventType={eventType}
+          errorType={errorType}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
+
       {detail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDetail(null)}>
-          <div className="m-4 max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[hsl(var(--border))] bg-white p-6 shadow-xl dark:bg-[hsl(240_10%_12%)]" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-3 text-base font-semibold">事件详情 #{detail.id}</h3>
+        <ModalShell
+          portal
+          onClose={() => setDetail(null)}
+          zIndexClass="z-50"
+          paddingClass="p-0"
+          backdropClassName="bg-black/40"
+          panelClassName="m-4 max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[hsl(var(--border))] bg-white p-6 shadow-xl dark:bg-[hsl(240_10%_12%)]"
+        >
+            <h3 className="mb-3 text-base font-semibold">请求详情 #{detail.id}</h3>
             <dl className="grid grid-cols-3 gap-y-2 text-sm">
-              <Field label="时间">{formatTs(detail.created_at)}</Field>
+              <Field label="时间">{formatTimestamp(detail.created_at)}</Field>
               <Field label="用户">{detail.username}</Field>
-              <Field label="类型" valueClass={eventTypeColor(detail.event_type)}>{detail.event_type}</Field>
-              <Field label="Provider">{detail.provider ?? '—'}</Field>
-              <Field label="Model">{detail.model ?? '—'}</Field>
-              <Field label="API Mode">{detail.api_mode ?? '—'}</Field>
-              <Field label="Size">{detail.size ?? '—'}</Field>
-              <Field label="Quality">{detail.quality ?? '—'}</Field>
-              <Field label="N 张">{detail.n_images ?? '—'}</Field>
-              <Field label="编辑模式">{detail.has_input_image ? `${detail.has_input_image} 输入图` : '否'}</Field>
-              <Field label="蒙版">{detail.has_mask ? '是' : '否'}</Field>
+              <Field label="结果" valueClass={eventTypeColor(detail.event_type)}>{getEventTypeLabel(detail.event_type)}</Field>
+              <Field label="服务商">{getProviderDisplayName(detail.provider)}</Field>
+              <Field label="模型">{detail.model ?? '—'}</Field>
+              <Field label="接口模式">{getApiModeLabel(detail.api_mode)}</Field>
+              <Field label="尺寸">{detail.size ?? '—'}</Field>
+              <Field label="质量">{getParamValueLabel('quality', detail.quality)}</Field>
+              <Field label="请求张数">{detail.n_images ?? '—'}</Field>
+              <Field label="参考图">{detail.has_input_image ? `${detail.has_input_image} 张` : '无'}</Field>
+              <Field label="遮罩">{detail.has_mask ? '有' : '无'}</Field>
               <Field label="耗时">{detail.duration_ms ? `${detail.duration_ms}ms` : '—'}</Field>
-              <Field label="HTTP">{detail.http_status ?? '—'}</Field>
+              <Field label="HTTP 状态">{getHttpStatusLabel(detail.http_status)}</Field>
               <Field label="输出张数">{detail.output_count ?? '—'}</Field>
-              <Field label="输出字节">{detail.output_bytes ?? '—'}</Field>
+              <Field label="输出大小">{detail.output_bytes == null ? '—' : formatBytes(detail.output_bytes)}</Field>
               <Field label="客户端版本">{detail.client_version ?? '—'}</Field>
               <Field label="IP">{detail.ip ?? '—'}</Field>
-              <Field label="UA" wide>{detail.user_agent ?? '—'}</Field>
+              <Field label="浏览器" wide>{detail.user_agent ?? '—'}</Field>
             </dl>
             {detail.prompt && (
               <div className="mt-4">
-                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Prompt</p>
+                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">提示词</p>
                 <pre className="whitespace-pre-wrap rounded bg-[hsl(var(--muted))] p-3 text-xs">{detail.prompt}</pre>
               </div>
             )}
             {detail.error_message && (
               <div className="mt-4">
-                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">错误</p>
-                <pre className="whitespace-pre-wrap rounded bg-red-50 p-3 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">{detail.error_message}</pre>
+                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">错误说明</p>
+                <pre className="whitespace-pre-wrap rounded bg-red-50 p-3 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">{getUserFacingErrorMessage(detail.error_message)}</pre>
               </div>
             )}
             {detail.error_stack && (
               <div className="mt-4">
-                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">堆栈</p>
+                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">技术堆栈</p>
                 <pre className="whitespace-pre-wrap rounded bg-[hsl(var(--muted))] p-3 text-xs">{detail.error_stack}</pre>
               </div>
             )}
             <button onClick={() => setDetail(null)} className="mt-4 rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))]">关闭</button>
-          </div>
-        </div>
+        </ModalShell>
       )}
     </div>
+  )
+}
+
+function ExportDialog({
+  defaultFrom,
+  defaultTo,
+  eventType,
+  errorType,
+  onClose,
+}: {
+  defaultFrom: string
+  defaultTo: string
+  eventType: string
+  errorType: string
+  onClose: () => void
+}) {
+  const [from, setFrom] = useState(defaultFrom)
+  const [to, setTo] = useState(defaultTo)
+  const [downloading, setDownloading] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  const today = todayString()
+  const range = rangeToMs(from, to)
+  const rangeDays = range ? Math.ceil((range.until - range.since) / (24 * 60 * 60 * 1000)) : 0
+  const tooWide = rangeDays > EXPORT_MAX_DAYS
+  const invalid = !range || rangeDays < 1
+  const disabled = downloading || invalid || tooWide
+
+  async function handleDownload() {
+    if (!range) return
+    setDownloading(true)
+    setLocalError(null)
+    try {
+      const params = new URLSearchParams({
+        since: String(range.since),
+        until: String(range.until),
+      })
+      if (eventType) params.set('event_type', eventType)
+      if (errorType) params.set('error_type', errorType)
+      await downloadAdminEventsCsv(params)
+      showAppToast('已开始下载 CSV', 'success')
+      onClose()
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <ModalShell
+      portal
+      onClose={downloading ? undefined : onClose}
+      zIndexClass="z-50"
+      paddingClass="p-0"
+      backdropClassName="bg-black/40"
+      panelClassName="m-4 w-full max-w-md rounded-2xl border border-[hsl(var(--border))] bg-white p-6 shadow-xl dark:bg-[hsl(240_10%_12%)]"
+    >
+      <h3 className="mb-1 text-base font-semibold">批量导出请求日志</h3>
+      <p className="mb-4 text-xs text-[hsl(var(--muted-foreground))]">
+        选择起止日期（含两端），单次最多 {EXPORT_MAX_DAYS} 天；将下载范围内所有匹配当前筛选条件的请求记录。
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1 text-xs text-[hsl(var(--muted-foreground))]">
+          起始日期
+          <input
+            type="date"
+            value={from}
+            max={to || today}
+            onChange={(e) => setFrom(e.target.value)}
+            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm text-[hsl(var(--foreground))]"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[hsl(var(--muted-foreground))]">
+          结束日期
+          <input
+            type="date"
+            value={to}
+            min={from}
+            max={today}
+            onChange={(e) => setTo(e.target.value)}
+            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm text-[hsl(var(--foreground))]"
+          />
+        </label>
+      </div>
+      {!invalid && (
+        <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">
+          共 {rangeDays} 天{eventType || errorType ? '（沿用当前筛选）' : ''}。
+        </p>
+      )}
+      {tooWide && (
+        <p className="mt-3 text-xs text-red-500">范围超过 {EXPORT_MAX_DAYS} 天，请缩短。</p>
+      )}
+      {localError && <p className="mt-3 text-xs text-red-500">{localError}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={downloading}
+          className="rounded border border-[hsl(var(--border))] px-4 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={disabled}
+          className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+        >
+          {downloading ? '导出中…' : '下载 CSV'}
+        </button>
+      </div>
+    </ModalShell>
   )
 }
 

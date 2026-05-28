@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 import { useStore } from '../store'
 import {
   clearLogs,
@@ -11,17 +10,16 @@ import {
   type LogLevel,
 } from '../lib/logger'
 import { copyTextToClipboard } from '../lib/clipboard'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import ModalShell from './ModalShell'
 import { CloseIcon, CopyIcon, DownloadIcon, TrashIcon } from './icons'
 
 const LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
 
 const LEVEL_META: Record<LogLevel, { label: string; text: string; badge: string }> = {
-  debug: { label: 'DEBUG', text: 'text-gray-500 dark:text-gray-400', badge: 'bg-gray-400/15 text-gray-500 dark:text-gray-400' },
-  info: { label: 'INFO', text: 'text-sky-600 dark:text-sky-400', badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400' },
-  warn: { label: 'WARN', text: 'text-amber-600 dark:text-amber-400', badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
-  error: { label: 'ERROR', text: 'text-red-600 dark:text-red-400', badge: 'bg-red-500/15 text-red-600 dark:text-red-400' },
+  debug: { label: '调试', text: 'text-gray-500 dark:text-gray-400', badge: 'bg-gray-400/15 text-gray-500 dark:text-gray-400' },
+  info: { label: '信息', text: 'text-sky-600 dark:text-sky-400', badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400' },
+  warn: { label: '警告', text: 'text-amber-600 dark:text-amber-400', badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
+  error: { label: '错误', text: 'text-red-600 dark:text-red-400', badge: 'bg-red-500/15 text-red-600 dark:text-red-400' },
 }
 
 function formatTime(time: number): string {
@@ -48,7 +46,7 @@ function exportFileName(): string {
   const now = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
-  return `gpt-image-playground-logs_${stamp}.txt`
+  return `picpilot-logs_${stamp}.txt`
 }
 
 function LogRow({ entry }: { entry: LogEntry }) {
@@ -94,9 +92,6 @@ export default function LogPanel() {
   const [search, setSearch] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
 
-  useCloseOnEscape(open, () => setOpen(false))
-  usePreventBackgroundScroll(open, modalRef)
-
   const scopes = useMemo(() => {
     const set = new Set<string>()
     for (const entry of entries) set.add(entry.scope)
@@ -124,8 +119,6 @@ export default function LogPanel() {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [open, autoScroll, filtered.length])
-
-  if (!open) return null
 
   const toggleLevel = (level: LogLevel) => {
     setEnabledLevels((prev) => {
@@ -161,18 +154,16 @@ export default function LogPanel() {
     showToast('日志已清空', 'info')
   }
 
-  return createPortal(
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4"
-      onClick={() => setOpen(false)}
+  return (
+    <ModalShell
+      open={open}
+      portal
+      onClose={() => setOpen(false)}
+      scrollRef={modalRef}
+      panelRef={modalRef}
+      paddingClass="p-2 sm:p-4"
+      panelClassName="flex h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
-      <div
-        ref={modalRef}
-        className="relative z-10 flex h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* 头部 */}
         <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-white/[0.08]">
           <h3 className="flex items-center gap-2 text-base font-semibold text-gray-800 dark:text-gray-100">
@@ -282,8 +273,6 @@ export default function LogPanel() {
         <div className="border-t border-gray-200 px-5 py-2 text-[11px] text-gray-400 dark:border-white/[0.08] dark:text-gray-500">
           仅保留在内存中（最近 1000 条，刷新后清空）。API Key、Authorization、base64 图片等已自动脱敏 / 截断。
         </div>
-      </div>
-    </div>,
-    document.body,
+    </ModalShell>
   )
 }

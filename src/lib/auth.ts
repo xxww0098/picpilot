@@ -1,4 +1,7 @@
-const TOKEN_KEY = 'auth_token'
+import { getUserFacingErrorMessage } from './userFacingText'
+
+export const AUTH_TOKEN_KEY = 'auth_token'
+const TOKEN_KEY = AUTH_TOKEN_KEY
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
@@ -12,9 +15,18 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
+function getStoredToken(): string | null {
+  if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return null
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function getStoredAuthToken(): string | null {
+  return getStoredToken()
+}
+
 // Synchronously returns userId for storage namespacing. Returns '' when not authenticated or token expired.
 export function getUserIdSync(): string {
-  const token = localStorage.getItem(TOKEN_KEY)
+  const token = getStoredToken()
   if (!token) return ''
   const payload = decodeJwtPayload(token)
   if (!payload || typeof payload.sub !== 'string') return ''
@@ -31,23 +43,67 @@ export function namespacedStorageKey(base: string): string {
 export interface AuthUser {
   userId: string
   username: string
+  displayName: string
   isAdmin: boolean
+  avatarUpdatedAt: number | null
+  hourlyImageQuota: number
+  maxBatchImages: number
+  hourlyUsed: number
+  hourlyRemaining: number
+  quotaResetAt: number | null
+  publicGalleryCount: number
+  publicStorageBytes: number
+  publicStorageQuotaBytes: number
+}
+
+let cachedAuthUser: AuthUser | null = null
+
+export function getCachedAuthUser(): AuthUser | null {
+  return cachedAuthUser
+}
+
+function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
+  const hourlyImageQuota = Number(data.hourlyImageQuota ?? 0)
+  const hourlyUsed = Number(data.hourlyUsed ?? 0)
+  return {
+    userId: data.userId ?? '',
+    username: data.username ?? '',
+    displayName: data.displayName || data.username || '',
+    isAdmin: !!data.isAdmin,
+    avatarUpdatedAt: data.avatarUpdatedAt ?? null,
+    hourlyImageQuota,
+    maxBatchImages: Number(data.maxBatchImages ?? 10),
+    hourlyUsed,
+    hourlyRemaining: Number(data.hourlyRemaining ?? Math.max(0, hourlyImageQuota - hourlyUsed)),
+    quotaResetAt: data.quotaResetAt ?? null,
+    publicGalleryCount: Number(data.publicGalleryCount ?? 0),
+    publicStorageBytes: Number(data.publicStorageBytes ?? 0),
+    publicStorageQuotaBytes: Number(data.publicStorageQuotaBytes ?? 0),
+  }
 }
 
 // null = 401, undefined = auth server not configured (404 / network error)
 export async function fetchCurrentUser(): Promise<AuthUser | null | undefined> {
-  const token = localStorage.getItem(TOKEN_KEY)
+  const token = getStoredToken()
   try {
     const res = await fetch('/api/auth/me', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
     if (res.status === 404) return undefined
-    if (!res.ok) return null
-    return (await res.json()) as AuthUser
+    if (!res.ok) {
+      cachedAuthUser = null
+      return null
+    }
+    const data = (await res.json()) as Partial<AuthUser>
+    const user = normalizeAuthUser(data)
+    cachedAuthUser = user
+    return user
   } catch {
     return undefined
   }
 }
+
+type AuthResponse = { token: string } & AuthUser
 
 export async function login(username: string, password: string): Promise<AuthUser> {
   const res = await fetch('/api/auth/login', {
@@ -57,11 +113,12 @@ export async function login(username: string, password: string): Promise<AuthUse
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(data.error ?? '登录失败')
+    throw new Error(getUserFacingErrorMessage(data.error ?? '登录失败', '登录失败', res.status))
   }
-  const data = (await res.json()) as { token: string; userId: string; username: string; isAdmin: boolean }
+  const data = (await res.json()) as AuthResponse
   localStorage.setItem(TOKEN_KEY, data.token)
-  return { userId: data.userId, username: data.username, isAdmin: data.isAdmin }
+  cachedAuthUser = normalizeAuthUser(data)
+  return cachedAuthUser
 }
 
 export async function register(invite: string, username: string, password: string): Promise<AuthUser> {
@@ -72,20 +129,65 @@ export async function register(invite: string, username: string, password: strin
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(data.error ?? '注册失败')
+    throw new Error(getUserFacingErrorMessage(data.error ?? '注册失败', '注册失败', res.status))
   }
-  const data = (await res.json()) as { token: string; userId: string; username: string; isAdmin: boolean }
+  const data = (await res.json()) as AuthResponse
   localStorage.setItem(TOKEN_KEY, data.token)
-  return { userId: data.userId, username: data.username, isAdmin: data.isAdmin }
+  cachedAuthUser = normalizeAuthUser(data)
+  return cachedAuthUser
+}
+
+export async function updateDisplayName(displayName: string): Promise<AuthUser> {
+  const res = await authFetch('/api/auth/profile', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ displayName }),
+  })
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(getUserFacingErrorMessage(data.error ?? '更新显示名失败', '更新显示名失败', res.status))
+  }
+  cachedAuthUser = normalizeAuthUser((await res.json()) as Partial<AuthUser>)
+  return cachedAuthUser
+}
+
+export async function uploadAvatar(imageBase64: string): Promise<{ avatarUpdatedAt: number }> {
+  const res = await authFetch('/api/auth/avatar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_base64: imageBase64 }),
+  })
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(getUserFacingErrorMessage(data.error ?? '上传头像失败', '上传头像失败', res.status))
+  }
+  return (await res.json()) as { avatarUpdatedAt: number }
+}
+
+export async function deleteAvatar(): Promise<void> {
+  const res = await authFetch('/api/auth/avatar', { method: 'DELETE' })
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(getUserFacingErrorMessage(data.error ?? '删除头像失败', '删除头像失败', res.status))
+  }
+}
+
+export async function fetchAvatarBlob(userId: string): Promise<Blob | null> {
+  const res = await authFetch(`/api/avatars/${encodeURIComponent(userId)}`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error('加载头像失败')
+  return res.blob()
 }
 
 export function logout(): void {
+  cachedAuthUser = null
+  if (typeof localStorage?.removeItem !== 'function') return
   localStorage.removeItem(TOKEN_KEY)
 }
 
 // Fetch wrapper that auto-attaches the JWT and treats 401 as logout.
 export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem(TOKEN_KEY)
+  const token = getStoredToken()
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const res = await fetch(input, { ...init, headers })

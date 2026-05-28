@@ -1,7 +1,5 @@
-import { createPortal } from 'react-dom'
 import { useStore } from '../store'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import ModalShell from './ModalShell'
 import { CloseIcon } from './icons'
 
 export default function SupportPromptModal() {
@@ -18,22 +16,15 @@ export default function SupportPromptModal() {
   )
   const visible = supportPromptOpen && !blockedByHigherPriorityModal
 
-  useCloseOnEscape(visible, dismissSupportPrompt)
-  usePreventBackgroundScroll(visible)
-
   if (!visible) return null
 
-  return createPortal(
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-      onClick={dismissSupportPrompt}
+  return (
+    <ModalShell
+      portal
+      onClose={dismissSupportPrompt}
+      zIndexClass="z-[70]"
+      panelClassName="w-full max-w-sm rounded-[2rem] border border-white/50 bg-white/95 p-6 pb-7 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col"
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
-      <div
-        className="relative z-10 w-full max-w-sm rounded-[2rem] border border-white/50 bg-white/95 p-6 pb-7 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col"
-        onClick={(event) => event.stopPropagation()}
-      >
         <div className="absolute right-4 top-4">
           <button
             type="button"
@@ -70,8 +61,6 @@ export default function SupportPromptModal() {
             继续使用
           </button>
         </div>
-      </div>
-    </div>,
-    document.body,
+    </ModalShell>
   )
 }

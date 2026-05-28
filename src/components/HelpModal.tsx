@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import type { AppMode } from '../types'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import ModalShell from './ModalShell'
 
 interface HelpModalProps {
   appMode: AppMode
@@ -23,21 +21,15 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
   const isMobile = useIsMobile()
   const modalRef = useRef<HTMLDivElement>(null)
   const isAgentMode = appMode === 'agent'
-  useCloseOnEscape(true, onClose)
-  usePreventBackgroundScroll(true, modalRef)
 
-  return createPortal(
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      onClick={onClose}
+  return (
+    <ModalShell
+      portal
+      onClose={onClose}
+      scrollRef={modalRef}
+      panelRef={modalRef}
+      panelClassName="w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col max-h-[85vh] custom-scrollbar"
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
-      <div
-        ref={modalRef}
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col max-h-[85vh] custom-scrollbar"
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="mb-5 flex items-center justify-between gap-4">
           <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
             <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
@@ -133,8 +125,6 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
           )}
         </div>
 
-      </div>
-    </div>,
-    document.body
+    </ModalShell>
   )
 }

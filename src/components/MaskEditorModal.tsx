@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { readBlobAsDataUrl } from '../lib/dataUrl'
 import { ensureImageCached, useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { storeImage } from '../lib/db'
 import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
+import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import {
@@ -89,15 +91,6 @@ function drawMaskImageToCanvas(maskImage: HTMLImageElement, maskCanvas: HTMLCanv
   maskCtx.imageSmoothingEnabled = true
   maskCtx.imageSmoothingQuality = 'high'
   maskCtx.drawImage(maskImage, 0, 0, maskCanvas.width, maskCanvas.height)
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error ?? new Error('图片导出失败'))
-    reader.readAsDataURL(blob)
-  })
 }
 
 export default function MaskEditorModal() {
@@ -516,7 +509,7 @@ export default function MaskEditorModal() {
           } catch (err) {
             fillWhiteMask(maskCanvas)
             showToast(
-              `遮罩草稿加载失败，已重置为空白遮罩：${err instanceof Error ? err.message : String(err)}`,
+              `遮罩草稿加载失败，已重置为空白遮罩：${getUserFacingErrorMessage(err, '草稿图片无法读取')}`,
               'error',
             )
           }
@@ -534,7 +527,7 @@ export default function MaskEditorModal() {
         requestAnimationFrame(() => resetViewTransform())
       } catch (err) {
         if (!cancelled) {
-          showToast(err instanceof Error ? err.message : String(err), 'error')
+          showToast(getUserFacingErrorMessage(err, '遮罩编辑器加载失败'), 'error')
           setMaskEditorImageId(null)
         }
       } finally {
@@ -790,7 +783,7 @@ export default function MaskEditorModal() {
     try {
       setIsSaving(true)
       const blob = await canvasToBlob(canvas, 'image/png')
-      const maskDataUrl = await blobToDataUrl(blob)
+      const maskDataUrl = await readBlobAsDataUrl(blob)
       const workingTargetId = await storeImage(sourceDataUrl, 'upload')
       if (
         saveTokenRef.current !== token ||
@@ -819,7 +812,7 @@ export default function MaskEditorModal() {
         activeSessionIdRef.current !== savingSessionId ||
         useStore.getState().maskEditorImageId !== savingImageId
       ) return
-      showToast(err instanceof Error ? err.message : String(err), 'error')
+      showToast(getUserFacingErrorMessage(err, '遮罩保存失败'), 'error')
     } finally {
       if (saveTokenRef.current === token) setIsSaving(false)
     }

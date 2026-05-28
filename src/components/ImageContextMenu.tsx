@@ -3,6 +3,7 @@ import { useStore, addImageFromUrl, ensureImageCached } from '../store'
 import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
+import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
 
 export default function ImageContextMenu() {
@@ -177,7 +178,7 @@ export default function ImageContextMenu() {
       showToast('已加入参考图', 'success')
     } catch (err) {
       console.error(err)
-      showToast(`加入参考图失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      showToast(`加入参考图失败：${getUserFacingErrorMessage(err, '图片无法作为参考图添加')}`, 'error')
     }
   }
 

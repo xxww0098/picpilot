@@ -1,39 +1,37 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { authFetch, fetchCurrentUser } from '../lib/auth'
+import { useEffect, useMemo, useState } from 'react'
+import { useAuth } from '../contexts/AuthProvider'
+import {
+  deleteGalleryImage,
+  fetchGalleryBlob,
+  fetchGalleryPage,
+  type PublicGalleryImage,
+} from '../lib/galleryApi'
+import { adminRevokeGalleryImage } from '../lib/notificationApi'
+import { formatTimestamp } from '../lib/format'
+import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../lib/dialog'
+import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { useAsyncQuery } from '../hooks/useAsyncQuery'
+import PanelShell from './PanelShell'
+import ModalShell from './ModalShell'
+import Avatar from './Avatar'
 import { CloseIcon } from './icons'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-
-interface PublicImage {
-  id: string
-  user_id: string
-  username: string
-  prompt: string
-  width: number | null
-  height: number | null
-  file_size: number | null
-  created_at: number
-}
 
 const PAGE_SIZE = 24
 
 interface Props {
   open: boolean
   onClose: () => void
+  userId?: string
+  title?: string
 }
 
-// 鉴权后获取图片，转成 objectURL 给 <img>
 function AuthImage({ src, alt, className }: { src: string; alt?: string; className?: string }) {
   const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
     let aborted = false
     let objectUrl: string | null = null
-    authFetch(src)
-      .then((res) => {
-        if (!res.ok) throw new Error('加载失败')
-        return res.blob()
-      })
+    fetchGalleryBlob(src)
       .then((blob) => {
         if (aborted) return
         objectUrl = URL.createObjectURL(blob)
@@ -50,80 +48,78 @@ function AuthImage({ src, alt, className }: { src: string; alt?: string; classNa
   return <img src={url} alt={alt} className={className} />
 }
 
-export default function GalleryView({ open, onClose }: Props) {
-  const [images, setImages] = useState<PublicImage[]>([])
-  const [total, setTotal] = useState(0)
+function getGalleryDisplayName(img: PublicGalleryImage): string {
+  return img.display_name || img.username
+}
+
+export default function GalleryView({ open, onClose, userId, title = '公开画廊' }: Props) {
   const [page, setPage] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [detail, setDetail] = useState<PublicImage | null>(null)
-  const [me, setMe] = useState<{ userId: string; isAdmin: boolean } | null>(null)
+  const [detail, setDetail] = useState<PublicGalleryImage | null>(null)
+  const { user, refresh } = useAuth()
 
-  useCloseOnEscape(open, onClose)
-  usePreventBackgroundScroll(open)
+  const { data, loading, error, reload } = useAsyncQuery(
+    () => fetchGalleryPage(PAGE_SIZE, page * PAGE_SIZE, userId),
+    [page, userId],
+    open,
+  )
 
-  useEffect(() => {
-    if (!open) return
-    void fetchCurrentUser().then((u) => {
-      if (u && 'userId' in u) setMe({ userId: u.userId, isAdmin: u.isAdmin })
-    })
-  }, [open])
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await authFetch(`/api/gallery?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`)
-      if (!res.ok) throw new Error('加载失败')
-      const data = (await res.json()) as { images: PublicImage[]; total: number }
-      setImages(data.images)
-      setTotal(data.total)
-      setError('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [page])
-
-  useEffect(() => {
-    if (!open) return
-    void load()
-  }, [open, load])
-
-  async function deleteImage(id: string) {
-    if (!confirm('确定删除这张公开图？')) return
-    try {
-      const res = await authFetch(`/api/gallery/${id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(data.error ?? '删除失败')
-      }
-      if (detail?.id === id) setDetail(null)
-      await load()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : '删除失败')
-    }
-  }
-
+  const images = data?.images ?? []
+  const total = data?.total ?? 0
   const maxPage = useMemo(() => Math.max(0, Math.ceil(total / PAGE_SIZE) - 1), [total])
 
-  if (!open) return null
+  useEffect(() => {
+    if (open) setPage(0)
+  }, [open, userId])
+
+  function deleteImage(id: string) {
+    openDestructiveConfirm({
+      title: '删除公开图',
+      message: '确定删除这张公开图吗？删除后其他成员将无法在画廊中看到它。',
+      onConfirm: async () => {
+        try {
+          await deleteGalleryImage(id)
+          if (detail?.id === id) setDetail(null)
+          await reload()
+          await refresh()
+        } catch (e) {
+          showAppToast(getUserFacingErrorMessage(e, '删除公开图失败'), 'error')
+        }
+      },
+    })
+  }
+
+  function revokeImage(img: PublicGalleryImage) {
+    const ownerLabel = getGalleryDisplayName(img)
+    openPromptDialog({
+      title: '撤下公开图',
+      message: `将「${ownerLabel}」的这张公开图从画廊撤下，并向作者发送通知。\n可填写撤下理由（选填，将一并展示给作者）。`,
+      inputType: 'text',
+      placeholder: '例如：内容不符合社区规范',
+      confirmText: '撤下',
+      validate: (v) => (v.length > 500 ? '理由请控制在 500 字以内。' : null),
+      onConfirm: async (reason) => {
+        try {
+          await adminRevokeGalleryImage(img.id, reason.trim() || undefined)
+          if (detail?.id === img.id) setDetail(null)
+          await reload()
+          showAppToast('已撤下并通知作者。', 'success')
+        } catch (e) {
+          showAppToast(getUserFacingErrorMessage(e, '撤下公开图失败'), 'error')
+        }
+      },
+    })
+  }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/40 backdrop-blur-sm">
-      <div className="m-4 flex w-full max-w-6xl flex-col rounded-2xl border border-[hsl(var(--border))] bg-white shadow-xl dark:bg-[hsl(240_10%_12%)]">
-        <div className="flex items-center justify-between border-b border-[hsl(var(--border))] px-6 py-4">
-          <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">公开画廊</h2>
-          <button onClick={onClose} className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]">
-            <CloseIcon className="h-4 w-4" />
-          </button>
-        </div>
-
+    <>
+      <PanelShell open={open} onClose={onClose} title={title}>
         <div className="flex-1 overflow-y-auto p-6">
           {loading && <p className="text-sm text-[hsl(var(--muted-foreground))]">加载中…</p>}
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && <p className="text-sm text-red-500">{getUserFacingErrorMessage(error, '加载公开画廊失败')}</p>}
           {!loading && !error && images.length === 0 && (
-            <p className="py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">还没有公开图。生成图片后点"公开到画廊"上传。</p>
+            <p className="py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
+              {userId ? '你还没有共享图片。' : '还没有公开图。生成图片后点"公开到画廊"上传。'}
+            </p>
           )}
           {!loading && !error && images.length > 0 && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
@@ -138,8 +134,15 @@ export default function GalleryView({ open, onClose }: Props) {
                     src={`/api/gallery/image/${img.id}?thumb=1`}
                     className="h-full w-full object-cover transition-transform group-hover:scale-105"
                   />
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-                    <p className="truncate text-xs text-white">{img.username}</p>
+                  <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent p-2">
+                    <Avatar
+                      userId={img.user_id}
+                      username={getGalleryDisplayName(img)}
+                      avatarUpdatedAt={img.avatar_updated_at}
+                      size={20}
+                      className="shrink-0 ring-1 ring-white/30"
+                    />
+                    <p className="truncate text-xs text-white">{getGalleryDisplayName(img)}</p>
                   </div>
                 </button>
               ))}
@@ -156,28 +159,42 @@ export default function GalleryView({ open, onClose }: Props) {
             </div>
           )}
         </div>
-      </div>
+      </PanelShell>
 
       {detail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDetail(null)}>
-          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-[hsl(240_10%_12%)] md:flex-row" onClick={(e) => e.stopPropagation()}>
+        <ModalShell
+          portal
+          onClose={() => setDetail(null)}
+          zIndexClass="z-50"
+          backdropClassName="bg-black/60"
+          panelClassName="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-[hsl(240_10%_12%)] md:flex-row"
+        >
             <div className="flex flex-1 items-center justify-center bg-black p-4">
               <AuthImage src={`/api/gallery/image/${detail.id}`} className="max-h-[80vh] max-w-full object-contain" />
             </div>
             <div className="flex w-full flex-col gap-3 overflow-y-auto p-6 md:w-80">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-[hsl(var(--foreground))]">{detail.username}</p>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Avatar
+                    userId={detail.user_id}
+                    username={getGalleryDisplayName(detail)}
+                    avatarUpdatedAt={detail.avatar_updated_at}
+                    size={28}
+                    className="shrink-0"
+                  />
+                  <p className="truncate text-sm font-medium text-[hsl(var(--foreground))]">{getGalleryDisplayName(detail)}</p>
+                </div>
                 <button onClick={() => setDetail(null)} className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"><CloseIcon className="h-4 w-4" /></button>
               </div>
-              <p className="text-xs text-[hsl(var(--muted-foreground))]">{new Date(detail.created_at).toLocaleString()}</p>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">{formatTimestamp(detail.created_at)}</p>
               {detail.width && detail.height && (
                 <p className="text-xs text-[hsl(var(--muted-foreground))]">{detail.width}×{detail.height}</p>
               )}
               <div>
-                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Prompt</p>
+                <p className="mb-1 text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">提示词</p>
                 <p className="whitespace-pre-wrap rounded bg-[hsl(var(--muted))] p-3 text-sm text-[hsl(var(--foreground))]">{detail.prompt}</p>
               </div>
-              {me && (detail.user_id === me.userId || me.isAdmin) && (
+              {user && detail.user_id === user.userId && (
                 <button
                   onClick={() => void deleteImage(detail.id)}
                   className="mt-auto rounded bg-red-500 px-4 py-2 text-sm text-white hover:bg-red-600"
@@ -185,10 +202,18 @@ export default function GalleryView({ open, onClose }: Props) {
                   删除
                 </button>
               )}
+              {user && user.isAdmin && detail.user_id !== user.userId && (
+                <button
+                  onClick={() => revokeImage(detail)}
+                  className="mt-auto rounded border border-red-500/50 bg-red-500/10 px-4 py-2 text-sm text-red-600 hover:bg-red-500/20 dark:text-red-400"
+                  title="以管理员身份撤下，并向作者发送通知"
+                >
+                  撤下（管理员）
+                </button>
+              )}
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
-    </div>
+    </>
   )
 }

@@ -1082,7 +1082,7 @@ export default function AgentWorkspace() {
                                 return (
                                   <div key={block.key} className="mt-4 w-full min-w-[16rem] max-w-sm rounded-xl bg-gray-50/50 dark:bg-white/[0.02] border border-dashed border-gray-200 dark:border-white/[0.08] p-4 flex min-h-[120px] flex-col items-center justify-center text-gray-400 dark:text-gray-500" onClick={e => e.stopPropagation()}>
                                     <TrashIcon className="w-6 h-6 mb-2 opacity-50" />
-                                    <span className="text-xs">[Image Removed]</span>
+                                    <span className="text-xs">图片已移除</span>
                                   </div>
                                 )
                               }

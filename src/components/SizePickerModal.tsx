@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { getParamValueLabel } from '../lib/userFacingText'
+import ModalShell from './ModalShell'
 import ViewportTooltip from './ViewportTooltip'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
@@ -44,31 +45,7 @@ function findPresetForSize(size: string) {
 }
 
 export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
-  usePreventBackgroundScroll(true)
-
   const modalRef = useRef<HTMLDivElement>(null)
-  const mouseDownTargetRef = useRef<EventTarget | null>(null)
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    mouseDownTargetRef.current = e.target
-  }
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    const mouseDownTarget = mouseDownTargetRef.current
-    const mouseUpTarget = e.target
-
-    if (
-      modalRef.current &&
-      mouseDownTarget &&
-      !modalRef.current.contains(mouseDownTarget as Node) &&
-      mouseUpTarget &&
-      !modalRef.current.contains(mouseUpTarget as Node)
-    ) {
-      onClose()
-    }
-    mouseDownTargetRef.current = null
-  }
-
   const currentPreset = findPresetForSize(currentSize)
   const currentParsedSize = parseSize(currentSize)
   const [mode, setMode] = useState<Mode>(() => {
@@ -167,21 +144,17 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   }
 
   return (
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
+    <ModalShell
+      onClose={onClose}
+      zIndexClass="z-[70]"
+      backdropCloseMode="mouseup-outside-panel"
+      panelRef={modalRef}
+      panelClassName="w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
-      <div
-        ref={modalRef}
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
-      >
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">设置图像尺寸</h3>
-            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">当前：{currentSize || 'auto'}</p>
+            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">当前：{getParamValueLabel('size', currentSize || 'auto')}</p>
           </div>
           <button
             onClick={onClose}
@@ -306,7 +279,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                   <div className="mb-4 text-xs font-medium text-gray-400 dark:text-gray-500">输入具体像素值</div>
                   <div className="flex items-center gap-4">
                     <label className="flex-1">
-                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">宽度 (Width)</span>
+                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">宽度</span>
                       <input
                         type="number"
                         value={customW}
@@ -321,7 +294,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       </svg>
                     </div>
                     <label className="flex-1">
-                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">高度 (Height)</span>
+                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">高度</span>
                       <input
                         type="number"
                         value={customH}
@@ -348,7 +321,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             <div className="text-xs text-gray-400 dark:text-gray-500">将使用</div>
             <div className="mt-1 flex items-center gap-2">
               <span className="font-mono text-lg font-semibold text-gray-800 dark:text-gray-100">
-                {previewSize || '尺寸无效'}
+                {previewSize ? getParamValueLabel('size', previewSize) : '尺寸无效'}
               </span>
               {isClamped && (
                 <div
@@ -387,7 +360,6 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             确定
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   )
 }

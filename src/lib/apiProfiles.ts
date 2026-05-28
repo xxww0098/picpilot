@@ -450,7 +450,7 @@ function validateImportedProfileRecord(input: unknown) {
   }
 
   if (typeof input.apiMode === 'string' && input.apiMode !== 'images' && input.apiMode !== 'responses') {
-    throw new Error('apiMode 格式无效，应为 images 或 responses')
+    throw new Error('接口模式格式无效，只能填写 images（Images API 图像接口）或 responses（Responses API 对话接口）')
   }
 }
 
@@ -511,7 +511,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
-  if (provider === 'openai') return 'OpenAI'
+  if (provider === 'openai') return 'OpenAI 兼容'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }
 
@@ -599,10 +599,11 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {
-  if (!profile.name.trim()) return '缺少名称'
-  if (profile.provider !== 'fal' && !profile.baseUrl.trim() && !shouldUseApiProxy(profile.apiProxy)) return '缺少 API URL'
-  if (!profile.apiKey.trim()) return '缺少 API Key'
-  if (!profile.model.trim()) return '缺少模型 ID'
+  const usesApiProxy = shouldUseApiProxy(profile.apiProxy)
+  if (!profile.name.trim()) return '请填写配置名称，方便之后识别。'
+  if (profile.provider !== 'fal' && !profile.baseUrl.trim() && !usesApiProxy) return '请填写 API 基础地址，或开启团队 API 代理。'
+  if (!profile.apiKey.trim() && !usesApiProxy) return '请填写 API Key；如果团队已配置默认 Key，可开启 API 代理后留空。'
+  if (!profile.model.trim()) return '请填写模型 ID，例如 gpt-image-2。'
   return null
 }
 

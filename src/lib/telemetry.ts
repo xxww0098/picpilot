@@ -1,3 +1,5 @@
+import { AUTH_TOKEN_KEY } from './auth'
+
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'
 
 export type TelemetryEventType = 'success' | 'failure' | 'timeout' | 'cancelled'
@@ -38,15 +40,13 @@ export function classifyError(err: unknown): { error_type: string; http_status?:
   return { error_type: 'unknown' }
 }
 
-// base64 data URL → 估算字节数（base64 长度 × 3/4）
-export function estimateDataUrlBytes(dataUrl: string): number {
-  const commaIdx = dataUrl.indexOf(',')
-  const base64Len = commaIdx >= 0 ? dataUrl.length - commaIdx - 1 : dataUrl.length
-  return Math.floor(base64Len * 0.75)
-}
-
 export async function reportEvent(event: TelemetryEvent): Promise<void> {
-  const token = localStorage.getItem('auth_token')
+  let token: string | null = null
+  try {
+    token = localStorage.getItem(AUTH_TOKEN_KEY)
+  } catch {
+    return
+  }
   if (!token) return
 
   try {

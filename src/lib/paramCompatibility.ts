@@ -6,17 +6,24 @@ export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
 export const MAX_FAL_OUTPUT_IMAGES = 4
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
 
-export function getOutputImageLimitForSettings(settings: AppSettings) {
-  return getActiveApiProfile(settings).provider === 'fal' ? MAX_FAL_OUTPUT_IMAGES : MAX_OPENAI_OUTPUT_IMAGES
+function normalizeMaxOutputImages(limit?: number): number | null {
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) return null
+  return Math.max(1, Math.trunc(limit))
+}
+
+export function getOutputImageLimitForSettings(settings: AppSettings, maxOutputImages?: number) {
+  const providerLimit = getActiveApiProfile(settings).provider === 'fal' ? MAX_FAL_OUTPUT_IMAGES : MAX_OPENAI_OUTPUT_IMAGES
+  const userLimit = normalizeMaxOutputImages(maxOutputImages)
+  return userLimit == null ? providerLimit : Math.min(providerLimit, userLimit)
 }
 
 export function normalizeParamsForSettings(
   params: TaskParams,
   settings: AppSettings,
-  options: { hasInputImages?: boolean } = {},
+  options: { hasInputImages?: boolean; maxOutputImages?: number } = {},
 ): TaskParams {
   const activeProfile = getActiveApiProfile(settings)
-  const outputImageLimit = getOutputImageLimitForSettings(settings)
+  const outputImageLimit = getOutputImageLimitForSettings(settings, options.maxOutputImages)
   const nextParams: TaskParams = {
     ...params,
     size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,

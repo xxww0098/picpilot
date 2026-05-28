@@ -1,15 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
-import HelpModal from './HelpModal'
 import HistoryModal from './HistoryModal'
-import { EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
-import { fetchCurrentUser, logout } from '../lib/auth'
-import GalleryView from './GalleryView'
-import AdminPanel from './admin/AdminPanel'
+import { BellIcon, EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
+import { useAuth } from '../contexts/AuthProvider'
+import { useNotificationUnread } from '../hooks/useNotificationUnread'
+import UserMenu from './UserMenu'
+
+const HelpModal = lazy(() => import('./HelpModal'))
+const GalleryView = lazy(() => import('./GalleryView'))
+const AdminPanel = lazy(() => import('./admin/AdminPanel'))
+const NotificationsPanel = lazy(() => import('./NotificationsPanel'))
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -91,21 +95,13 @@ export default function Header() {
   const settingsTooltip = useTooltip()
   const galleryTooltip = useTooltip()
   const adminTooltip = useTooltip()
-  const logoutTooltip = useTooltip()
-  const [me, setMe] = useState<{ username: string; isAdmin: boolean } | null>(null)
+  const notificationsTooltip = useTooltip()
+  const { user } = useAuth()
   const [showGallery, setShowGallery] = useState(false)
+  const [galleryUserId, setGalleryUserId] = useState<string | null>(null)
   const [showAdmin, setShowAdmin] = useState(false)
-
-  useEffect(() => {
-    void fetchCurrentUser().then((u) => {
-      if (u && 'userId' in u) setMe({ username: u.username, isAdmin: u.isAdmin })
-    })
-  }, [])
-
-  const handleLogout = () => {
-    logout()
-    window.location.reload()
-  }
+  const [showNotifications, setShowNotifications] = useState(false)
+  const { unread: unreadNotifications, setUnread: setUnreadNotifications, refresh: refreshUnreadNotifications } = useNotificationUnread(Boolean(user))
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -169,9 +165,17 @@ export default function Header() {
       <header data-no-drag-select className={`safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'}`}>
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between relative">
           <div className="flex-1 min-w-0 pr-2 flex items-center gap-2">
-            <h1 className="inline-flex items-start relative mr-2">
+            <h1 className="inline-flex items-center gap-2 relative mr-2">
+              <img
+                src="./pwa-icon-192.png"
+                alt=""
+                width={28}
+                height={28}
+                className="h-7 w-7 shrink-0 rounded-lg ring-1 ring-black/5 dark:ring-white/10"
+                aria-hidden
+              />
               <span className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100">
-                GPT Image Playground
+                PicPilot
               </span>
               {hasUpdate && latestRelease && (
                 <a
@@ -302,19 +306,36 @@ export default function Header() {
                 运行日志
               </ViewportTooltip>
             </div>
-            {me && (
+            {user && (
               <div className="relative" {...galleryTooltip.handlers}>
                 <button
-                  onClick={() => { dismissAllTooltips(); setShowGallery(true) }}
+                  onClick={() => { dismissAllTooltips(); setGalleryUserId(null); setShowGallery(true) }}
                   className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                  aria-label="公开画廊"
+                  aria-label="画廊"
                 >
                   <PhotoIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                 </button>
-                <ViewportTooltip visible={galleryTooltip.visible} className="whitespace-nowrap">公开画廊</ViewportTooltip>
+                <ViewportTooltip visible={galleryTooltip.visible} className="whitespace-nowrap">画廊</ViewportTooltip>
               </div>
             )}
-            {me?.isAdmin && (
+            {user && (
+              <div className="relative" {...notificationsTooltip.handlers}>
+                <button
+                  onClick={() => { dismissAllTooltips(); setShowNotifications(true) }}
+                  className="relative p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+                  aria-label={unreadNotifications > 0 ? `通知（${unreadNotifications} 条未读）` : '通知'}
+                >
+                  <BellIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  {unreadNotifications > 0 && (
+                    <span className="absolute top-1 right-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white tabular-nums ring-2 ring-white dark:ring-gray-950">
+                      {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                    </span>
+                  )}
+                </button>
+                <ViewportTooltip visible={notificationsTooltip.visible} className="whitespace-nowrap">通知</ViewportTooltip>
+              </div>
+            )}
+            {user?.isAdmin && (
               <div className="relative" {...adminTooltip.handlers}>
                 <button
                   onClick={() => { dismissAllTooltips(); setShowAdmin(true) }}
@@ -341,17 +362,14 @@ export default function Header() {
                 设置
               </ViewportTooltip>
             </div>
-            {me && (
-              <div className="relative" {...logoutTooltip.handlers}>
-                <button
-                  onClick={handleLogout}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors text-xs text-gray-500 dark:text-gray-400"
-                  aria-label="退出登录"
-                >
-                  {me.username}
-                </button>
-                <ViewportTooltip visible={logoutTooltip.visible} className="whitespace-nowrap">点击退出</ViewportTooltip>
-              </div>
+            {user && (
+              <UserMenu
+                user={user}
+                onOpenGallery={() => {
+                  setGalleryUserId(user.userId)
+                  setShowGallery(true)
+                }}
+              />
             )}
           </div>
         </div>
@@ -390,9 +408,38 @@ export default function Header() {
           </div>
         </div>
       </div>
-      {showHelp && <HelpModal appMode={appMode} onClose={() => setShowHelp(false)} />}
-      <GalleryView open={showGallery} onClose={() => setShowGallery(false)} />
-      <AdminPanel open={showAdmin} onClose={() => setShowAdmin(false)} />
+      {showHelp && (
+        <Suspense fallback={null}>
+          <HelpModal appMode={appMode} onClose={() => setShowHelp(false)} />
+        </Suspense>
+      )}
+      {showGallery && (
+        <Suspense fallback={null}>
+          <GalleryView
+            open={showGallery}
+            onClose={() => setShowGallery(false)}
+            userId={galleryUserId ?? undefined}
+            title={galleryUserId ? '我的共享画廊' : '公开画廊'}
+          />
+        </Suspense>
+      )}
+      {showAdmin && (
+        <Suspense fallback={null}>
+          <AdminPanel open={showAdmin} onClose={() => setShowAdmin(false)} />
+        </Suspense>
+      )}
+      {showNotifications && (
+        <Suspense fallback={null}>
+          <NotificationsPanel
+            open={showNotifications}
+            onClose={() => {
+              setShowNotifications(false)
+              void refreshUnreadNotifications()
+            }}
+            onUnreadChange={setUnreadNotifications}
+          />
+        </Suspense>
+      )}
     </>
   )
 }

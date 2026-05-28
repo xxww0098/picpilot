@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { ensureImageCached } from '../store'
-import { authFetch } from '../lib/auth'
+import { publishGalleryImage } from '../lib/galleryApi'
+import { showAppToast } from '../lib/dialog'
+import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { useAuth } from '../contexts/AuthProvider'
 
 interface Props {
   imageId: string
@@ -13,26 +16,20 @@ interface Props {
 export default function PublishGalleryButton({ imageId, prompt, onSuccess, className }: Props) {
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
+  const { refresh } = useAuth()
 
   async function publish() {
     if (loading || done) return
     setLoading(true)
     try {
       const dataUrl = await ensureImageCached(imageId)
-      if (!dataUrl) throw new Error('找不到原图')
-      const res = await authFetch('/api/gallery', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: dataUrl, prompt }),
-      })
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(data.error ?? '上传失败')
-      }
+      if (!dataUrl) throw new Error('找不到原图，可能已被清理。')
+      await publishGalleryImage(dataUrl, prompt)
+      await refresh()
       setDone(true)
       onSuccess?.()
     } catch (e) {
-      alert(e instanceof Error ? e.message : '上传失败')
+      showAppToast(getUserFacingErrorMessage(e, '公开到画廊失败'), 'error')
     } finally {
       setLoading(false)
     }

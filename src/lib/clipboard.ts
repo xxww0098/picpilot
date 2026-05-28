@@ -12,12 +12,12 @@ export async function copyTextToClipboard(text: string) {
 
   if (copyTextWithExecCommand(text)) return
 
-  throw asyncClipboardError ?? new Error('Clipboard API is not available')
+  throw asyncClipboardError ?? new Error('当前浏览器不支持剪贴板写入，或页面没有剪贴板权限')
 }
 
 export async function copyBlobToClipboard(blob: Blob | Promise<Blob>) {
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Clipboard image API is not available')
+    throw new Error('当前浏览器不支持复制图片到剪贴板')
   }
 
   const resolvedBlob = await Promise.resolve(blob)
@@ -26,11 +26,11 @@ export async function copyBlobToClipboard(blob: Blob | Promise<Blob>) {
 
 export async function copyImageSourceToClipboard(src: string | Promise<string | undefined>) {
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Clipboard image API is not available')
+    throw new Error('当前浏览器不支持复制图片到剪贴板')
   }
 
   const resolvedSrc = await Promise.resolve(src)
-  if (!resolvedSrc) throw new Error('Image source is not available')
+  if (!resolvedSrc) throw new Error('图片源已不存在，无法复制')
   const res = await fetch(resolvedSrc)
   const blob = await res.blob()
   await writeImageBlobToClipboard(blob)
@@ -70,7 +70,7 @@ function copyTextWithExecCommand(text: string) {
 }
 
 async function writeImageBlobToClipboard(blob: Blob) {
-  if (!blob.type.startsWith('image/')) throw new Error('Clipboard item is not an image')
+  if (!blob.type.startsWith('image/')) throw new Error('剪贴板内容不是有效图片')
 
   const clipboardItems: Record<string, Blob | Promise<Blob>> = {}
   const customType = `web ${blob.type}`
@@ -106,13 +106,13 @@ async function imageBlobToPngBlob(blob: Blob): Promise<Blob> {
     canvas.width = image.width
     canvas.height = image.height
     const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Canvas is not available')
+    if (!ctx) throw new Error('当前浏览器不支持 Canvas')
     ctx.drawImage(image, 0, 0)
 
     return await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((pngBlob) => {
         if (pngBlob) resolve(pngBlob)
-        else reject(new Error('Image conversion failed'))
+        else reject(new Error('图片格式转换失败'))
       }, 'image/png')
     })
   } finally {

@@ -2,11 +2,11 @@ import { getActiveApiProfile, getCustomProviderDefinition } from './apiProfiles'
 import { callFalAiImageApi } from './falAiImageApi'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
 import type { CallApiOptions, CallApiResult } from './imageApiShared'
+import { getDataUrlDecodedByteSize } from './imageApiShared'
 import { logger, serializeError } from './logger'
-import { classifyError, estimateDataUrlBytes, reportEvent } from './telemetry'
+import { classifyError, reportEvent } from './telemetry'
 
 export type { CallApiOptions, CallApiResult } from './imageApiShared'
-export { normalizeBaseUrl } from './devProxy'
 
 export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
   const profile = getActiveApiProfile(opts.settings)
@@ -56,7 +56,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       event_type: 'success',
       duration_ms: elapsedMs,
       output_count: result.images.length,
-      output_bytes: result.images.reduce((sum, url) => sum + estimateDataUrlBytes(url), 0),
+      output_bytes: result.images.reduce((sum, url) => sum + getDataUrlDecodedByteSize(url), 0),
     })
     return result
   } catch (err) {

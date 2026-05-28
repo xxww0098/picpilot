@@ -1,7 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, retryFailedImages } from '../store'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -10,8 +8,10 @@ import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getProviderDisplayName, getUserFacingErrorMessage } from '../lib/userFacingText'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 import PublishGalleryButton from './PublishGalleryButton'
+import ModalShell from './ModalShell'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -42,9 +42,6 @@ export default function DetailModal() {
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
-
-  const rawUrlsBackdropPointerDownRef = useRef(false)
-  const rawResponseBackdropPointerDownRef = useRef(false)
 
   const copyErrorTooltip = useTooltip()
   const copyRawUrlsTooltip = useTooltip()
@@ -93,9 +90,6 @@ export default function DetailModal() {
       : (task?.outputImages?.length ?? 0) + (task?.status === 'done' ? (task?.failedImageCount ?? 0) : 0)
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
   }, [imageIndex, streamPreviewItems.length, task?.outputImages?.length, task?.failedImageCount, task?.status])
-
-  useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
-  usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
 
   // Reset index when task changes
   useEffect(() => {
@@ -219,7 +213,7 @@ export default function DetailModal() {
   const taskProvider = task.apiProvider
   const isOpenAiTask = (taskProvider ?? 'openai') === 'openai'
   const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
-  const taskProviderName = taskProvider === 'fal' ? 'fal.ai' : taskProvider ? 'OpenAI' : '未知'
+  const taskProviderName = getProviderDisplayName(taskProvider)
   const taskProfileName = task.apiProfileName || '未知'
   const taskModel = task.apiModel || '未知'
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
@@ -229,6 +223,7 @@ export default function DetailModal() {
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
   const streamPartialImageIds = task.streamPartialImageIds ?? []
+  const displayTaskError = getUserFacingErrorMessage(task.error || '生成失败', '生成失败')
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -389,16 +384,14 @@ export default function DetailModal() {
   }
 
   return (
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      onClick={() => setDetailTaskId(null)}
-    >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
-      <div
-        ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <ModalShell
+        onClose={() => setDetailTaskId(null)}
+        scrollRef={[modalRef, rawUrlsModalRef, rawResponseModalRef]}
+        panelRef={modalRef}
+        zIndexClass="z-50"
+        backdropVariant="confirm"
+        panelClassName="bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
           <button
@@ -447,7 +440,7 @@ export default function DetailModal() {
                     aria-label="下载全部"
                   >
                     <DownloadIcon className="h-4 w-4" />
-                    <span className="text-[9px] font-bold leading-none mt-[1px]">ALL</span>
+                    <span className="text-[9px] font-bold leading-none mt-[1px]">全部</span>
                   </button>
                   <ViewportTooltip visible={downloadAllTooltip.visible} className="whitespace-nowrap">
                     下载全部
@@ -512,7 +505,7 @@ export default function DetailModal() {
               </div>
               <p className="text-sm font-medium text-red-500 dark:text-red-400">这一张生成失败</p>
               {task.partialImageErrors?.[0] && (
-                <p className="line-clamp-3 max-w-xs text-xs leading-relaxed text-gray-500 dark:text-gray-400">{task.partialImageErrors[0]}</p>
+                <p className="line-clamp-3 max-w-xs text-xs leading-relaxed text-gray-500 dark:text-gray-400">{getUserFacingErrorMessage(task.partialImageErrors[0])}</p>
               )}
               <button
                 onClick={handleRetryFailed}
@@ -635,7 +628,7 @@ export default function DetailModal() {
                   WebkitLineClamp: 10,
                 }}
               >
-                {task.error || '生成失败'}
+                {displayTaskError}
               </p>
               <div className="mt-3 flex items-center justify-center gap-2">
                 <div className="relative group">
@@ -850,7 +843,7 @@ export default function DetailModal() {
                               )}
                               {isMaskTarget && (
                                 <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
-                                  MASK
+                                  遮罩
                                 </span>
                               )}
                             </div>
@@ -969,21 +962,19 @@ export default function DetailModal() {
             </button>
           </div>
         </div>
-      </div>
+      </ModalShell>
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-          onPointerDown={(e) => {
-            rawUrlsBackdropPointerDownRef.current = e.target === e.currentTarget
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (rawUrlsBackdropPointerDownRef.current && e.target === e.currentTarget) setShowRawUrlsModal(false)
-            rawUrlsBackdropPointerDownRef.current = false
-          }}
+        <ModalShell
+          portal
+          onClose={() => setShowRawUrlsModal(false)}
+          scrollRef={rawUrlsModalRef}
+          panelRef={rawUrlsModalRef}
+          zIndexClass="z-[60]"
+          paddingClass="p-4 sm:p-6"
+          backdropClassName="bg-black/40 backdrop-blur-sm animate-overlay-in"
+          panelClassName="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
         >
-          <div ref={rawUrlsModalRef} className="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
               <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始图片链接 ({rawImageUrls.length})</h3>
               <div className="flex items-center gap-2">
@@ -1043,29 +1034,24 @@ export default function DetailModal() {
                 ))}
               </div>
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
 
       {showRawResponseModal && task?.rawResponsePayload && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-          onPointerDown={(e) => {
-            rawResponseBackdropPointerDownRef.current = e.target === e.currentTarget
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (rawResponseBackdropPointerDownRef.current && e.target === e.currentTarget) setShowRawResponseModal(false)
-            rawResponseBackdropPointerDownRef.current = false
-          }}
+        <ModalShell
+          portal
+          onClose={() => setShowRawResponseModal(false)}
+          scrollRef={rawResponseModalRef}
+          panelRef={rawResponseModalRef}
+          zIndexClass="z-[60]"
+          paddingClass="p-4 sm:p-6"
+          backdropClassName="bg-black/40 backdrop-blur-sm animate-overlay-in"
+          panelClassName="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
         >
           <div
-            ref={rawResponseModalRef}
-            className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
             onPointerDown={(e) => {
               if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
             }}
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
               <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始响应数据</h3>
@@ -1100,8 +1086,8 @@ export default function DetailModal() {
               </pre>
             </div>
           </div>
-        </div>
+        </ModalShell>
       )}
-    </div>
+    </>
   )
 }

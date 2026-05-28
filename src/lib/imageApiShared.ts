@@ -1,5 +1,6 @@
 import type { AppSettings, TaskParams } from '../types'
 import { logger, serializeError } from './logger'
+import { encodeBlobAsDataUrl } from './dataUrl'
 
 export const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -86,18 +87,6 @@ export function assertMaskEditFileSize(label: string, bytes: number) {
   assertMaxBytes(label, bytes, MAX_MASK_EDIT_FILE_BYTES)
 }
 
-async function blobToDataUrl(blob: Blob, fallbackMime: string): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  let binary = ''
-
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    const chunk = bytes.subarray(i, i + 0x8000)
-    binary += String.fromCharCode(...chunk)
-  }
-
-  return `data:${blob.type || fallbackMime};base64,${btoa(binary)}`
-}
-
 export const IMAGE_FETCH_CORS_HINT = ' 可点链接按钮复制结果链接，或尝试开启「返回 Base64 图片数据」避免此问题。'
 
 async function probeNoCorsReachability(url: string, timeoutMs = 8000): Promise<'opaque' | 'reachable' | 'failed'> {
@@ -146,7 +135,7 @@ export async function fetchImageUrlAsDataUrl(url: string, fallbackMime: string, 
   }
 
   const blob = await response.blob()
-  return blobToDataUrl(blob, fallbackMime)
+  return encodeBlobAsDataUrl(blob, fallbackMime)
 }
 
 export async function getApiErrorMessage(response: Response, context?: string): Promise<string> {

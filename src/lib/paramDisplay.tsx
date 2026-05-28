@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TaskParams, TaskRecord } from '../types'
 import ViewportTooltip from '../components/ViewportTooltip'
+import { getParamValueLabel } from './userFacingText'
 
 type ParamKey = keyof TaskParams
 
@@ -76,9 +77,9 @@ export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualPara
     String(actualValue) !== String(requestedValue)
 
   return {
-    displayValue: String(displayValue),
+    displayValue: getParamValueLabel(paramKey, displayValue),
     isMismatch,
-    requestedValue: String(requestedValue),
+    requestedValue: getParamValueLabel(paramKey, requestedValue),
     isAutoResolved: hasActualValue && requestedValue === 'auto' && String(actualValue) !== String(requestedValue),
   }
 }
