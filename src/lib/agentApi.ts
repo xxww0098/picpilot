@@ -81,7 +81,7 @@ function createHeaders(profile: ApiProfile, includeAppAuth = false): Record<stri
     'Content-Type': 'application/json',
   }
   const apiKey = profile.apiKey.trim()
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  if (!includeAppAuth && apiKey) headers.Authorization = `Bearer ${apiKey}`
   if (includeAppAuth) {
     const token = getStoredAuthToken()
     if (token) headers['X-PicPilot-Authorization'] = `Bearer ${token}`
@@ -624,7 +624,7 @@ export async function callAgentResponsesApi(opts: {
   const { settings, profile, params, input, maskDataUrl, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const useApiProxy = shouldUseApiProxy()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
@@ -682,7 +682,7 @@ export async function callAgentConversationTitleApi(opts: {
 }): Promise<string> {
   const { settings, profile, prompt, imageDataUrls, signal } = opts
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const useApiProxy = shouldUseApiProxy()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
@@ -759,7 +759,7 @@ export async function callBatchImageSingle(opts: {
   const { profile, params, batchItemId, prompt, referenceImageDataUrls, referenceIds, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const useApiProxy = shouldUseApiProxy()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()

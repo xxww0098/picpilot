@@ -77,7 +77,6 @@ export default defineConfig(({ command }) => {
             ) {
               return 'vendor-markdown'
             }
-            if (id.includes('@fal-ai')) return 'vendor-fal'
             if (id.includes('fflate')) return 'vendor-fflate'
             if (id.includes('zustand')) return 'vendor-zustand'
           },

@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { normalizeBaseUrl } from '../lib/devProxy'
-import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
-  DEFAULT_FAL_BASE_URL,
-  DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_RESPONSES_MODEL,
@@ -39,52 +35,6 @@ function newId(prefix: string) {
 }
 
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
-const COPY_IMPORT_URL_OPTIONS_STORAGE_KEY = 'picpilot.copy-import-url-options'
-
-const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
-  includeApiKey: false,
-  useNewApiAddress: false,
-  useNewApiKey: true,
-  useNewApiModel: false,
-}
-
-type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
-
-function readCopyImportUrlOptions(): CopyImportUrlOptions {
-  if (typeof window === 'undefined') return DEFAULT_COPY_IMPORT_URL_OPTIONS
-
-  try {
-    const saved = window.localStorage.getItem(COPY_IMPORT_URL_OPTIONS_STORAGE_KEY)
-    if (!saved) return DEFAULT_COPY_IMPORT_URL_OPTIONS
-
-    const parsed = JSON.parse(saved) as Partial<CopyImportUrlOptions> | null
-    if (!parsed || typeof parsed !== 'object') return DEFAULT_COPY_IMPORT_URL_OPTIONS
-
-
-    return {
-      includeApiKey: false,
-      useNewApiAddress: Boolean(parsed.useNewApiAddress),
-      useNewApiKey: parsed.useNewApiKey === undefined ? true : Boolean(parsed.useNewApiKey),
-      useNewApiModel: Boolean(parsed.useNewApiModel),
-    }
-  } catch {
-    return DEFAULT_COPY_IMPORT_URL_OPTIONS
-  }
-}
-
-function saveCopyImportUrlOptions(options: CopyImportUrlOptions) {
-  if (typeof window === 'undefined') return
-
-  try {
-    window.localStorage.setItem(COPY_IMPORT_URL_OPTIONS_STORAGE_KEY, JSON.stringify({
-      useNewApiAddress: options.useNewApiAddress,
-      useNewApiKey: options.useNewApiKey,
-      useNewApiModel: options.useNewApiModel,
-    }))
-  } catch {
-    // localStorage 不可用时只保留当前会话状态。
-  }
-}
 
 interface CustomProviderForm {
   json: string
@@ -167,7 +117,6 @@ function isPristineNewOpenAIProfile(profile: ApiProfile) {
     profile.timeout === DEFAULT_SETTINGS.timeout &&
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
-    profile.apiProxy === defaultProfile.apiProxy &&
     profile.streamImages === defaultProfile.streamImages &&
     profile.streamPartialImages === defaultProfile.streamPartialImages
 }
@@ -189,12 +138,6 @@ function isAsyncCustomProvider(provider: CustomProviderDefinition | null | undef
   return Boolean(provider?.poll || provider?.submit.taskIdPath || provider?.editSubmit?.taskIdPath)
 }
 
-function isProfileApiProxyEligible(settings: AppSettings, profile: ApiProfile) {
-  if (!isOpenAICompatibleProvider(settings, profile.provider)) return false
-  const customProvider = settings.customProviders.find((provider) => provider.id === profile.provider)
-  return !isAsyncCustomProvider(customProvider)
-}
-
 const CUSTOM_PROVIDER_LLM_PROMPT = `# 角色
 你是 API 文档解析助手。你的任务是根据用户提供的图像生成 API 文档，生成本应用可导入的自定义服务商配置 JSON。
 
@@ -202,9 +145,10 @@ const CUSTOM_PROVIDER_LLM_PROMPT = `# 角色
 1. 先向用户索要 API 文档链接或完整文档文本。
 2. 如果当前环境支持读取链接，主动读取；否则要求用户粘贴文档内容。
 3. 在未获得文档前不要猜测，不要生成占位配置。
-4. 从文档中判断提交接口、图生图接口、异步任务查询接口、状态值、结果图片路径。
-5. 如果文档中明确了默认模型 ID 或 API Base URL，在 profiles 中填入；如果未明确模型 ID，model 使用 "gpt-image-2"；如果未明确 API Base URL，baseUrl 留空，由用户稍后填写。
-6. 输出最终 JSON；不要索要 API Key。
+4. 从文档中判断文生图提交接口、图生图接口和同步响应里的结果图片路径。
+5. 仅生成同步返回图片的配置；如果文档只提供异步 task_id / poll 流程，说明当前团队代理模式暂不支持该服务商。
+6. 如果文档中明确了默认模型 ID，在 profiles 中填入；如果未明确模型 ID，model 使用 "gpt-image-2"；baseUrl 固定留空。
+7. 输出最终 JSON；不要索要 API Key。
 
 # 输出结构
 输出 JSON 包含两个顶层字段：
@@ -212,11 +156,11 @@ const CUSTOM_PROVIDER_LLM_PROMPT = `# 角色
 - profiles：API 与模型配置数组，每项描述一个可直接使用的连接配置，引用 customProviders 中的服务商。
 
 ## customProviders 元素（Manifest）
-每个元素的顶层字段：id、name、submit、editSubmit、poll。
+每个元素的顶层字段：id、name、submit、editSubmit。
 id 是服务商的唯一标识，用于 profiles 中的 provider 字段引用，建议使用 custom-{英文短名} 格式。
 submit 是文生图提交配置，必填。
 editSubmit 是图生图或局部重绘提交配置，可选。如果文生图和图生图使用同一个 JSON 接口，可以省略 editSubmit，并在 submit.body 中加入 image_urls。
-poll 是异步任务查询配置，可选；同步接口不要写 poll。
+不要输出 poll；团队 API 代理模式只支持同步返回图片的自定义服务商。
 
 submit/editSubmit 字段：
 - path：接口路径，不带开头斜杠，不带 /v1/ 前缀，例如 images/generations 或 tasks/{task_id}。
@@ -225,19 +169,8 @@ submit/editSubmit 字段：
 - query：提交 query 参数对象，可选，例如 {"async":"true"}。
 - body：请求体模板对象。
 - files：multipart 文件字段数组，仅 contentType=multipart 时使用。
-- taskIdPath：提交响应里的任务 ID JSON 路径；同步接口不要写。
+- taskIdPath：不要输出；团队 API 代理模式暂不支持异步任务服务商。
 - result：同步响应图片提取规则。
-
-poll 字段：
-- path：任务查询路径，使用 {task_id} 占位，例如 images/tasks/{task_id} 或 tasks/{task_id}。
-- method：GET 或 POST，默认 GET。
-- query：查询 query 参数对象，可选。
-- intervalSeconds：轮询间隔秒数。
-- statusPath：查询响应状态字段路径。
-- successValues：成功状态值数组。
-- failureValues：失败状态值数组。
-- errorPath：失败原因路径，可选。
-- result：成功后图片提取规则。
 
 result 字段：
 - imageUrlPaths：图片 URL 路径数组，支持 * 通配数组。例如 data.*.url、data.result.images.*.url.*。
@@ -258,29 +191,22 @@ multipart files 示例：
 每个元素的字段：
 - name：配置名称，方便用户识别。
 - provider：对应 customProviders 中某个元素的 id。
-- baseUrl：API Base URL。如果文档明确给出，填入完整基础地址；否则留空字符串 ""。
+- baseUrl：留空字符串 ""，实际地址由部署端的团队 API 代理决定。
 - model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则使用 "gpt-image-2"。
 - apiMode：固定为 "images"。
-- apiProxy：可选。仅同步自定义服务商可以设为 true，用于配合部署端 API 代理隐藏真实上游地址；包含 taskIdPath 或 poll 的异步任务配置不要开启，应用不支持异步自定义服务商走代理。
 
-profiles 中不要包含 apiKey（用户导入后自行填写）。
+profiles 中不要包含 apiKey（团队代理会注入服务器侧 Key）。
 
 # 输出要求
 - 最终回复只包含一个 \`\`\`json 代码块，代码块内是 JSON 对象。
 - JSON 对象必须包含 customProviders 和 profiles 两个顶层字段。
 - 代码块外不要附加解释文字。
 - 不要输出 API Key、Authorization header。
-- 如果文档返回 task_id，就必须配置 taskIdPath 和 poll。
+- 不要输出 taskIdPath 或 poll；如果文档返回 task_id，请改为提示该服务商当前不适配团队代理模式。
 - 如果结果 URL 是数组，路径必须写到数组元素，例如 data.result.images.*.url.*。
 
 ## 同步接口示例
-{"customProviders":[{"id":"custom-example-sync","name":"示例同步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true},{"field":"mask","source":"mask"}],"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}}}],"profiles":[{"name":"示例同步服务商","provider":"custom-example-sync","baseUrl":"https://api.example.com/v1","model":"example-model-v1","apiMode":"images"}]}
-
-## 异步接口示例
-{"customProviders":[{"id":"custom-example-async","name":"示例异步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"taskIdPath":"data"},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true}],"taskIdPath":"data"},"poll":{"path":"images/tasks/{task_id}","method":"GET","intervalSeconds":5,"statusPath":"data.status","successValues":["SUCCESS"],"failureValues":["FAILURE"],"errorPath":"data.fail_reason","result":{"imageUrlPaths":["data.data.data.*.url"],"b64JsonPaths":["data.data.data.*.b64_json"]}}}],"profiles":[{"name":"示例异步服务商","provider":"custom-example-async","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}
-
-## 统一任务接口示例
-{"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}`
+{"customProviders":[{"id":"custom-example-sync","name":"示例同步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true},{"field":"mask","source":"mask"}],"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}}}],"profiles":[{"name":"示例同步服务商","provider":"custom-example-sync","baseUrl":"","model":"example-model-v1","apiMode":"images"}]}`
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -305,7 +231,6 @@ export default function SettingsModal() {
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
   const [agentMaxToolRoundsInput, setAgentMaxToolRoundsInput] = useState(String(settings.agentMaxToolRounds))
-  const [showApiKey, setShowApiKey] = useState(false)
   const [showProfileMenu, setShowProfileMenu] = useState(false)
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
@@ -338,32 +263,17 @@ export default function SettingsModal() {
     offsetY: number
   } | null>(null)
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
-  const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
-  const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
   const [testingConnectionProfileId, setTestingConnectionProfileId] = useState<string | null>(null)
+  const [showAdvancedApi, setShowAdvancedApi] = useState(false)
 
-  const apiProxyConfig = readClientDevProxyConfig()
-  const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
-  const apiProxyLocked = isApiProxyLocked(apiProxyConfig)
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
-  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
-  const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
-  const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
-  const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
-  const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
-  const apiKeyPlaceholder = apiProxyEnabled
-    ? '留空使用团队默认 Key'
-    : activeProfile.provider === 'fal'
-    ? 'FAL_KEY'
-    : 'sk-...'
-  const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+  const defaultProviderOrder = ['openai', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
-    { label: 'fal.ai', value: 'fal', draggable: true },
     ...draft.customProviders.map((provider) => ({
       label: provider.name,
       value: provider.id,
@@ -407,19 +317,11 @@ export default function SettingsModal() {
     const displaySettings = normalizedSettings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId && normalizedSettings.profiles.some((profile) => profile.id === reusedTaskApiProfileId)
       ? normalizeSettings({ ...normalizedSettings, activeProfileId: reusedTaskApiProfileId })
       : normalizedSettings
-    const nextDraft = normalizeSettings({
-      ...displaySettings,
-      profiles: displaySettings.profiles.map((profile) => ({
-        ...profile,
-        apiProxy: isProfileApiProxyEligible(displaySettings, profile) && apiProxyAvailable
-          ? (apiProxyLocked || profile.apiProxy)
-          : false,
-      })),
-    })
-    setDraft(nextDraft)
-    setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
-    setAgentMaxToolRoundsInput(String(nextDraft.agentMaxToolRounds))
-  }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId])
+    setDraft(displaySettings)
+    setTimeoutInput(String(getActiveApiProfile(displaySettings).timeout))
+    setAgentMaxToolRoundsInput(String(displaySettings.agentMaxToolRounds))
+    setShowAdvancedApi(false)
+  }, [showSettings, settings, reusedTaskApiProfileId])
 
   useEffect(() => {
     setTimeoutInput(String(activeProfile.timeout))
@@ -503,19 +405,14 @@ export default function SettingsModal() {
 
   const commitSettings = (nextDraft: AppSettings) => {
     const normalizedProfiles = nextDraft.profiles.map((profile) => {
-      const nextApiProxy = isProfileApiProxyEligible(nextDraft, profile) && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false
-      const shouldKeepEmptyBaseUrl = profile.provider !== 'fal' && nextApiProxy && !profile.baseUrl.trim()
-      const normalizedBaseUrl = profile.provider === 'fal'
-        ? profile.baseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL
-        : shouldKeepEmptyBaseUrl ? '' : normalizeBaseUrl(profile.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl)
-      const defaultModel = profile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(profile.apiMode)
+      const defaultModel = getDefaultModelForMode(profile.apiMode)
       return {
         ...profile,
         name: profile.name.trim() || (profile.id === DEFAULT_OPENAI_PROFILE_ID ? '默认' : '新配置'),
-        baseUrl: normalizedBaseUrl,
+        baseUrl: '',
+        apiKey: '',
         model: profile.model.trim() || defaultModel,
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
-        apiProxy: nextApiProxy,
         codexCli: profile.provider === 'openai' ? profile.codexCli : false,
         streamImages: profile.provider === 'openai' ? profile.streamImages : false,
         streamPartialImages: profile.provider === 'openai' ? normalizeStreamPartialImages(profile.streamPartialImages) : DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -533,72 +430,40 @@ export default function SettingsModal() {
     setSettings(normalizedDraft)
   }
 
-  const updateCopyImportUrlOptions = (patch: Partial<CopyImportUrlOptions>) => {
-    setCopyImportUrlOptions((previous) => {
-      const next = { ...previous, ...patch, includeApiKey: false }
-      saveCopyImportUrlOptions(next)
-      return next
-    })
-  }
-
-  const createProfileImportUrl = (profile: ApiProfile, options: CopyImportUrlOptions) => {
+  const createProfileImportUrl = (profile: ApiProfile) => {
     const url = new URL(window.location.href)
     url.search = ''
     url.hash = ''
 
     if (profile.provider === 'openai') {
-      const baseUrl = profile.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl
-      url.searchParams.set('apiUrl', options.useNewApiAddress && !options.includeApiKey ? '{address}' : normalizeBaseUrl(baseUrl))
-      if (options.includeApiKey && profile.apiKey.trim()) {
-        url.searchParams.set('apiKey', profile.apiKey.trim())
-      } else if (!options.includeApiKey && options.useNewApiKey) {
-        url.searchParams.set('apiKey', '{key}')
-      }
       url.searchParams.set('apiMode', profile.apiMode)
       const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode)
-      url.searchParams.set('model', !options.includeApiKey && options.useNewApiModel ? '{model}' : model)
+      url.searchParams.set('model', model)
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
       if (profile.streamImages !== DEFAULT_SETTINGS.streamImages) url.searchParams.set('streamImages', String(Boolean(profile.streamImages)))
       if (profile.streamPartialImages !== DEFAULT_STREAM_PARTIAL_IMAGES) url.searchParams.set('streamPartialImages', String(normalizeStreamPartialImages(profile.streamPartialImages)))
-
-      let result = url.toString()
-      if (!options.includeApiKey) {
-        if (options.useNewApiAddress) result = result.replace('%7Baddress%7D', '{address}')
-        if (options.useNewApiKey) result = result.replace('%7Bkey%7D', '{key}')
-        if (options.useNewApiModel) result = result.replace('%7Bmodel%7D', '{model}')
-      }
-      return result
+      return url.toString()
     }
 
     const provider = draft.customProviders.find((item) => item.id === profile.provider)
     const importProfile: ApiProfile = {
       ...profile,
-      apiKey: options.includeApiKey ? profile.apiKey : '',
-    }
-    if (!options.includeApiKey) {
-      if (options.useNewApiAddress) importProfile.baseUrl = '{address}'
-      if (options.useNewApiKey) importProfile.apiKey = '{key}'
-      if (options.useNewApiModel) importProfile.model = '{model}'
+      baseUrl: '',
+      apiKey: '',
     }
     url.searchParams.set('settings', JSON.stringify({
       customProviders: provider ? [provider] : [],
       profiles: [importProfile],
     }))
-
-    let result = url.toString()
-    if (!options.includeApiKey) {
-      if (options.useNewApiAddress) result = result.replace(/%7Baddress%7D/g, '{address}')
-      if (options.useNewApiKey) result = result.replace(/%7Bkey%7D/g, '{key}')
-      if (options.useNewApiModel) result = result.replace(/%7Bmodel%7D/g, '{model}')
-    }
-    return result
+    return url.toString()
   }
 
-  const copyProfileImportUrl = async (profile: ApiProfile, options: CopyImportUrlOptions) => {
+  const copyProfileImportUrl = async (profile: ApiProfile) => {
+    setShowProfileMenu(false)
+    setProfileImportUrlTooltipVisible(false)
     try {
-      await copyTextToClipboard(createProfileImportUrl(profile, options))
-      showToast(options.includeApiKey ? '导入 URL 已复制（包含 API Key）' : '导入 URL 已复制', 'success')
-      setCopyImportUrlProfile(null)
+      await copyTextToClipboard(createProfileImportUrl(profile))
+      showToast('导入 URL 已复制（不含凭据）', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制导入 URL 失败', err), 'error')
     }
@@ -612,17 +477,10 @@ export default function SettingsModal() {
       await testApiConnection(activeProfile)
       showToast('接口连通性测试成功。', 'success')
     } catch (err) {
-      showToast(`接口连通性测试失败：${getUserFacingErrorMessage(err, '请检查 API 基础地址、API Key 或团队代理配置')}`, 'error')
+      showToast(`接口连通性测试失败：${getUserFacingErrorMessage(err, '请检查团队 API 代理是否正常运行')}`, 'error')
     } finally {
       setTestingConnectionProfileId(null)
     }
-  }
-
-  const confirmCopyProfileImportUrl = (profile: ApiProfile) => {
-    setShowProfileMenu(false)
-    setProfileImportUrlTooltipVisible(false)
-    setCopyImportUrlProfile(profile)
-    setCopyImportUrlOptions(readCopyImportUrlOptions())
   }
 
   const getDraftWithActiveProfilePatch = (patch: Partial<ApiProfile>) => ({
@@ -901,7 +759,7 @@ export default function SettingsModal() {
   }
 
   const handleProviderReorder = (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => {
-    const currentOrder = draft.providerOrder || ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+    const currentOrder = draft.providerOrder || ['openai', ...draft.customProviders.map(p => p.id)]
     const sourceIndex = currentOrder.indexOf(String(sourceValue))
     const targetIndex = currentOrder.indexOf(String(targetValue))
     if (sourceIndex < 0 || targetIndex < 0) return
@@ -1352,7 +1210,7 @@ export default function SettingsModal() {
                     <span className="relative inline-flex">
                       <button
                         type="button"
-                        onClick={() => confirmCopyProfileImportUrl(activeProfile)}
+                        onClick={() => copyProfileImportUrl(activeProfile)}
                         onMouseEnter={() => setProfileImportUrlTooltipVisible(true)}
                         onMouseLeave={() => setProfileImportUrlTooltipVisible(false)}
                         onFocus={() => setProfileImportUrlTooltipVisible(true)}
@@ -1491,7 +1349,7 @@ export default function SettingsModal() {
                                     onClick={(e) => {
                                       e.preventDefault()
                                       e.stopPropagation()
-                                      confirmCopyProfileImportUrl(profile)
+                                      copyProfileImportUrl(profile)
                                     }}
                                     className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 opacity-60 transition-all hover:bg-gray-100 hover:text-gray-600 hover:opacity-100 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
                                     aria-label={`复制导入配置「${profile.name}」的 URL`}
@@ -1551,127 +1409,7 @@ export default function SettingsModal() {
                 />
               </div>
 
-              {/* 3. API URL */}
-              {activeProviderUsesApiUrl && (
-                <label className="block">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">API 基础地址</span>
-                  </div>
-                  <input
-                    value={activeProfile.baseUrl}
-                    onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
-                    type="text"
-                    disabled={apiProxyEnabled}
-                    placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
-                    className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  />
-                  <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyEnabled ? (
-                      <span className="text-yellow-600 dark:text-yellow-500">已开启团队 API 代理，实际上游地址由服务器配置，此处不会生效。</span>
-                    ) : activeProfile.provider === 'fal' ? (
-                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时会作为 fal.ai 代理地址。</span>
-                    ) : (
-                      <span>填写到 API 版本前缀，例如 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">https://api.example.com/v1</code>。也支持 URL 参数 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code>。</span>
-                    )}
-                  </div>
-                </label>
-              )}
-
-              {/* 4. API 代理（紧跟 URL） */}
-              {apiProxyAvailable && activeProviderIsOpenAICompatible && !activeCustomProviderAsync && (
-                <div className="block">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">团队 API 代理</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!apiProxyLocked) updateActiveProfile({ apiProxy: !activeProfile.apiProxy }, true)
-                      }}
-                      disabled={apiProxyLocked}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${apiProxyChecked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'} ${apiProxyLocked ? 'cursor-not-allowed opacity-70' : ''}`}
-                      role="switch"
-                      aria-checked={apiProxyChecked}
-                      aria-label="团队 API 代理"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${apiProxyChecked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyLocked ? '管理员已强制使用团队代理。请求会先校验登录状态，再由服务器带团队默认 Key 转发到上游。' : '开启后，请求会由服务器带团队默认 Key 转发到上游，浏览器不会直接接触团队 Key。需要使用自己的上游时请关闭。'}
-                  </div>
-                </div>
-              )}
-
-              {/* 5. API Key */}
-              <div className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key（访问密钥）</span>
-                <div className="relative">
-                  <input
-                    value={activeProfile.apiKey}
-                    onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
-                    type={showApiKey ? 'text' : 'password'}
-                    placeholder={apiKeyPlaceholder}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                    tabIndex={-1}
-                  >
-                    {showApiKey ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  {apiProxyEnabled ? (
-                    <span>留空会使用服务器上的团队默认 Key；如果管理员没有配置默认 Key，才会转发这里填写的 Key。</span>
-                  ) : (
-                    <span>仅保存在当前浏览器。也支持通过 URL 参数 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code> 临时导入。</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 6. API 接口（Images/Responses） */}
-              {activeProfile.provider === 'openai' && (
-                <div className="block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">接口模式</span>
-                  <Select
-                    value={activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode}
-                    onChange={(value) => {
-                      const apiMode = value as AppSettings['apiMode']
-                      const nextModel =
-                        activeProfile.model === DEFAULT_IMAGES_MODEL || activeProfile.model === DEFAULT_RESPONSES_MODEL
-                          ? getDefaultModelForMode(apiMode)
-                          : activeProfile.model
-                      updateActiveProfile({ apiMode, model: nextModel }, true)
-                    }}
-                    options={[
-                      { label: 'Images API（图像接口）', value: 'images' },
-                      { label: 'Responses API（对话接口）', value: 'responses' },
-                    ]}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    生成图片通常使用 Images API；Agent 对话需要 Responses API。也支持 URL 参数 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=responses</code>。
-                  </div>
-                </div>
-              )}
-
-              {/* 7. 模型 ID（紧跟接口选择） */}
+              {/* 模型 ID */}
               <label className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
                   模型 ID（上游模型名称）
@@ -1681,13 +1419,11 @@ export default function SettingsModal() {
                   onChange={(e) => updateActiveProfile({ model: e.target.value })}
                   onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
                   type="text"
-                  placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
+                  placeholder={getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  {activeProfile.provider === 'fal' ? (
-                    <>默认适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
-                  ) : activeCustomProvider ? (
+                  {activeCustomProvider ? (
                     <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
                   ) : (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
                     <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
@@ -1705,7 +1441,7 @@ export default function SettingsModal() {
                   <div>
                     <div className="text-sm font-medium text-gray-700 dark:text-gray-200">接口连通性测试</div>
                     <div data-selectable-text className="mt-1 text-xs text-gray-500 dark:text-gray-500">
-                      发送轻量测试请求，验证当前基础地址、访问密钥或团队代理是否可用，不会生成图片。
+                      发送轻量测试请求，验证团队 API 代理是否可用，不会生成图片。
                     </div>
                   </div>
                   <button
@@ -1719,106 +1455,143 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* 8. 流式传输 + 中间步骤图像数 */}
-              {activeProfile.provider === 'openai' && (
-                <div className="block space-y-3">
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">流式返回</span>
-                      <button
-                        type="button"
-                        onClick={() => updateActiveProfile({ streamImages: !activeProfile.streamImages }, true)}
-                        className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.streamImages ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                        role="switch"
-                        aria-checked={!!activeProfile.streamImages}
-                        aria-label="流式返回"
-                      >
-                        <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.streamImages ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                      </button>
-                    </div>
-                    <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                      开启后可以更早看到中间结果，但并非所有服务商和网关都支持。官方接口流式模式不发送心跳，建议同时请求中间步骤图，避免长时间生成时连接被断开。
-                    </div>
-                  </div>
-                  <label className={`block ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
-                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">流式中间图数量</span>
-                    <Select
-                      value={normalizeStreamPartialImages(activeProfile.streamPartialImages)}
-                      onChange={(value) => updateActiveProfile({ streamPartialImages: normalizeStreamPartialImages(value) }, true)}
-                      disabled={!activeProfile.streamImages}
-                      options={[
-                        { label: '0，不请求', value: 0 },
-                        { label: '1 张', value: 1 },
-                        { label: '2 张', value: 2 },
-                        { label: '3 张', value: 3 },
-                      ]}
-                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                    />
-                    <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                      对应 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">partial_images</code> 参数（0-3）。建议设为 2 或 3；设为 0 时没有中间数据，长任务更容易被代理超时断开。
-                    </div>
-                  </label>
-                </div>
-              )}
-
-              {/* 9. 返回 Base64 图片数据 */}
               {activeProviderIsOpenAICompatible && (
-                <div className="block">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">直接返回图片数据（Base64）</span>
+                <>
+                  <div className="border-t border-gray-200/60 pt-2 dark:border-white/[0.06]">
                     <button
                       type="button"
-                      onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={!!activeProfile.responseFormatB64Json}
-                      aria-label="直接返回图片数据（Base64）"
+                      onClick={() => setShowAdvancedApi((v) => !v)}
+                      aria-expanded={showAdvancedApi}
+                      className="flex w-full items-center justify-between rounded-lg py-1.5 text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100"
                     >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.responseFormatB64Json ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                      <span>高级选项</span>
+                      <ChevronDownIcon className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${showAdvancedApi ? 'rotate-180' : ''}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后让接口直接返回 Base64 图片数据，而不是返回图片 URL。可减少图片 URL 跨域或过期问题，但并非所有服务商都支持。
-                  </div>
-                </div>
-              )}
 
-              {/* 10. Codex CLI 兼容模式 */}
-              {activeProfile.provider === 'openai' && (
-                <div className="block">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">Codex CLI 兼容</span>
-                    <button
-                      type="button"
-                      onClick={() => updateActiveProfile({ codexCli: !activeProfile.codexCli }, true)}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.codexCli ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={activeProfile.codexCli}
-                      aria-label="Codex CLI 兼容"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.codexCli ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后会避开 Codex CLI 不支持的参数，并对多图生成做兼容处理。支持 URL 参数 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">codexCli=true</code>。
-                  </div>
-                </div>
-              )}
+                  {showAdvancedApi && (
+                    <>
+                      {activeProfile.provider === 'openai' && (
+                        <div className="block">
+                          <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">接口模式</span>
+                          <Select
+                            value={activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode}
+                            onChange={(value) => {
+                              const apiMode = value as AppSettings['apiMode']
+                              const nextModel =
+                                activeProfile.model === DEFAULT_IMAGES_MODEL || activeProfile.model === DEFAULT_RESPONSES_MODEL
+                                  ? getDefaultModelForMode(apiMode)
+                                  : activeProfile.model
+                              updateActiveProfile({ apiMode, model: nextModel }, true)
+                            }}
+                            options={[
+                              { label: 'Images API（图像接口）', value: 'images' },
+                              { label: 'Responses API（对话接口）', value: 'responses' },
+                            ]}
+                            className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                          />
+                          <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                            生成图片用 Images API；Agent 对话用 Responses API。
+                          </div>
+                        </div>
+                      )}
 
-              {/* 11. 请求超时 */}
-              {activeProviderIsOpenAICompatible && (
-                <label className="block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">请求超时（秒）</span>
-                  <input
-                    value={timeoutInput}
-                    onChange={(e) => setTimeoutInput(e.target.value)}
-                    onBlur={commitTimeout}
-                    type="number"
-                    min={10}
-                    max={600}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                </label>
+                      {activeProfile.provider === 'openai' && (
+                        <div className="block space-y-3">
+                          <div>
+                            <div className="mb-1.5 flex items-center justify-between gap-3">
+                              <span className="block text-sm text-gray-600 dark:text-gray-300">流式返回</span>
+                              <button
+                                type="button"
+                                onClick={() => updateActiveProfile({ streamImages: !activeProfile.streamImages }, true)}
+                                className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.streamImages ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                                role="switch"
+                                aria-checked={!!activeProfile.streamImages}
+                                aria-label="流式返回"
+                              >
+                                <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.streamImages ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                              </button>
+                            </div>
+                            <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                              更早看到中间结果；官方流式不发心跳，建议同时设置中间图数量避免代理超时。
+                            </div>
+                          </div>
+                          <label className={`block ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
+                            <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">流式中间图数量</span>
+                            <Select
+                              value={normalizeStreamPartialImages(activeProfile.streamPartialImages)}
+                              onChange={(value) => updateActiveProfile({ streamPartialImages: normalizeStreamPartialImages(value) }, true)}
+                              disabled={!activeProfile.streamImages}
+                              options={[
+                                { label: '0，不请求', value: 0 },
+                                { label: '1 张', value: 1 },
+                                { label: '2 张', value: 2 },
+                                { label: '3 张', value: 3 },
+                              ]}
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                            />
+                            <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                              对应 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">partial_images</code>。设为 0 时无中间数据，长任务易被代理超时断开。
+                            </div>
+                          </label>
+                        </div>
+                      )}
+
+                      <div className="block">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="block text-sm text-gray-600 dark:text-gray-300">直接返回图片数据（Base64）</span>
+                          <button
+                            type="button"
+                            onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
+                            className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                            role="switch"
+                            aria-checked={!!activeProfile.responseFormatB64Json}
+                            aria-label="直接返回图片数据（Base64）"
+                          >
+                            <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.responseFormatB64Json ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                          </button>
+                        </div>
+                        <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                          接口直接返回 Base64，避免 URL 跨域或过期；并非所有服务商支持。
+                        </div>
+                      </div>
+
+                      {activeProfile.provider === 'openai' && (
+                        <div className="block">
+                          <div className="mb-1.5 flex items-center justify-between">
+                            <span className="block text-sm text-gray-600 dark:text-gray-300">Codex CLI 兼容</span>
+                            <button
+                              type="button"
+                              onClick={() => updateActiveProfile({ codexCli: !activeProfile.codexCli }, true)}
+                              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.codexCli ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                              role="switch"
+                              aria-checked={activeProfile.codexCli}
+                              aria-label="Codex CLI 兼容"
+                            >
+                              <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.codexCli ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                            </button>
+                          </div>
+                          <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                            避开 Codex CLI 不支持的参数，并兼容多图生成。
+                          </div>
+                        </div>
+                      )}
+
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">请求超时（秒）</span>
+                        <input
+                          value={timeoutInput}
+                          onChange={(e) => setTimeoutInput(e.target.value)}
+                          onBlur={commitTimeout}
+                          type="number"
+                          min={10}
+                          max={600}
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                      </label>
+                    </>
+                  )}
+                </>
               )}
             </div>
             )}
@@ -2018,7 +1791,7 @@ export default function SettingsModal() {
                         复制生成提示词
                       </button>
                       <ViewportTooltip visible={llmPromptTooltipVisible} className="w-56 whitespace-normal text-center">
-                        生成完整的服务商和配置信息，包含模型和接口地址，导入后只需填入 API Key。
+                        生成完整的服务商和配置信息，包含模型和接口路径，导入后由团队 API 代理转发。
                       </ViewportTooltip>
                     </span>
                     <button
@@ -2098,76 +1871,6 @@ export default function SettingsModal() {
           </div>,
           document.body,
         )}
-      {copyImportUrlProfile && (
-        <ModalShell
-          portal
-          onClose={() => setCopyImportUrlProfile(null)}
-          zIndexClass="z-[110]"
-          backdropVariant="confirm"
-          panelClassName="bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
-        >
-              <button
-                type="button"
-                onClick={() => setCopyImportUrlProfile(null)}
-                className="absolute right-4 top-4 shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
-                aria-label="关闭"
-              >
-                <CloseIcon className="h-5 w-5" />
-              </button>
-
-              <h3 className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
-                <CopyIcon className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
-                <span>复制导入配置「{copyImportUrlProfile.name}」的 URL</span>
-              </h3>
-              <div className="text-[13px] text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
-                是否包含 API Key？如果选择「不包含」，可额外配置是否使用 New API 变量。
-              </div>
-
-              {!copyImportUrlOptions.includeApiKey && (
-                <div className="mb-6 rounded-2xl bg-gray-50/80 p-4 dark:bg-white/[0.03] ring-1 ring-black/5 dark:ring-white/5">
-                  <div className="text-[13px] font-bold text-gray-700 dark:text-gray-300 mb-3.5">New API 变量配置</div>
-                  <div className="space-y-3">
-                    <Checkbox
-                      checked={copyImportUrlOptions.useNewApiAddress}
-                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiAddress: checked })}
-                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{address}"}</code> (不含 /v1)</>}
-                    />
-                    <Checkbox
-                      checked={copyImportUrlOptions.useNewApiKey}
-                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiKey: checked })}
-                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{key}"}</code></>}
-                    />
-                    <Checkbox
-                      checked={copyImportUrlOptions.useNewApiModel}
-                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiModel: checked })}
-                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{model}"}</code></>}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const options = { ...copyImportUrlOptions, includeApiKey: false }
-                    copyProfileImportUrl(copyImportUrlProfile, options)
-                  }}
-                  className="flex-1 py-2 rounded-xl border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
-                >
-                  不包含
-                </button>
-                <button
-                  onClick={() => {
-                    const options = { ...copyImportUrlOptions, includeApiKey: true }
-                    copyProfileImportUrl(copyImportUrlProfile, options)
-                  }}
-                  className="flex-1 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition shadow-sm shadow-blue-500/20"
-                >
-                  包含 API Key
-                </button>
-              </div>
-        </ModalShell>
-      )}
     </>
   )
 }

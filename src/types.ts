@@ -3,7 +3,7 @@
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
-export type BuiltInApiProvider = 'openai' | 'fal'
+export type BuiltInApiProvider = 'openai'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
@@ -60,17 +60,18 @@ export interface ApiProfile {
   id: string
   name: string
   provider: ApiProvider
+  /** 旧版字段：团队 API 代理模式下不再使用，保留以便兼容存量持久化与导入数据 */
   baseUrl: string
+  /** 旧版字段：团队 API 代理模式下不再使用，保留以便兼容存量持久化与导入数据 */
   apiKey: string
   model: string
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
-  apiProxy: boolean
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
 }
 
 export interface AppSettings {
@@ -81,7 +82,6 @@ export interface AppSettings {
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
-  apiProxy: boolean
   streamImages?: boolean
   streamPartialImages?: number
   customProviders: CustomProviderDefinition[]
@@ -152,12 +152,6 @@ export interface TaskRecord {
   apiMode?: ApiMode
   /** 生成时使用的模型 ID */
   apiModel?: string
-  /** fal.ai 队列请求 ID，用于连接断开后的结果恢复 */
-  falRequestId?: string
-  /** fal.ai 队列 endpoint，用于连接断开后的状态和结果查询 */
-  falEndpoint?: string
-  /** fal.ai 任务连接断开后是否等待自动恢复 */
-  falRecoverable?: boolean
   /** 自定义异步服务商任务 ID，用于重启后继续查询结果 */
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
@@ -374,24 +368,6 @@ export interface ResponsesApiResponse {
     moderation?: string
     n?: number
   }>
-}
-
-export interface FalImageFile {
-  url?: string
-  content_type?: string
-  file_name?: string
-  width?: number
-  height?: number
-  b64_json?: string
-  base64?: string
-  data?: string
-}
-
-export interface FalApiResponse {
-  images?: FalImageFile[]
-  image?: FalImageFile | string
-  url?: string
-  seed?: number
 }
 
 // ===== 导出数据 =====

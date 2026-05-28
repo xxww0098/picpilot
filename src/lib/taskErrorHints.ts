@@ -1,7 +1,6 @@
-import type { ApiMode, ApiProfile } from '../types'
+import type { ApiProfile } from '../types'
 import { DEFAULT_SETTINGS } from './apiProfiles'
 import { isApiTimeoutError } from './imageApiShared'
-import { getApiModeLabel } from './userFacingText'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -21,7 +20,7 @@ export function createOpenAITimeoutError(timeoutSeconds: number, profile?: Timeo
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
 }
 
-export function isFalConnectionRecoverableError(err: unknown) {
+export function isRecoverableConnectionError(err: unknown) {
   if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
   const message = err instanceof Error ? err.message : String(err)
   return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
@@ -35,14 +34,10 @@ function isApiRequestNetworkError(err: unknown): boolean {
   return false
 }
 
-function getApiModeApiName(apiMode: ApiMode) {
-  return getApiModeLabel(apiMode)
-}
-
 export function getApiRequestNetworkErrorHint(
   err: unknown,
   createdAt: number,
-  usesApiProxy: boolean,
+  _usesApiProxy: boolean,
   profile?: Pick<ApiProfile, 'provider' | 'apiMode' | 'streamImages' | 'streamPartialImages'> | null,
 ): string | null {
   if (!isApiRequestNetworkError(err)) return null
@@ -50,13 +45,7 @@ export function getApiRequestNetworkErrorHint(
   const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
 
   if (elapsedSeconds <= 15) {
-    if (usesApiProxy) {
-      return '提示：请求立即失败，请检查 API 代理服务是否正常运行。'
-    }
-    const unsupportedApiHint = profile?.provider === 'openai'
-      ? `\n· API 不支持 ${getApiModeApiName(profile.apiMode)}`
-      : ''
-    return `提示：请求立即失败，可能原因：\n· API 服务器不可达或地址有误，请检查 API 基础地址是否正确、服务是否正常运行${unsupportedApiHint}\n· 接口不支持浏览器跨域请求，可使用 Docker 部署版或本地运行版并配置 API 代理解决`
+    return '提示：请求立即失败，请联系管理员检查团队 API 代理服务是否正常运行。'
   }
 
   if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
@@ -98,5 +87,5 @@ export function getUpstreamApiErrorHint(err: unknown): string | null {
     return `提示：上游代理（如 CLIProxyAPI）没有可用于「${providerName}」provider 的账号。${codexNote}请在代理端为该 provider 添加并登录账号，或改用你已配置账号的模型。${logHint}`
   }
 
-  return `提示：接口返回鉴权失败（未提供有效凭据）。请检查：\n· 当前 API 与模型配置中的 API Key 是否已正确填写且未过期\n· API 基础地址是否指向正确的服务地址${logHint}`
+  return `提示：上游接口返回鉴权失败。请联系管理员检查 API_PROXY_API_KEY 是否有效，或团队 API 代理是否指向了正确的上游地址。${logHint}`
 }

@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } fr
 import { useStore, submitTask, submitAgentMessage, stopAgentResponse, createInputImageFromFile, deleteImageIfUnreferenced, ensureImageCached } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
-import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getParamValueLabel, getUserFacingErrorMessage } from '../lib/userFacingText'
@@ -157,15 +157,11 @@ export default function InputBar() {
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
-  const activeProvider = activeProfile.provider
-  const isFalProvider = activeProvider === 'fal'
   const agentAutoImageCount = appMode === 'agent' && activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses'
-  const moderationDisabled = isFalProvider
-  const compressionDisabled = params.output_format === 'png' || isFalProvider
+  const compressionDisabled = params.output_format === 'png'
   const providerOutputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings, user?.maxBatchImages)
   const limitedByAdminBatchLimit = Boolean(user && user.maxBatchImages < providerOutputImageLimit)
-  const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nDraftValue = Number(nInput)
   const effectiveNValue = Number.isNaN(nDraftValue) ? params.n : nDraftValue
   const streamConcurrentByN = activeProfile.provider === 'openai' && activeProfile.streamImages === true && !agentAutoImageCount && effectiveNValue > 1
@@ -173,31 +169,19 @@ export default function InputBar() {
     ? 'Agent 模式下数量由模型根据提示词自动决定'
     : limitedByAdminBatchLimit
     ? `管理员设置单次最多生成 ${outputImageLimit} 张`
-    : isFalProvider
-    ? `fal.ai 最大请求数量为 ${outputImageLimit}`
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
-  const displaySize = isFalTextToImage && params.size === 'auto'
-    ? DEFAULT_FAL_IMAGE_SIZE
-    : getParamValueLabel('size', normalizeImageSize(params.size) || DEFAULT_PARAMS.size)
+  const displaySize = getParamValueLabel('size', normalizeImageSize(params.size) || DEFAULT_PARAMS.size)
 
-  const qualityOptions = isFalProvider
-    ? [
-        { label: '低', value: 'low' },
-        { label: '中', value: 'medium' },
-        { label: '高', value: 'high' },
-      ]
-    : [
-        { label: '自动', value: 'auto' },
-        { label: '低', value: 'low' },
-        { label: '中', value: 'medium' },
-        { label: '高', value: 'high' },
-      ]
+  const qualityOptions = [
+    { label: '自动', value: 'auto' },
+    { label: '低', value: 'low' },
+    { label: '中', value: 'medium' },
+    { label: '高', value: 'high' },
+  ]
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
-  const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
-  const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
-  const qualityHint = useHintTooltip({ enabled: () => settings.codexCli || isFalProvider })
+  const qualityHint = useHintTooltip({ enabled: () => settings.codexCli })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -586,11 +570,8 @@ export default function InputBar() {
       setParams={setParams}
       settings={settings}
       displaySize={displaySize}
-      isFalTextToImage={isFalTextToImage}
-      isFalProvider={isFalProvider}
       qualityOptions={qualityOptions}
       compressionDisabled={compressionDisabled}
-      moderationDisabled={moderationDisabled}
       agentAutoImageCount={agentAutoImageCount}
       outputImageLimit={outputImageLimit}
       nLimitHintText={nLimitHintText}
@@ -608,10 +589,8 @@ export default function InputBar() {
       startAgentNHintTouch={startAgentNHintTouch}
       clearAgentNHintTouchTimer={clearAgentNHintTouchTimer}
       setShowSizePicker={setShowSizePicker}
-      sizeHint={sizeHint}
       qualityHint={qualityHint}
       compressionHint={compressionHint}
-      moderationHint={moderationHint}
       nLimitHint={nLimitHint}
     />
   )
@@ -622,10 +601,10 @@ export default function InputBar() {
 
       {showSizePicker && (
         <SizePickerModal
-          currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
+          currentSize={params.size}
           onSelect={(size) => setParams({ size })}
           onClose={() => setShowSizePicker(false)}
-          allowAuto={!isFalTextToImage}
+          allowAuto
         />
       )}
 

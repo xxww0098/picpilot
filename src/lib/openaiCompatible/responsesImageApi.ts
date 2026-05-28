@@ -367,7 +367,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const { prompt, params, inputImageDataUrls } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const useApiProxy = shouldUseApiProxy()
   const requestHeaders = createRequestHeaders(profile, { includeAppAuth: useApiProxy })
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(createApiTimeoutError(profile.timeout)), profile.timeout * 1000)

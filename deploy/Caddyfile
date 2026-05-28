@@ -28,10 +28,9 @@
 		}
 	}
 
-	# BEGIN API PROXY
 	@api_proxy_allowed {
 		path /api-proxy/*
-		method POST OPTIONS
+		method GET POST OPTIONS
 	}
 	handle @api_proxy_allowed {
 		reverse_proxy auth:3001 {
@@ -53,7 +52,6 @@
 	handle /api-proxy/* {
 		respond "Method Not Allowed" 405
 	}
-	# END API PROXY
 
 	handle {
 		try_files {path} {path}/ /index.html

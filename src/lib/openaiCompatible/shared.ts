@@ -77,7 +77,7 @@ export function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 export function createRequestHeaders(profile: ApiProfile, options: { includeAppAuth?: boolean } = {}): Record<string, string> {
   const headers: Record<string, string> = {}
   const apiKey = profile.apiKey.trim()
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  if (!options.includeAppAuth && apiKey) headers.Authorization = `Bearer ${apiKey}`
 
   if (options.includeAppAuth) {
     const token = getStoredAuthToken()

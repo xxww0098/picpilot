@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { CloseIcon } from './icons'
@@ -12,14 +12,15 @@ interface PanelShellProps {
 }
 
 export default function PanelShell({ open, onClose, title, children, className }: PanelShellProps) {
+  const panelRef = useRef<HTMLDivElement>(null)
   useCloseOnEscape(open, onClose)
-  usePreventBackgroundScroll(open)
+  usePreventBackgroundScroll(open, panelRef)
 
   if (!open) return null
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/40 backdrop-blur-sm">
-      <div className={`m-4 flex w-full max-w-6xl flex-col rounded-2xl border border-[hsl(var(--border))] bg-white shadow-xl dark:bg-[hsl(240_10%_12%)] ${className ?? ''}`.trim()}>
+      <div ref={panelRef} className={`m-4 flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col rounded-2xl border border-[hsl(var(--border))] bg-white shadow-xl dark:bg-[hsl(240_10%_12%)] ${className ?? ''}`.trim()}>
         <div className="flex items-center justify-between border-b border-[hsl(var(--border))] px-6 py-4">
           <h2 className="text-lg font-semibold text-[hsl(var(--foreground))]">{title}</h2>
           <button

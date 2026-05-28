@@ -9,8 +9,6 @@ services:
     environment:
       - DEFAULT_API_URL=${DEFAULT_API_URL:-}
       - API_URL=${API_URL:-}
-      - ENABLE_API_PROXY=${ENABLE_API_PROXY:-false}
-      - LOCK_API_PROXY=${LOCK_API_PROXY:-false}
     depends_on:
       - auth
 

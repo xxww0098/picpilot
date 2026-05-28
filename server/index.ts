@@ -538,8 +538,18 @@ function resolveApiProxyTarget(c: Context): URL | null {
     throw new Error('API_PROXY_URL 只支持 http/https')
   }
 
-  const basePath = target.pathname.replace(/\/+$/, '')
-  target.pathname = `${basePath}/${endpointPath}`
+  const baseSegments = target.pathname.split('/').filter(Boolean)
+  const endpointSegments = endpointPath.split('/').filter(Boolean)
+  // 容忍 API_PROXY_URL 末尾 `/v1` 与请求路径首段重复的情况（如外部工具直接 GET /api-proxy/v1/models），避免拼成 `/v1/v1/...`
+  if (
+    baseSegments.length > 0
+    && endpointSegments.length > 0
+    && baseSegments[baseSegments.length - 1] === 'v1'
+    && endpointSegments[0] === 'v1'
+  ) {
+    endpointSegments.shift()
+  }
+  target.pathname = `/${[...baseSegments, ...endpointSegments].join('/')}`
   target.search = requestUrl.search
   return target
 }
@@ -548,12 +558,11 @@ function createApiProxyRequestHeaders(c: Context): Headers {
   const headers = new Headers(c.req.raw.headers)
   for (const header of HOP_BY_HOP_HEADERS) headers.delete(header)
   headers.delete('host')
+  headers.delete('authorization')
   headers.delete('x-picpilot-authorization')
 
   if (API_PROXY_API_KEY) {
     headers.set('authorization', `Bearer ${API_PROXY_API_KEY}`)
-  } else if (!headers.get('authorization')?.replace(/^Bearer\s*$/i, '').trim()) {
-    headers.delete('authorization')
   }
 
   return headers
@@ -773,8 +782,9 @@ app.all('/api-proxy/*', async (c) => {
   const maxBatchImages = getUserMaxBatchImages(payload.sub)
   if (maxBatchImages == null) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
 
+  let requestedImages = 0
   if (c.req.method === 'POST') {
-    const requestedImages = await estimateRequestedImageCount(c.req.raw, target.pathname)
+    requestedImages = await estimateRequestedImageCount(c.req.raw, target.pathname)
     if (requestedImages > maxBatchImages) {
       return c.json({
         error: `单次批量生成数量上限为 ${maxBatchImages} 张，本次请求 ${requestedImages} 张。请减少数量后重试。`,
@@ -798,7 +808,6 @@ app.all('/api-proxy/*', async (c) => {
         resetAt: usage.resetAt,
       }, 429)
     }
-    recordProxyUsage(payload.sub, requestedImages)
   }
 
   let upstream: Response
@@ -811,6 +820,9 @@ app.all('/api-proxy/*', async (c) => {
     })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试或联系管理员检查团队 API。' }, 502)
+  }
+  if (c.req.method === 'POST' && upstream.ok) {
+    recordProxyUsage(payload.sub, requestedImages)
   }
 
   return new Response(upstream.body, {

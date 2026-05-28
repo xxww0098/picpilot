@@ -1,5 +1,4 @@
 import { getActiveApiProfile, getCustomProviderDefinition } from './apiProfiles'
-import { callFalAiImageApi } from './falAiImageApi'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
 import type { CallApiOptions, CallApiResult } from './imageApiShared'
 import { getDataUrlDecodedByteSize } from './imageApiShared'
@@ -30,7 +29,6 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     model: profile.model,
     apiMode: profile.apiMode,
     codexCli: profile.codexCli,
-    apiProxy: profile.apiProxy,
     streamImages: Boolean(profile.streamImages),
     edit: opts.inputImageDataUrls.length > 0,
     inputImages: opts.inputImageDataUrls.length,
@@ -40,9 +38,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
   })
 
   try {
-    const result = profile.provider === 'fal'
-      ? await callFalAiImageApi(opts, profile)
-      : await callOpenAICompatibleImageApi(opts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
+    const result = await callOpenAICompatibleImageApi(opts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
     const elapsedMs = Date.now() - startedAt
     logger.info('api', '图像 API 调用成功', {
       provider: profile.provider,

@@ -212,7 +212,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const useApiProxy = shouldUseApiProxy()
   const requestHeaders = createRequestHeaders(profile, { includeAppAuth: useApiProxy })
   const paths = createOpenAICompatiblePaths(customProvider)
 

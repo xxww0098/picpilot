@@ -287,13 +287,13 @@ export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiP
 
   try {
     const proxyConfig = readClientDevProxyConfig()
-    const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+    const useApiProxy = shouldUseApiProxy()
     const submitMapping = isEdit && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
     if (useApiProxy && (submitMapping.method ?? 'POST') !== 'POST') {
-      throw new Error('API 代理暂不支持使用 GET 提交的自定义服务商。请关闭 API 代理，或改用 POST 提交的自定义服务商配置。')
+      throw new Error('团队 API 代理暂不支持使用 GET 提交的自定义服务商。请改用 POST 提交的自定义服务商配置。')
     }
     if (useApiProxy && (submitMapping.taskIdPath || customProvider.poll)) {
-      throw new Error('API 代理暂不支持使用异步任务的自定义服务商。请关闭 API 代理，或改用同步返回图片的自定义服务商配置。')
+      throw new Error('团队 API 代理暂不支持使用异步任务的自定义服务商。请改用同步返回图片的自定义服务商配置。')
     }
     const submitPayload = await submitCustomRequest(submitMapping, opts, profile, controller, proxyConfig, useApiProxy)
     const taskIdValue = submitMapping.taskIdPath ? getByPath(submitPayload, submitMapping.taskIdPath) : undefined

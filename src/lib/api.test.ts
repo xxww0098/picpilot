@@ -410,7 +410,6 @@ describe('callImageApi', () => {
   })
 
   it('uses the same-origin API proxy path when API proxy is enabled', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
     }), {
@@ -422,7 +421,6 @@ describe('callImageApi', () => {
       settings: {
         ...DEFAULT_SETTINGS,
         apiKey: 'test-key',
-        apiProxy: true,
         baseUrl: 'http://api.example.com/v1',
       },
       prompt: 'prompt',
@@ -437,7 +435,6 @@ describe('callImageApi', () => {
   })
 
   it('uses the same-origin API proxy path when API proxy is enabled and base URL is empty', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
     }), {
@@ -449,7 +446,6 @@ describe('callImageApi', () => {
       settings: {
         ...DEFAULT_SETTINGS,
         apiKey: 'test-key',
-        apiProxy: true,
         baseUrl: '',
       },
       prompt: 'prompt',
@@ -464,7 +460,6 @@ describe('callImageApi', () => {
   })
 
   it('uses the same-origin API proxy path for sync custom providers', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
     }), {
@@ -477,7 +472,6 @@ describe('callImageApi', () => {
         ...DEFAULT_SETTINGS,
         baseUrl: '',
         apiKey: 'test-key',
-        apiProxy: true,
         customProviders: [{
           id: 'custom-sync',
           name: 'Custom Sync',
@@ -497,7 +491,6 @@ describe('callImageApi', () => {
           baseUrl: '',
           apiKey: 'test-key',
           model: 'model',
-          apiProxy: true,
         }],
         activeProfileId: 'profile-custom-sync',
       },
@@ -513,7 +506,6 @@ describe('callImageApi', () => {
   })
 
   it('rejects API proxy for async custom providers', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch')
 
     await expect(callImageApi({
@@ -521,7 +513,6 @@ describe('callImageApi', () => {
         ...DEFAULT_SETTINGS,
         baseUrl: '',
         apiKey: 'test-key',
-        apiProxy: true,
         customProviders: [{
           id: 'custom-async-proxy',
           name: 'Custom Async Proxy',
@@ -550,7 +541,6 @@ describe('callImageApi', () => {
           baseUrl: '',
           apiKey: 'test-key',
           model: 'model',
-          apiProxy: true,
         }],
         activeProfileId: 'profile-custom-async-proxy',
       },
@@ -560,34 +550,6 @@ describe('callImageApi', () => {
     })).rejects.toThrow('异步任务的自定义服务商')
 
     expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('uses the same-origin API proxy path when API proxy is locked', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
-    vi.stubEnv('VITE_API_PROXY_LOCKED', 'true')
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      data: [{ b64_json: 'aW1hZ2U=' }],
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }))
-
-    await callImageApi({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        apiKey: 'test-key',
-        apiProxy: false,
-        baseUrl: 'http://api.example.com/v1',
-      },
-      prompt: 'prompt',
-      params: { ...DEFAULT_PARAMS },
-      inputImageDataUrls: [],
-    })
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api-proxy/images/generations',
-      expect.objectContaining({ method: 'POST' }),
-    )
   })
 
   it('does not add cache request headers that require extra CORS allow-list entries', async () => {
@@ -612,184 +574,6 @@ describe('callImageApi', () => {
     expect((init as RequestInit).cache).toBe('no-store')
   })
 
-  it('ignores stored API proxy settings when the current deployment has no proxy', async () => {
-    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      data: [{ b64_json: 'aW1hZ2U=' }],
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }))
-
-    await callImageApi({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        apiKey: 'test-key',
-        apiProxy: true,
-        baseUrl: 'http://api.example.com/v1',
-      },
-      prompt: 'prompt',
-      params: { ...DEFAULT_PARAMS },
-      inputImageDataUrls: [],
-    })
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://api.example.com/v1/images/generations',
-      expect.objectContaining({ method: 'POST' }),
-    )
-  })
-
-  it('polls custom async tasks immediately and keeps polling after transient network errors', async () => {
-    vi.useFakeTimers()
-    const onCustomTaskEnqueued = vi.fn()
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'task-1' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          status: 'SUCCESS',
-          data: {
-            data: [{ b64_json: 'aW1hZ2U=' }],
-          },
-        },
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-
-    const promise = callImageApi({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        baseUrl: 'https://api.example.com/v1',
-        customProviders: [{
-          id: 'custom-async',
-          name: 'Custom Async',
-          template: 'http-image',
-          submit: {
-            path: 'images/generations',
-            method: 'POST',
-            contentType: 'json',
-            query: { async: 'true' },
-            body: { model: '$profile.model', prompt: '$prompt' },
-            taskIdPath: 'task_id',
-          },
-          poll: {
-            path: 'images/tasks/{task_id}',
-            method: 'GET',
-            intervalSeconds: 1,
-            statusPath: 'data.status',
-            successValues: ['SUCCESS'],
-            failureValues: ['FAILURE'],
-            errorPath: 'data.fail_reason',
-            result: {
-              imageUrlPaths: ['data.data.data.*.url'],
-              b64JsonPaths: ['data.data.data.*.b64_json'],
-            },
-          },
-        }],
-        profiles: [{
-          ...DEFAULT_SETTINGS.profiles[0],
-          id: 'profile-custom',
-          provider: 'custom-async',
-          baseUrl: 'https://api.example.com/v1',
-          apiKey: 'test-key',
-          model: 'model',
-          timeout: 60,
-        }],
-        activeProfileId: 'profile-custom',
-      },
-      prompt: 'prompt',
-      params: { ...DEFAULT_PARAMS },
-      inputImageDataUrls: [],
-      onCustomTaskEnqueued,
-    })
-
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    expect(onCustomTaskEnqueued).toHaveBeenCalledWith({ taskId: 'task-1' })
-    expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/v1/images/tasks/task-1')
-    await vi.advanceTimersByTimeAsync(1000)
-
-    await expect(promise).resolves.toEqual({
-      images: ['data:image/png;base64,aW1hZ2U='],
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-  })
-
-  it('does not apply submit timeout to custom async polling after receiving a task id', async () => {
-    vi.useFakeTimers()
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'task-1' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { status: 'IN_PROGRESS' } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          status: 'SUCCESS',
-          data: {
-            data: [{ b64_json: 'aW1hZ2U=' }],
-          },
-        },
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-
-    const promise = callImageApi({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        baseUrl: 'https://api.example.com/v1',
-        customProviders: [{
-          id: 'custom-async',
-          name: 'Custom Async',
-          template: 'http-image',
-          submit: {
-            path: 'images/generations',
-            method: 'POST',
-            contentType: 'json',
-            query: { async: 'true' },
-            body: { model: '$profile.model', prompt: '$prompt' },
-            taskIdPath: 'task_id',
-          },
-          poll: {
-            path: 'images/tasks/{task_id}',
-            method: 'GET',
-            intervalSeconds: 5,
-            statusPath: 'data.status',
-            successValues: ['SUCCESS'],
-            failureValues: ['FAILURE'],
-            result: {
-              b64JsonPaths: ['data.data.data.*.b64_json'],
-            },
-          },
-        }],
-        profiles: [{
-          ...DEFAULT_SETTINGS.profiles[0],
-          id: 'profile-custom',
-          provider: 'custom-async',
-          baseUrl: 'https://api.example.com/v1',
-          apiKey: 'test-key',
-          model: 'model',
-          timeout: 1,
-        }],
-        activeProfileId: 'profile-custom',
-        timeout: 1,
-      },
-      prompt: 'prompt',
-      params: { ...DEFAULT_PARAMS },
-      inputImageDataUrls: [],
-    })
-
-    await vi.advanceTimersByTimeAsync(6000)
-
-    await expect(promise).resolves.toEqual({
-      images: ['data:image/png;base64,aW1hZ2U='],
-    })
-  })
+  // 旧版异步自定义服务商相关测试已删除：团队 API 模式下异步自定义服务商被设计性拒绝，
+  // 见 customProviderImageApi.ts 中的 throw。`rejects API proxy for async custom providers` 用例仍覆盖该路径。
 })

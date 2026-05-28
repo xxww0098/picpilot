@@ -14,25 +14,14 @@ import type {
   ReferenceImageEditAction,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
-import { shouldUseApiProxy } from './devProxy'
-import { readRuntimeEnv } from './runtimeEnv'
-import { isImportableConfigUrl } from './customProviderConfigUrl'
 
-const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
-const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
-const DEFAULT_OPENAI_API_PROXY = readRuntimeEnv(import.meta.env.VITE_API_PROXY_AVAILABLE) === 'true'
-const DOCKER_DEPLOYMENT = readRuntimeEnv(import.meta.env.VITE_DOCKER_DEPLOYMENT) === 'true'
-const DEFAULT_BASE_URL = isImportableConfigUrl(RAW_DEFAULT_API_URL)
-  ? ''
-  : RAW_DEFAULT_API_URL || (DOCKER_DEPLOYMENT && DEFAULT_OPENAI_API_PROXY ? '' : OPENAI_DEFAULT_BASE_URL)
+const CLIENT_VISIBLE_BASE_URL = ''
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
-export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
-export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 900
 
-const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
+const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
   generationPath: 'images/generations',
   editPath: 'images/edits',
@@ -287,32 +276,13 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     id: DEFAULT_OPENAI_PROFILE_ID,
     name: '默认',
     provider: 'openai',
-    baseUrl: DEFAULT_BASE_URL,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
     apiKey: '',
     model: DEFAULT_IMAGES_MODEL,
     timeout: DEFAULT_API_TIMEOUT,
     apiMode: 'images',
     codexCli: false,
-    apiProxy: DEFAULT_OPENAI_API_PROXY,
     streamImages: true,
-    streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
-    ...overrides,
-  }
-}
-
-export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
-  return {
-    id: `fal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    name: '新配置',
-    provider: 'fal',
-    baseUrl: DEFAULT_FAL_BASE_URL,
-    apiKey: '',
-    model: DEFAULT_FAL_MODEL,
-    timeout: DEFAULT_API_TIMEOUT,
-    apiMode: 'images',
-    codexCli: false,
-    apiProxy: false,
-    streamImages: false,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
     ...overrides,
   }
@@ -322,11 +292,10 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
   const providerDrafts = {
     ...profile.providerDrafts,
     [profile.provider]: {
-      baseUrl: profile.baseUrl,
+      baseUrl: CLIENT_VISIBLE_BASE_URL,
       model: profile.model,
       apiMode: profile.apiMode,
       codexCli: profile.codexCli,
-      apiProxy: profile.apiProxy,
       responseFormatB64Json: profile.responseFormatB64Json,
       streamImages: profile.streamImages,
       streamPartialImages: profile.streamPartialImages,
@@ -334,32 +303,14 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
   }
   const savedDraft = providerDrafts[provider]
 
-  if (provider === 'fal') {
-    return {
-      ...profile,
-      provider,
-      baseUrl: savedDraft?.baseUrl ?? DEFAULT_FAL_BASE_URL,
-      model: savedDraft?.model ?? DEFAULT_FAL_MODEL,
-      apiMode: savedDraft?.apiMode ?? 'images',
-      codexCli: false,
-      apiProxy: false,
-      responseFormatB64Json: savedDraft?.responseFormatB64Json,
-      streamImages: false,
-      streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
-      providerDrafts,
-    }
-  }
-
   if (customProvider) {
-    const shouldUseOpenAIDefaults = profile.provider === 'fal'
     return {
       ...profile,
       provider: customProvider.id,
-      baseUrl: savedDraft?.baseUrl ?? (shouldUseOpenAIDefaults ? DEFAULT_BASE_URL : profile.baseUrl || DEFAULT_BASE_URL),
-      model: savedDraft?.model ?? (shouldUseOpenAIDefaults ? DEFAULT_IMAGES_MODEL : profile.model || DEFAULT_IMAGES_MODEL),
+      baseUrl: CLIENT_VISIBLE_BASE_URL,
+      model: savedDraft?.model ?? (profile.model || DEFAULT_IMAGES_MODEL),
       apiMode: savedDraft?.apiMode ?? 'images',
       codexCli: false,
-      apiProxy: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
       streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -370,11 +321,10 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
   return {
     ...profile,
     provider,
-    baseUrl: savedDraft?.baseUrl ?? DEFAULT_BASE_URL,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
     model: savedDraft?.model ?? DEFAULT_IMAGES_MODEL,
     apiMode: savedDraft?.apiMode ?? profile.apiMode,
     codexCli: savedDraft?.codexCli ?? profile.codexCli,
-    apiProxy: savedDraft?.apiProxy ?? DEFAULT_OPENAI_API_PROXY,
     responseFormatB64Json: savedDraft?.responseFormatB64Json,
     streamImages: savedDraft?.streamImages ?? (profile.provider === 'openai' ? profile.streamImages : true),
     streamPartialImages: savedDraft?.streamPartialImages ?? (profile.provider === 'openai' ? profile.streamPartialImages : DEFAULT_STREAM_PARTIAL_IMAGES),
@@ -384,21 +334,17 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
 
 function normalizeProviderDraft(input: unknown, provider: ApiProvider, customProviderIds: Set<string>): ApiProfileProviderDraft {
   if (!isRecord(input)) return undefined
-  const fallback = provider === 'fal' ? createDefaultFalProfile() : createDefaultOpenAIProfile()
-  const baseUrl = typeof input.baseUrl === 'string' ? input.baseUrl : undefined
+  const fallback = createDefaultOpenAIProfile()
   const model = typeof input.model === 'string' && input.model.trim() ? input.model : undefined
   const apiMode = input.apiMode === 'responses' ? 'responses' : input.apiMode === 'images' ? 'images' : undefined
-  const knownProvider = provider === 'fal' || provider === 'openai' || customProviderIds.has(provider)
+  const knownProvider = provider === 'openai' || customProviderIds.has(provider)
   if (!knownProvider) return undefined
 
   return {
-    baseUrl: provider === 'fal'
-      ? baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL
-      : baseUrl,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
     model,
     apiMode,
     codexCli: typeof input.codexCli === 'boolean' ? input.codexCli : fallback.codexCli,
-    apiProxy: typeof input.apiProxy === 'boolean' ? input.apiProxy : fallback.apiProxy,
     responseFormatB64Json: input.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof input.streamImages === 'boolean' ? input.streamImages : fallback.streamImages,
     streamPartialImages: normalizeStreamPartialImages(input.streamPartialImages, fallback.streamPartialImages),
@@ -414,26 +360,32 @@ function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>)
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
+function isSupportedApiProfileInput(input: unknown, customProviderIds: Set<string>): boolean {
+  if (!isRecord(input)) return false
+  const rawProvider = typeof input.provider === 'string' ? input.provider : ''
+  return !rawProvider || rawProvider === 'openai' || customProviderIds.has(rawProvider)
+}
+
 export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfile>, customProviderIds = new Set<string>()): ApiProfile {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
-  const provider: ApiProvider = rawProvider === 'fal' || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
-  const defaults = provider === 'fal' ? createDefaultFalProfile(fallback) : createDefaultOpenAIProfile(fallback)
+  const knownProvider = rawProvider === 'openai' || customProviderIds.has(rawProvider)
+  const provider: ApiProvider = knownProvider && customProviderIds.has(rawProvider) ? rawProvider : 'openai'
+  const defaults = createDefaultOpenAIProfile(fallback)
   const apiMode: ApiMode = record.apiMode === 'responses' ? 'responses' : 'images'
-  const rawBaseUrl = typeof record.baseUrl === 'string' ? record.baseUrl : defaults.baseUrl
+  const shouldUseRecordModel = knownProvider || !rawProvider
 
   return {
     ...defaults,
     id: typeof record.id === 'string' && record.id.trim() ? record.id : defaults.id,
     name: typeof record.name === 'string' && record.name.trim() ? record.name : defaults.name,
     provider,
-    baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL : rawBaseUrl,
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,
-    model: typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
+    apiKey: '',
+    model: shouldUseRecordModel && typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
     codexCli: Boolean(record.codexCli),
-    apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, defaults.streamPartialImages),
@@ -459,19 +411,21 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
   const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
   const customProviderIds = new Set(customProviders.map((provider) => provider.id))
   const legacyProfile = createDefaultOpenAIProfile({
-    baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : DEFAULT_BASE_URL,
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : '',
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
+    apiKey: '',
     model: typeof record.model === 'string' && record.model.trim() ? record.model : DEFAULT_IMAGES_MODEL,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : DEFAULT_API_TIMEOUT,
     apiMode: record.apiMode === 'responses' ? 'responses' : 'images',
     codexCli: Boolean(record.codexCli),
-    apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : DEFAULT_OPENAI_API_PROXY,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
   })
-  const profiles = Array.isArray(record.profiles) && record.profiles.length
-    ? record.profiles.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
+  const profileInputs = Array.isArray(record.profiles)
+    ? record.profiles.filter((profile) => isSupportedApiProfileInput(profile, customProviderIds))
+    : []
+  const profiles = profileInputs.length
+    ? profileInputs.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
     : [legacyProfile]
   const activeProfileId = typeof record.activeProfileId === 'string' && profiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
@@ -479,13 +433,12 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
 
   return {
-    baseUrl: active.baseUrl,
-    apiKey: active.apiKey,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
+    apiKey: '',
     model: active.model,
     timeout: active.timeout,
     apiMode: active.apiMode,
     codexCli: active.codexCli,
-    apiProxy: active.apiProxy,
     streamImages: active.streamImages,
     streamPartialImages: active.streamPartialImages,
     customProviders,
@@ -510,7 +463,6 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 }
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
-  if (provider === 'fal') return 'fal.ai'
   if (provider === 'openai') return 'OpenAI 兼容'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }
@@ -586,23 +538,19 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
 
   return {
     ...profile,
-    baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : profile.baseUrl,
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : profile.apiKey,
+    baseUrl: CLIENT_VISIBLE_BASE_URL,
+    apiKey: '',
     model: typeof record.model === 'string' && record.model.trim() ? record.model : profile.model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : profile.timeout,
     apiMode: record.apiMode === 'images' || record.apiMode === 'responses' ? record.apiMode : profile.apiMode,
     codexCli: typeof record.codexCli === 'boolean' ? record.codexCli : profile.codexCli,
-    apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : profile.apiProxy,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : profile.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, profile.streamPartialImages),
   }
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {
-  const usesApiProxy = shouldUseApiProxy(profile.apiProxy)
   if (!profile.name.trim()) return '请填写配置名称，方便之后识别。'
-  if (profile.provider !== 'fal' && !profile.baseUrl.trim() && !usesApiProxy) return '请填写 API 基础地址，或开启团队 API 代理。'
-  if (!profile.apiKey.trim() && !usesApiProxy) return '请填写 API Key；如果团队已配置默认 Key，可开启 API 代理后留空。'
   if (!profile.model.trim()) return '请填写模型 ID，例如 gpt-image-2。'
   return null
 }
@@ -611,13 +559,12 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
   return profile.id === DEFAULT_OPENAI_PROFILE_ID &&
     profile.name === '默认' &&
     profile.provider === 'openai' &&
-    profile.baseUrl === DEFAULT_BASE_URL &&
+    profile.baseUrl === CLIENT_VISIBLE_BASE_URL &&
     profile.apiKey === '' &&
     profile.model === DEFAULT_IMAGES_MODEL &&
     profile.timeout === DEFAULT_API_TIMEOUT &&
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
-    profile.apiProxy === DEFAULT_OPENAI_API_PROXY &&
     profile.streamImages === true &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
 }
@@ -641,8 +588,6 @@ function createImportedProfileId(provider: ApiProvider, usedIds: Set<string>): s
 function getApiProfileDedupKey(profile: ApiProfile): string {
   return JSON.stringify([
     profile.provider,
-    profile.baseUrl.trim().replace(/\/+$/, '').toLowerCase(),
-    profile.apiKey.trim(),
     profile.model.trim(),
     profile.apiMode,
   ])
@@ -651,7 +596,6 @@ function getApiProfileDedupKey(profile: ApiProfile): string {
 function getApiProfileConnectionKey(profile: ApiProfile): string {
   return JSON.stringify([
     profile.provider,
-    profile.baseUrl.trim().replace(/\/+$/, '').toLowerCase(),
     profile.model.trim(),
     profile.apiMode,
   ])
@@ -661,9 +605,6 @@ function hasEquivalentApiProfile(existingProfiles: ApiProfile[], importedProfile
   const dedupKey = getApiProfileDedupKey(importedProfile)
   if (existingProfiles.some((profile) => getApiProfileDedupKey(profile) === dedupKey)) return true
 
-  // LLM-generated imports intentionally omit API Key. Reuse an existing keyed profile
-  // when the provider, URL, model, and mode are otherwise identical.
-  if (importedProfile.apiKey.trim()) return false
   const connectionKey = getApiProfileConnectionKey(importedProfile)
   return existingProfiles.some((profile) => getApiProfileConnectionKey(profile) === connectionKey)
 }
@@ -726,7 +667,6 @@ export function findEquivalentApiProfile(
   const exact = normalized.profiles.find((item) => getApiProfileDedupKey(item) === dedupKey)
   if (exact) return exact
 
-  if (profile.apiKey.trim()) return null
   const connectionKey = getApiProfileConnectionKey(profile)
   return normalized.profiles.find((item) => getApiProfileConnectionKey(item) === connectionKey) ?? null
 }
@@ -767,13 +707,12 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
 }
 
 export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
-  baseUrl: DEFAULT_BASE_URL,
+  baseUrl: CLIENT_VISIBLE_BASE_URL,
   apiKey: '',
   model: DEFAULT_IMAGES_MODEL,
   timeout: DEFAULT_API_TIMEOUT,
   apiMode: 'images',
   codexCli: false,
-  apiProxy: DEFAULT_OPENAI_API_PROXY,
   streamImages: true,
   streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
   customProviders: [],

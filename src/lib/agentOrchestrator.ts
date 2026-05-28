@@ -164,7 +164,6 @@ function markAgentRoundTasksStopped(conversationId: string, roundId: string, now
     updateTaskInStore(task.id, {
       status: 'error',
       error: AGENT_STOPPED_MESSAGE,
-      falRecoverable: false,
       customRecoverable: false,
       finishedAt: now,
       elapsed: Math.max(0, now - task.createdAt),
@@ -1473,7 +1472,7 @@ async function executeAgentRound(
     }
 
     let message = err instanceof Error ? err.message : String(err)
-    const usesApiProxy = activeProfile.apiProxy ?? requestSettings.apiProxy
+    const usesApiProxy = true
     const networkErrorHint = getApiRequestNetworkErrorHint(err, startedAt, usesApiProxy, activeProfile)
     if (networkErrorHint && !message.includes(IMAGE_FETCH_CORS_HINT)) {
       message += `\n${networkErrorHint}`
