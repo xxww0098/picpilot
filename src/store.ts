@@ -1,10 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { namespacedStorageKey } from './lib/auth'
+import { getCachedAuthUser, namespacedStorageKey } from './lib/auth'
 import type {
   AgentConversation,
-  AgentMessage,
-  AgentRound,
   ApiMode,
   ApiProfile,
   AppSettings,
@@ -14,10 +12,8 @@ import type {
   MaskDraft,
   TaskRecord,
   ExportData,
-  ResponsesApiResponse,
-  ResponsesOutputItem,
 } from './types'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
+import { DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
@@ -43,8 +39,6 @@ import {
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { logger, serializeError } from './lib/logger'
-import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
-import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { IMAGE_FETCH_CORS_HINT, isApiTimeoutError } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
@@ -52,34 +46,79 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
+import { getErrorToastMessage } from './lib/errorToast'
+import { getUserFacingErrorMessage } from './lib/userFacingText'
+import {
+  getPersistableAgentConversation,
+  getPersistableAgentConversations,
+  getPersistableRawResponsePayload,
+  isEmptyAgentConversation,
+  mergeAgentConversationsForStorage,
+  mergeImportedAgentConversations,
+  migratePersistedState,
+  normalizeAgentConversations,
+} from './lib/agentPersistence'
+import { bytesToDataUrl, dataUrlToBytes, formatExportFileTime } from './lib/exportZip'
+import {
+  createOpenAITimeoutError,
+  getApiRequestNetworkErrorHint,
+  getUpstreamApiErrorHint,
+  isFalConnectionRecoverableError,
+  type TimeoutStreamingHintProfile,
+} from './lib/taskErrorHints'
+import { fileToDataUrl, readBlobAsDataUrl } from './lib/dataUrl'
+import {
+  bindAgentOrchestrator,
+  regenerateAgentAssistantMessage,
+  scrubAgentOutputPayloadsForDeletedTasks,
+  stopAgentResponse,
+  submitAgentMessage,
+} from './lib/agentOrchestrator'
+import {
+  cacheImage,
+  cacheThumbnail,
+  clearImageCaches,
+  ensureImageCached,
+  ensureImageThumbnailCached,
+  evictCachedImage,
+  getCachedImage,
+  resetImageCacheEntry,
+  scheduleThumbnailBackfill,
+  subscribeImageThumbnail,
+} from './store/imageCache'
 
-// ===== Image cache =====
-// 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
+export { getErrorToastMessage } from './lib/errorToast'
+export { migratePersistedState } from './lib/agentPersistence'
+export {
+  deleteAgentRoundFromConversation,
+  getActiveAgentRounds,
+  getAgentBranchLeafId,
+  getAgentRoundPath,
+  getAgentSiblingRounds,
+  remapAgentRoundMentionsForPathChange,
+  regenerateAgentAssistantMessage,
+  scrubAgentOutputPayloadsForDeletedTasks,
+  stopAgentResponse,
+  submitAgentMessage,
+} from './lib/agentOrchestrator'
+export {
+  ensureImageCached,
+  ensureImageThumbnailCached,
+  getCachedImage,
+  subscribeImageThumbnail,
+} from './store/imageCache'
 
-const imageCache = new Map<string, string>()
-const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()
-const thumbnailBackfillIds = new Map<string, 'visible' | 'background'>()
-const thumbnailBackfillRunningIds = new Set<string>()
-const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
-let thumbnailBackfillScheduled = false
-const MAX_IMAGE_CACHE_ENTRIES = 8
-const MAX_THUMBNAIL_CACHE_ENTRIES = 80
-const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
-const AGENT_ROUND_IMAGE_MENTION_RE = /@(?:第)?(\d+)轮图(\d+)/g
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const agentRoundControllers = new Map<string, AbortController>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
-const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
-const ERROR_TOAST_MAX_LENGTH = 80
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -89,238 +128,11 @@ type AgentInputDraft = {
   updatedAt?: number
 }
 
-export function getErrorToastMessage(message: string): string {
-  const text = message.trim()
-  if (!text) return '操作失败'
-
-  const firstLine = text.split(/\r?\n/)[0]?.trim() ?? ''
-  const separatorIndex = firstLine.search(/[：:]/)
-  if (separatorIndex > 0) {
-    const title = firstLine.slice(0, separatorIndex).trim()
-    if (isErrorToastTitle(title)) return title
-  }
-
-  if (firstLine.length > ERROR_TOAST_MAX_LENGTH) return '操作失败，请查看详情'
-  return firstLine || '操作失败'
-}
-
 function getToastMessage(message: string, type: ToastType): string {
   return type === 'error' ? getErrorToastMessage(message) : message
 }
 
-function isErrorToastTitle(title: string): boolean {
-  return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
-}
-
 export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
-
-const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
-const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
-const TIMEOUT_PARTIAL_IMAGES_LOW_HINT = '也可尝试提高「请求中间步骤图像数」来维持连接，避免长时间无数据传输导致断开。'
-
-type TimeoutStreamingHintProfile = Pick<ApiProfile, 'provider' | 'streamImages' | 'streamPartialImages'>
-
-function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
-  if (profile?.provider !== 'openai') return ''
-  const partialImages = profile.streamPartialImages ?? DEFAULT_SETTINGS.streamPartialImages ?? 0
-  if (profile.streamImages !== true) return TIMEOUT_STREAMING_HINT
-  if (partialImages === 0) return TIMEOUT_PARTIAL_IMAGES_ZERO_HINT
-  return partialImages < 3 ? TIMEOUT_PARTIAL_IMAGES_LOW_HINT : ''
-}
-
-function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
-  return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
-}
-
-export function getCachedImage(id: string): string | undefined {
-  const dataUrl = imageCache.get(id)
-  if (dataUrl) {
-    imageCache.delete(id)
-    imageCache.set(id, dataUrl)
-  }
-  return dataUrl
-}
-
-function cacheImage(id: string, dataUrl: string) {
-  imageCache.delete(id)
-  imageCache.set(id, dataUrl)
-  while (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
-    const oldestKey = imageCache.keys().next().value
-    if (oldestKey == null) break
-    imageCache.delete(oldestKey)
-  }
-}
-
-function getCachedThumbnail(id: string) {
-  const thumbnail = thumbnailCache.get(id)
-  if (thumbnail?.thumbnailVersion === CURRENT_THUMBNAIL_VERSION) {
-    thumbnailCache.delete(id)
-    thumbnailCache.set(id, thumbnail)
-    return thumbnail
-  }
-  if (thumbnail) {
-    thumbnailCache.delete(id)
-  }
-  return undefined
-}
-
-function cacheThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }) {
-  if (thumbnail.thumbnailVersion !== CURRENT_THUMBNAIL_VERSION) return
-  thumbnailCache.delete(id)
-  thumbnailCache.set(id, thumbnail)
-  while (thumbnailCache.size > MAX_THUMBNAIL_CACHE_ENTRIES) {
-    const oldestKey = thumbnailCache.keys().next().value
-    if (oldestKey == null) break
-    thumbnailCache.delete(oldestKey)
-  }
-}
-
-export async function ensureImageCached(id: string): Promise<string | undefined> {
-  const cached = getCachedImage(id)
-  if (cached) return cached
-  const rec = await getImage(id)
-  if (rec) {
-    cacheImage(id, rec.dataUrl)
-    return rec.dataUrl
-  }
-  return undefined
-}
-
-export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
-  const cached = getCachedThumbnail(id)
-  if (cached) return cached
-
-  const rec = await getStoredFreshImageThumbnail(id)
-  if (!rec?.thumbnailDataUrl) {
-    scheduleThumbnailBackfill([id], 'visible')
-    return undefined
-  }
-
-  const thumbnail = {
-    dataUrl: rec.thumbnailDataUrl,
-    width: rec.width,
-    height: rec.height,
-    thumbnailVersion: rec.thumbnailVersion,
-  }
-  cacheThumbnail(id, thumbnail)
-  return thumbnail
-}
-
-export function subscribeImageThumbnail(id: string, callback: (thumbnail: { dataUrl: string; width?: number; height?: number }) => void) {
-  let subscribers = thumbnailSubscribers.get(id)
-  if (!subscribers) {
-    subscribers = new Set()
-    thumbnailSubscribers.set(id, subscribers)
-  }
-  subscribers.add(callback)
-  return () => {
-    subscribers?.delete(callback)
-    if (subscribers?.size === 0) thumbnailSubscribers.delete(id)
-  }
-}
-
-function notifyImageThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number }) {
-  thumbnailSubscribers.get(id)?.forEach((callback) => callback(thumbnail))
-}
-
-function scheduleThumbnailBackfill(ids: Iterable<string>, priority: 'visible' | 'background' = 'background') {
-  for (const id of ids) {
-    if (getCachedThumbnail(id) || thumbnailBackfillRunningIds.has(id)) continue
-    const currentPriority = thumbnailBackfillIds.get(id)
-    if (!currentPriority || priority === 'visible') thumbnailBackfillIds.set(id, priority)
-  }
-  scheduleThumbnailBackfillTick()
-}
-
-function scheduleThumbnailBackfillTick() {
-  if (thumbnailBackfillScheduled || thumbnailBackfillIds.size === 0) return
-  thumbnailBackfillScheduled = true
-
-  const run = () => {
-    thumbnailBackfillScheduled = false
-    void processNextThumbnailBackfill()
-  }
-
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 2_000 })
-  } else {
-    globalThis.setTimeout(run, 250)
-  }
-}
-
-async function processNextThumbnailBackfill() {
-  if (thumbnailBackfillRunningIds.size > 0) return
-
-  const ids = await getNextThumbnailBackfillBatch()
-  for (const id of ids) startThumbnailBackfill(id)
-
-  if (thumbnailBackfillIds.size > 0) scheduleThumbnailBackfillTick()
-}
-
-async function getNextThumbnailBackfillBatch() {
-  const candidates = getOrderedThumbnailBackfillIds().slice(0, MAX_THUMBNAIL_BACKFILL_CONCURRENT)
-  if (candidates.length === 0) return []
-
-  const sizes = await Promise.all(candidates.map(async (id) => {
-    const image = await getImage(id)
-    return { width: image?.width, height: image?.height }
-  }))
-  const concurrency = getThumbnailConcurrencyForBatch(sizes)
-  const selected = candidates.slice(0, concurrency)
-  for (const id of selected) thumbnailBackfillIds.delete(id)
-  return selected
-}
-
-function getOrderedThumbnailBackfillIds() {
-  const visible: string[] = []
-  const background: string[] = []
-  for (const [id, priority] of thumbnailBackfillIds) {
-    if (priority === 'visible') visible.push(id)
-    else background.push(id)
-  }
-  return [...visible, ...background]
-}
-
-function getThumbnailConcurrencyForBatch(sizes: Array<{ width?: number; height?: number }>) {
-  let maxMegapixels = 0
-  for (const { width, height } of sizes) {
-    if (!width || !height) return 1
-    maxMegapixels = Math.max(maxMegapixels, (width * height) / 1_000_000)
-  }
-  const megapixels = maxMegapixels
-  if (megapixels >= 8) return 1
-  if (megapixels >= 4) return 2
-  if (megapixels >= 2) return 3
-  return 4
-}
-
-function startThumbnailBackfill(id: string) {
-  thumbnailBackfillRunningIds.add(id)
-
-  void (async () => {
-    if (getCachedThumbnail(id)) return
-
-    const thumbnail = await getImageThumbnail(id)
-    if (thumbnail?.thumbnailDataUrl) {
-      cacheThumbnail(id, {
-        dataUrl: thumbnail.thumbnailDataUrl,
-        width: thumbnail.width,
-        height: thumbnail.height,
-        thumbnailVersion: thumbnail.thumbnailVersion,
-      })
-      notifyImageThumbnail(id, {
-        dataUrl: thumbnail.thumbnailDataUrl,
-        width: thumbnail.width,
-        height: thumbnail.height,
-      })
-    }
-  })().catch(() => {
-    // Keep thumbnail generation best-effort; cards remain on placeholders if it fails.
-  }).finally(() => {
-    thumbnailBackfillRunningIds.delete(id)
-    scheduleThumbnailBackfillTick()
-  })
-}
 
 function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: string | null | undefined) {
   if (!maskTargetImageId) return images
@@ -379,186 +191,6 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
   }
 }
 
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-}
-
-function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound | null {
-  if (!value || typeof value !== 'object') return null
-  const round = value as Partial<AgentRound>
-  if (typeof round.id !== 'string' || !round.id) return null
-  if (typeof round.userMessageId !== 'string' || !round.userMessageId) return null
-
-  const status = round.status === 'running'
-    ? 'error'
-    : round.status === 'error' || round.status === 'done'
-    ? round.status
-    : 'done'
-
-  return {
-    id: round.id,
-    index: typeof round.index === 'number' ? round.index : fallbackIndex + 1,
-    parentRoundId: typeof round.parentRoundId === 'string' ? round.parentRoundId : null,
-    userMessageId: round.userMessageId,
-    ...(typeof round.assistantMessageId === 'string' ? { assistantMessageId: round.assistantMessageId } : {}),
-    prompt: typeof round.prompt === 'string' ? round.prompt : '',
-    inputImageIds: normalizeStringArray(round.inputImageIds),
-    maskTargetImageId: typeof round.maskTargetImageId === 'string' ? round.maskTargetImageId : null,
-    maskImageId: typeof round.maskImageId === 'string' ? round.maskImageId : null,
-    outputTaskIds: normalizeStringArray(round.outputTaskIds),
-    ...(typeof round.responseId === 'string' ? { responseId: round.responseId } : {}),
-    ...(Array.isArray(round.responseOutput) ? { responseOutput: round.responseOutput } : {}),
-    status,
-    error: status === 'error'
-      ? typeof round.error === 'string' ? round.error : '上次请求已中断'
-      : null,
-    createdAt: typeof round.createdAt === 'number' ? round.createdAt : Date.now(),
-    finishedAt: typeof round.finishedAt === 'number' ? round.finishedAt : null,
-  }
-}
-
-function normalizeAgentMessage(value: unknown): AgentMessage | null {
-  if (!value || typeof value !== 'object') return null
-  const message = value as Partial<AgentMessage>
-  if (typeof message.id !== 'string' || !message.id) return null
-  if (message.role !== 'user' && message.role !== 'assistant') return null
-  if (typeof message.roundId !== 'string' || !message.roundId) return null
-
-  return {
-    id: message.id,
-    role: message.role,
-    content: typeof message.content === 'string' ? message.content : '',
-    roundId: message.roundId,
-    ...(Array.isArray(message.inputImageIds) ? { inputImageIds: normalizeStringArray(message.inputImageIds) } : {}),
-    maskTargetImageId: typeof message.maskTargetImageId === 'string' ? message.maskTargetImageId : null,
-    maskImageId: typeof message.maskImageId === 'string' ? message.maskImageId : null,
-    ...(Array.isArray(message.outputTaskIds) ? { outputTaskIds: normalizeStringArray(message.outputTaskIds) } : {}),
-    createdAt: typeof message.createdAt === 'number' ? message.createdAt : Date.now(),
-  }
-}
-
-function normalizeAgentConversations(value: unknown): AgentConversation[] {
-  if (!Array.isArray(value)) return []
-
-  return value
-    .filter((item): item is AgentConversation => Boolean(item) && typeof item === 'object' && typeof (item as AgentConversation).id === 'string')
-    .map((conversation) => {
-      const normalizedRounds = Array.isArray(conversation.rounds)
-        ? conversation.rounds.map(normalizeAgentRound).filter((round): round is AgentRound => Boolean(round))
-        : []
-      const hasBranchParents = normalizedRounds.some((round) => round.parentRoundId)
-      const hasStoredActiveRound = typeof conversation.activeRoundId === 'string'
-      const rounds = hasBranchParents || hasStoredActiveRound
-        ? normalizedRounds
-        : normalizedRounds.map((round, index) => ({
-            ...round,
-            parentRoundId: index > 0 ? normalizedRounds[index - 1].id : null,
-          }))
-      const roundIds = new Set(rounds.map((round) => round.id))
-      const messages = Array.isArray(conversation.messages)
-        ? conversation.messages
-            .map(normalizeAgentMessage)
-            .filter((message): message is AgentMessage => message != null && roundIds.has(message.roundId))
-        : []
-      return {
-        id: conversation.id,
-        title: typeof conversation.title === 'string' && conversation.title.trim() ? conversation.title : '新对话',
-        activeRoundId: typeof conversation.activeRoundId === 'string' && roundIds.has(conversation.activeRoundId) ? conversation.activeRoundId : rounds[rounds.length - 1]?.id ?? null,
-        createdAt: typeof conversation.createdAt === 'number' ? conversation.createdAt : Date.now(),
-        updatedAt: typeof conversation.updatedAt === 'number' ? conversation.updatedAt : Date.now(),
-        rounds,
-        messages,
-      }
-    })
-}
-
-function mergeImportedAgentConversations(current: AgentConversation[], imported: AgentConversation[]) {
-  const merged = [...current]
-  const indexes = new Map(merged.map((conversation, index) => [conversation.id, index]))
-
-  for (const conversation of imported) {
-    const index = indexes.get(conversation.id)
-    if (index == null) {
-      indexes.set(conversation.id, merged.length)
-      merged.push(conversation)
-    } else {
-      merged[index] = conversation
-    }
-  }
-
-  return merged
-}
-
-function mergeAgentConversationsForStorage(stored: AgentConversation[], legacy: AgentConversation[]) {
-  const merged = new Map<string, AgentConversation>()
-  for (const conversation of stored) merged.set(conversation.id, conversation)
-  for (const conversation of legacy) {
-    const existing = merged.get(conversation.id)
-    if (!existing || conversation.updatedAt >= existing.updatedAt) {
-      merged.set(conversation.id, conversation)
-    }
-  }
-  return [...merged.values()].sort((a, b) => a.createdAt - b.createdAt)
-}
-
-function getPersistableResponseOutputItem(item: ResponsesOutputItem): ResponsesOutputItem {
-  if (item.type !== 'image_generation_call' || item.result == null) return item
-
-  if (typeof item.result === 'string') {
-    const { result: _result, ...rest } = item
-    return rest
-  }
-
-  if (!isRecord(item.result)) return item
-  const { b64_json: _b64Json, base64: _base64, image: _image, data: _data, ...restResult } = item.result
-  if (Object.keys(restResult).length === 0) {
-    const { result: _result, ...rest } = item
-    return rest
-  }
-
-  return { ...item, result: restResult }
-}
-
-function getPersistableAgentConversations(conversations: AgentConversation[]): AgentConversation[] {
-  return conversations.map((conversation) => ({
-    ...conversation,
-    rounds: conversation.rounds.map((round) => round.responseOutput?.length
-      ? {
-          ...round,
-          responseOutput: round.responseOutput.map(getPersistableResponseOutputItem),
-        }
-      : round,
-    ),
-  }))
-}
-
-function stripPersistedAgentConversations(value: unknown): unknown {
-  if (!Array.isArray(value)) return value
-  return value.map((conversation) => {
-    if (!isRecord(conversation) || !Array.isArray(conversation.rounds)) return conversation
-    return {
-      ...conversation,
-      rounds: conversation.rounds.map((round) => {
-        if (!isRecord(round) || !Array.isArray(round.responseOutput)) return round
-        return {
-          ...round,
-          responseOutput: round.responseOutput.map((item) =>
-            isRecord(item) ? getPersistableResponseOutputItem(item as ResponsesOutputItem) : item,
-          ),
-        }
-      }),
-    }
-  })
-}
-
-export function migratePersistedState(persistedState: unknown): unknown {
-  if (!isRecord(persistedState)) return persistedState
-  return {
-    ...persistedState,
-    agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
-  }
-}
-
 function createAgentConversation(now = Date.now()): AgentConversation {
   return {
     id: genId(),
@@ -571,17 +203,6 @@ function createAgentConversation(now = Date.now()): AgentConversation {
   }
 }
 
-function createAgentConversationTitle(prompt: string, fallbackTitle: string) {
-  const title = prompt.replace(/\s+/g, ' ').trim()
-  if (!title) return fallbackTitle
-  const chars = Array.from(title)
-  if (chars.length <= AGENT_CONVERSATION_TITLE_MAX_LENGTH) return title
-  return `${chars.slice(0, AGENT_CONVERSATION_TITLE_MAX_LENGTH - 3).join('')}...`
-}
-
-function isEmptyAgentConversation(conversation: AgentConversation) {
-  return conversation.rounds.length === 0 && conversation.messages.length === 0 && !conversation.activeRoundId
-}
 
 function getLatestAgentConversation(conversations: AgentConversation[]) {
   return conversations.reduce<AgentConversation | null>((latest, conversation) => {
@@ -624,10 +245,6 @@ export function getPersistedState(state: AppState) {
 
 async function replaceStoredAgentConversations(conversations: AgentConversation[]) {
   await replaceAgentConversations(conversations.map(getPersistableAgentConversation))
-}
-
-function getPersistableAgentConversation(conversation: AgentConversation): AgentConversation {
-  return getPersistableAgentConversations([conversation])[0]!
 }
 
 function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
@@ -799,6 +416,21 @@ interface AppState {
   toast: { message: string; type: ToastType } | null
   showToast: (message: string, type?: ToastType) => void
 
+  // Prompt dialog
+  promptDialog: {
+    title: string
+    message?: string
+    defaultValue?: string
+    inputType?: 'text' | 'password' | 'number'
+    placeholder?: string
+    confirmText?: string
+    cancelText?: string
+    validate?: (value: string) => string | null
+    onConfirm: (value: string) => void
+    onCancel?: () => void
+  } | null
+  setPromptDialog: (d: AppState['promptDialog']) => void
+
   // Confirm dialog
   confirmDialog: {
     title: string
@@ -853,11 +485,7 @@ function isImageReferencedByState(state: AppState, imageId: string) {
 }
 
 export async function deleteImageIfUnreferenced(imageId: string) {
-  imageCache.delete(imageId)
-  thumbnailCache.delete(imageId)
-  thumbnailBackfillIds.delete(imageId)
-  thumbnailBackfillRunningIds.delete(imageId)
-  thumbnailSubscribers.delete(imageId)
+  resetImageCacheEntry(imageId)
   if (isImageReferencedByState(useStore.getState(), imageId)) return
   try {
     await deleteImage(imageId)
@@ -1199,7 +827,7 @@ export const useStore = create<AppState>()(
         }),
       clearInputImages: () =>
         set((s) => {
-          for (const img of s.inputImages) imageCache.delete(img.id)
+          for (const img of s.inputImages) evictCachedImage(img.id)
           return syncActiveInputDraft(s, {
             inputImages: [],
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, []),
@@ -1460,6 +1088,13 @@ export const useStore = create<AppState>()(
         }, 3000)
       },
 
+      // Prompt
+      promptDialog: null,
+      setPromptDialog: (promptDialog) => {
+        if (promptDialog) dismissAllTooltips()
+        set({ promptDialog })
+      },
+
       // Confirm
       confirmDialog: null,
       setConfirmDialog: (confirmDialog) => {
@@ -1468,7 +1103,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      name: namespacedStorageKey('gpt-image-playground'),
+      name: namespacedStorageKey('picpilot'),
       version: 2,
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
@@ -1514,20 +1149,6 @@ useStore.subscribe((state) => {
 let uid = 0
 function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
-}
-
-function getPersistableRawResponsePayload(rawResponsePayload?: string) {
-  if (!rawResponsePayload) return rawResponsePayload
-  try {
-    const payload = JSON.parse(rawResponsePayload) as { output?: unknown }
-    if (!Array.isArray(payload.output)) return rawResponsePayload
-    const output = payload.output.map((item) =>
-      isRecord(item) ? getPersistableResponseOutputItem(item as ResponsesOutputItem) : item,
-    )
-    return JSON.stringify({ ...payload, output }, null, 2)
-  } catch {
-    return rawResponsePayload
-  }
 }
 
 function getPersistableTask(task: TaskRecord): TaskRecord {
@@ -1688,96 +1309,6 @@ function getTaskApiProfileName(task: TaskRecord) {
   return task.apiProfileName || task.apiModel || '未知配置'
 }
 
-function isFalConnectionRecoverableError(err: unknown) {
-  if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
-  const message = err instanceof Error ? err.message : String(err)
-  return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
-}
-
-function isApiRequestNetworkError(err: unknown): boolean {
-  if (err instanceof TypeError) {
-    const message = err.message.toLowerCase()
-    return /failed to fetch|fetch failed|load failed|networkerror|network request failed/i.test(message)
-  }
-  return false
-}
-
-function getApiModeApiName(apiMode: ApiMode) {
-  return apiMode === 'responses' ? 'Responses API' : 'Image API'
-}
-
-function getApiRequestNetworkErrorHint(
-  err: unknown,
-  createdAt: number,
-  usesApiProxy: boolean,
-  profile?: Pick<ApiProfile, 'provider' | 'apiMode' | 'streamImages' | 'streamPartialImages'> | null,
-): string | null {
-  if (!isApiRequestNetworkError(err)) return null
-
-  const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
-
-  if (elapsedSeconds <= 15) {
-    if (usesApiProxy) {
-      return '提示：请求立即失败，请检查 API 代理服务是否正常运行。'
-    }
-    const unsupportedApiHint = profile?.provider === 'openai'
-      ? `\n· API 不支持 ${getApiModeApiName(profile.apiMode)}`
-      : ''
-    return `提示：请求立即失败，可能原因：\n· API 服务器不可达或地址有误，请检查 API URL 是否正确、服务是否正常运行${unsupportedApiHint}\n· 接口不支持浏览器跨域请求，可使用 Docker 部署版或本地运行版并配置 API 代理解决`
-  }
-
-  if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
-    return `提示：请求等待约 60 秒后被断开，这通常是 Nginx 等反向代理的默认超时，而非接口本身报错。可调大代理的超时时间（如 proxy_read_timeout），或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
-  }
-
-  if (elapsedSeconds >= 110 && elapsedSeconds <= 140) {
-    return `提示：请求等待约 120 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制，而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${getTimeoutStreamingHint(profile)}`
-  }
-
-  return `提示：请求等待较长时间后被断开，通常是反向代理或网关的超时限制，而非接口本身报错。可检查代理超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
-}
-
-/**
- * 上游返回的业务错误（HTTP 4xx/5xx，非网络层失败）给出可操作提示。
- * 与 getApiRequestNetworkErrorHint 互补：后者只处理网络层失败（如跨域/超时），二者互斥使用。
- * 重点适配 CLIProxyAPI 这类「多账号路由」代理的两类常见报错。
- */
-function getUpstreamApiErrorHint(err: unknown): string | null {
-  const message = err instanceof Error ? err.message : String(err)
-  if (!message) return null
-
-  // 客户端按「超时时间」主动中止（上游一直没返回）
-  if (isApiTimeoutError(err)) {
-    return '提示：这是本应用按「超时时间」主动中止的请求，上游始终没有返回。图像编辑经 codex（gpt-image-2）通常很慢，可在「设置 → API 配置」把超时时间调大；同时检查上游或反向代理/CDN 是否过慢或有更短的超时限制。'
-  }
-
-  // CLIProxyAPI：把 gpt-image-2 这类图像模型用在了非 images 端点（如 Responses 模式）
-  if (/only supported on[^\n]*\/v1\/images/i.test(message)) {
-    return '提示：该模型（如 gpt-image-2）只能通过 Image API 调用。请在「设置 → API 配置」中，把当前配置的接口模式从 Responses 改为 Images 后重试。'
-  }
-  // CLIProxyAPI：在 images 端点用了非图像模型（错误信息通常会列出可用图像模型）
-  if (/not supported on[^\n]*\/v1\/images/i.test(message)) {
-    return '提示：当前配置的「模型」不是上游支持的图像模型。请把模型改为上游支持的图像模型（上方错误信息中通常已列出可用模型，如 gpt-image-2 等），无需改动接口模式。'
-  }
-
-  const isAuthError = /auth_unavailable|no auth available|unauthorized|invalid[\s_-]*api[\s_-]*key|invalid authentication|api[\s_-]*key[^\n]*(invalid|expired|missing|required)|missing[^\n]*api[\s_-]*key|未授权|鉴权失败|认证失败|无效的?\s*api\s*key|\b401\b/i.test(message)
-  if (!isAuthError) return null
-
-  const logHint = '\n（可点开右上角「运行日志」查看该请求的原始响应内容）'
-
-  // CLIProxyAPI 在缺少某 provider 账号时返回 no auth available (providers=xxx, model=yyy)
-  const providerMatch = message.match(/providers?=([a-z0-9_.-]+(?:,[a-z0-9_.-]+)*)/i)
-  if (/no auth available|auth_unavailable/i.test(message) && providerMatch) {
-    const providerName = providerMatch[1]
-    const codexNote = /codex/i.test(providerName)
-      ? '（codex 即 ChatGPT 账号，gpt-image-2 正是由它提供，需在代理端完成 ChatGPT 登录）'
-      : ''
-    return `提示：上游代理（如 CLIProxyAPI）没有可用于「${providerName}」provider 的账号。${codexNote}请在代理端为该 provider 添加并登录账号，或改用你已配置账号的模型。${logHint}`
-  }
-
-  return `提示：接口返回鉴权失败（未提供有效凭据）。请检查：\n· 当前 API 配置的 API Key 是否已正确填写且未过期\n· API URL 是否指向正确的服务地址${logHint}`
-}
-
 function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
   if (!(err instanceof Error)) return {}
 
@@ -1928,7 +1459,7 @@ async function recoverFalTask(taskId: string) {
     clearFalRecoveryTimer(taskId)
     updateTaskInStore(taskId, {
       status: 'error',
-      error: getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err)),
+      error: getFalErrorMessage(err) ?? getUserFacingErrorMessage(err, 'fal.ai 任务恢复失败'),
       ...getRawErrorPayload(err),
       falRecoverable: false,
       finishedAt: Date.now(),
@@ -2164,8 +1695,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     }
   }
 
-  if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
+  const apiProfileError = validateApiProfile(activeProfile)
+  if (apiProfileError) {
+    showToast(`API 配置未完成：${apiProfileError}`, 'error')
     useStore.getState().setShowSettings(true)
     return
   }
@@ -2202,7 +1734,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
         useStore.getState().clearMaskDraft()
       }
-      showToast(err instanceof Error ? err.message : String(err), 'error')
+      showToast(getUserFacingErrorMessage(err, '遮罩图片无效'), 'error')
       return
     }
   }
@@ -2210,7 +1742,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   // 持久化输入图片到 IndexedDB（此前只在内存缓存中）；并行写入，按 hash 去重
   await Promise.all(orderedInputImages.map((img) => storeImage(img.dataUrl)))
 
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(params, requestSettings, {
+    hasInputImages: orderedInputImages.length > 0,
+    maxOutputImages: getCachedAuthUser()?.maxBatchImages,
+  })
   const normalizedParamPatch = getChangedParams(params, normalizedParams)
   if (Object.keys(normalizedParamPatch).length) {
     useStore.getState().setParams(normalizedParamPatch)
@@ -2250,298 +1785,6 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   // 异步调用 API
   executeTask(taskId)
-}
-
-function getActiveAgentConversation(): AgentConversation {
-  const state = useStore.getState()
-  const existing = state.agentConversations.find((conversation) => conversation.id === state.activeAgentConversationId)
-  if (existing) return existing
-
-  const id = state.createAgentConversation()
-  return useStore.getState().agentConversations.find((conversation) => conversation.id === id)!
-}
-
-function updateAgentConversation(conversationId: string, updater: (conversation: AgentConversation) => AgentConversation) {
-  useStore.setState((state) => ({
-    agentConversations: state.agentConversations.map((conversation) =>
-      conversation.id === conversationId ? updater(conversation) : conversation,
-    ),
-  }))
-}
-
-function getAgentRoundControllerKey(conversationId: string, roundId: string) {
-  return `${conversationId}:${roundId}`
-}
-
-function createAgentAbortError() {
-  return new DOMException('Agent 请求已停止', 'AbortError')
-}
-
-function appendAgentStoppedMessage(content: string) {
-  const trimmed = content.trimEnd()
-  if (!trimmed) return AGENT_STOPPED_MESSAGE
-  if (trimmed.endsWith(AGENT_STOPPED_MESSAGE)) return trimmed
-  return `${trimmed}\n\n${AGENT_STOPPED_MESSAGE}`
-}
-
-function markAgentRoundTasksStopped(conversationId: string, roundId: string, now = Date.now()) {
-  const runningTasks = useStore.getState().tasks.filter((task) =>
-    task.status === 'running' &&
-    task.agentConversationId === conversationId &&
-    task.agentRoundId === roundId,
-  )
-
-  for (const task of runningTasks) {
-    updateTaskInStore(task.id, {
-      status: 'error',
-      error: AGENT_STOPPED_MESSAGE,
-      falRecoverable: false,
-      customRecoverable: false,
-      finishedAt: now,
-      elapsed: Math.max(0, now - task.createdAt),
-    })
-  }
-  return runningTasks.length > 0
-}
-
-function markAgentRoundStopped(conversationId: string, roundId: string) {
-  const now = Date.now()
-  const stoppedTasks = markAgentRoundTasksStopped(conversationId, roundId, now)
-  let stoppedRound = false
-  updateAgentConversation(conversationId, (current) => {
-    const round = current.rounds.find((item) => item.id === roundId)
-    if (!round || round.status !== 'running') return current
-
-    stoppedRound = true
-    const existingAssistantMessage = current.messages.find((message) => message.roundId === roundId && message.role === 'assistant')
-    const assistantMessageId = existingAssistantMessage?.id ?? genId()
-    return {
-      ...current,
-      updatedAt: now,
-      rounds: current.rounds.map((item) =>
-        item.id === roundId
-          ? {
-              ...item,
-              ...(assistantMessageId ? { assistantMessageId } : {}),
-              status: 'error',
-              error: AGENT_STOPPED_MESSAGE,
-              finishedAt: now,
-            }
-          : item,
-      ),
-      messages: existingAssistantMessage
-        ? current.messages.map((message) =>
-            message.id === existingAssistantMessage.id
-              ? { ...message, content: appendAgentStoppedMessage(message.content) }
-              : message,
-          )
-        : [
-            ...current.messages,
-            {
-              id: assistantMessageId,
-              role: 'assistant',
-              content: AGENT_STOPPED_MESSAGE,
-              roundId,
-              createdAt: now,
-            },
-          ],
-    }
-  })
-  return stoppedRound || stoppedTasks
-}
-
-function appendAgentAssistantMessageContent(conversationId: string, messageId: string, delta: string) {
-  if (!delta) return
-  updateAgentConversation(conversationId, (current) => ({
-    ...current,
-    updatedAt: Date.now(),
-    messages: current.messages.map((message) =>
-      message.id === messageId
-        ? { ...message, content: `${message.content}${delta}` }
-        : message,
-    ),
-  }))
-}
-
-async function generateAgentConversationTitle(
-  conversationId: string,
-  prompt: string,
-  inputImageIds: string[],
-  requestSettings: AppSettings,
-  activeProfile: ApiProfile,
-  fallbackTitle: string,
-) {
-  useStore.setState((state) => {
-    const next = { ...state.agentGeneratingTitleIds, [conversationId]: true as const }
-    return { agentGeneratingTitleIds: next }
-  })
-  try {
-    const imageDataUrls = await readAgentImageDataUrls(inputImageIds)
-    const title = await callAgentConversationTitleApi({
-      settings: requestSettings,
-      profile: activeProfile,
-      prompt,
-      imageDataUrls,
-    })
-    if (!title || title === fallbackTitle) return
-
-    updateAgentConversation(conversationId, (current) => {
-      const firstRound = current.rounds[0]
-      if (!firstRound || firstRound.prompt !== prompt || current.title !== fallbackTitle) return current
-      return { ...current, title, updatedAt: Date.now() }
-    })
-  } catch {
-    // Title generation is best-effort; keep the local fallback title on failure.
-  } finally {
-    useStore.setState((state) => {
-      const next = { ...state.agentGeneratingTitleIds }
-      delete next[conversationId]
-      return { agentGeneratingTitleIds: next }
-    })
-  }
-}
-
-export function stopAgentResponse(conversationId = useStore.getState().activeAgentConversationId) {
-  if (!conversationId) return
-  const conversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
-  if (!conversation) return
-  const activeRunningRound = [...getActiveAgentRounds(conversation)].reverse().find((round) => round.status === 'running')
-  const runningRound = activeRunningRound ?? conversation.rounds.find((round) => round.status === 'running')
-  if (!runningRound) return
-
-  const controller = agentRoundControllers.get(getAgentRoundControllerKey(conversationId, runningRound.id))
-  if (controller) {
-    controller.abort()
-    if (markAgentRoundStopped(conversationId, runningRound.id)) {
-      useStore.getState().showToast('已停止生成', 'info')
-    }
-    return
-  }
-
-  markAgentRoundStopped(conversationId, runningRound.id)
-  useStore.getState().showToast('已停止生成', 'info')
-}
-
-function getAgentRoundChildren(conversation: AgentConversation, parentRoundId: string | null) {
-  return conversation.rounds.filter((round) => (round.parentRoundId ?? null) === parentRoundId)
-}
-
-function getLatestAgentLeafId(conversation: AgentConversation, startRoundId: string | null = null): string | null {
-  let currentId = startRoundId
-  if (!currentId) {
-    const roots = getAgentRoundChildren(conversation, null)
-    currentId = roots[roots.length - 1]?.id ?? null
-  }
-
-  while (currentId) {
-    const children = getAgentRoundChildren(conversation, currentId)
-    const nextId = children[children.length - 1]?.id ?? null
-    if (!nextId) return currentId
-    currentId = nextId
-  }
-
-  return null
-}
-
-export function getAgentRoundPath(conversation: AgentConversation, roundId: string | null): AgentRound[] {
-  if (!roundId) return []
-  const byId = new Map(conversation.rounds.map((round) => [round.id, round]))
-  const path: AgentRound[] = []
-  const seen = new Set<string>()
-  let current = byId.get(roundId) ?? null
-
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id)
-    path.unshift(current)
-    current = current.parentRoundId ? byId.get(current.parentRoundId) ?? null : null
-  }
-
-  return path
-}
-
-export function getActiveAgentRounds(conversation: AgentConversation): AgentRound[] {
-  const activeRoundId = conversation.activeRoundId && conversation.rounds.some((round) => round.id === conversation.activeRoundId)
-    ? conversation.activeRoundId
-    : getLatestAgentLeafId(conversation)
-  return getAgentRoundPath(conversation, activeRoundId ?? null)
-}
-
-function reindexAgentRounds(conversation: AgentConversation): AgentConversation {
-  const indexById = new Map<string, number>()
-  const visit = (parentRoundId: string | null, depth: number) => {
-    for (const child of getAgentRoundChildren(conversation, parentRoundId)) {
-      indexById.set(child.id, depth)
-      visit(child.id, depth + 1)
-    }
-  }
-  visit(null, 1)
-  return {
-    ...conversation,
-    rounds: conversation.rounds.map((round) => ({
-      ...round,
-      index: indexById.get(round.id) ?? round.index,
-    })),
-  }
-}
-
-export function remapAgentRoundMentionsForPathChange(content: string, oldPath: AgentRound[], newPath: AgentRound[]) {
-  if (!content || oldPath.length === 0) return content
-  const newIndexByRoundId = new Map(newPath.map((round, index) => [round.id, index + 1]))
-  return content.replace(AGENT_ROUND_IMAGE_MENTION_RE, (match, roundNumber: string, imageNumber: string) => {
-    const oldRound = oldPath[Number(roundNumber) - 1]
-    if (!oldRound) return match
-    const newRoundIndex = newIndexByRoundId.get(oldRound.id)
-    if (!newRoundIndex) return `@已删除轮次图${imageNumber}`
-    return `@第${newRoundIndex}轮图${imageNumber}`
-  })
-}
-
-export function deleteAgentRoundFromConversation(conversation: AgentConversation, roundId: string, now = Date.now()): AgentConversation {
-  const targetRound = conversation.rounds.find((round) => round.id === roundId)
-  if (!targetRound) return conversation
-
-  const oldPathByRoundId = new Map(conversation.rounds.map((round) => [round.id, getAgentRoundPath(conversation, round.id)]))
-  const rounds = conversation.rounds
-    .filter((candidate) => candidate.id !== roundId)
-    .map((candidate) =>
-      candidate.parentRoundId === roundId
-        ? { ...candidate, parentRoundId: targetRound.parentRoundId ?? null }
-        : candidate,
-    )
-  const messages = conversation.messages.filter((candidate) => candidate.roundId !== roundId)
-  const nextConversation = reindexAgentRounds({
-    ...conversation,
-    rounds,
-    messages,
-    activeRoundId: conversation.activeRoundId === roundId ? null : conversation.activeRoundId ?? null,
-  })
-  const newPathByRoundId = new Map(nextConversation.rounds.map((round) => [round.id, getAgentRoundPath(nextConversation, round.id)]))
-  const remappedMessages = nextConversation.messages.map((message) => {
-    if (!message.roundId) return message
-    const oldPath = oldPathByRoundId.get(message.roundId) ?? []
-    const newPath = newPathByRoundId.get(message.roundId) ?? []
-    const content = remapAgentRoundMentionsForPathChange(message.content, oldPath, newPath)
-    return content === message.content ? message : { ...message, content }
-  })
-  const withRemappedMessages = { ...nextConversation, messages: remappedMessages }
-  const activeRounds = getActiveAgentRounds(withRemappedMessages)
-  return {
-    ...withRemappedMessages,
-    activeRoundId: withRemappedMessages.activeRoundId ?? activeRounds[activeRounds.length - 1]?.id ?? null,
-    updatedAt: now,
-  }
-}
-
-export function getAgentSiblingRounds(conversation: AgentConversation, round: AgentRound) {
-  return getAgentRoundChildren(conversation, round.parentRoundId ?? null)
-}
-
-export function getAgentBranchLeafId(conversation: AgentConversation, roundId: string) {
-  return getLatestAgentLeafId(conversation, roundId) ?? roundId
-}
-
-function uniqueIds(ids: string[]) {
-  return Array.from(new Set(ids.filter(Boolean)))
 }
 
 function addAgentReferencedImageIds(target: Set<string>, conversations = useStore.getState().agentConversations, inputDrafts = useStore.getState().agentInputDrafts) {
@@ -2585,8 +1828,7 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   for (const imgId of candidates) {
     if (stillUsed.has(imgId)) continue
     await deleteImage(imgId)
-    imageCache.delete(imgId)
-    thumbnailCache.delete(imgId)
+    evictCachedImage(imgId)
   }
 }
 
@@ -2606,1225 +1848,6 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
     updateTaskInStore(taskId, { streamPartialImageIds: [...currentIds, imgId] })
   } catch (err) {
     console.error(err)
-  }
-}
-
-async function readAgentImageDataUrls(ids: string[]) {
-  const dataUrls: string[] = []
-  for (const id of ids) {
-    const dataUrl = await ensureImageCached(id)
-    if (dataUrl) dataUrls.push(dataUrl)
-  }
-  return dataUrls
-}
-
-async function createAgentUserInputItem(conversation: AgentConversation, round: AgentRound, message: AgentMessage, tasks: TaskRecord[]) {
-  const imageDataUrls = await readAgentImageDataUrls(round.inputImageIds)
-  const rounds = getAgentRoundPath(conversation, round.id)
-  const text = replaceAgentPromptImageReferencesForApi(message.content, round, rounds, tasks)
-  const referenceText = round.inputImageIds.length > 0
-    ? `\n\n<available_refs>${round.inputImageIds.map((_, index) => `\n  <ref id="${getAgentCurrentReferenceId(round, index)}" />`).join('')}\n</available_refs>`
-    : ''
-  return {
-    role: 'user',
-    content: [
-      { type: 'input_text', text: `${text}${referenceText}` },
-      ...imageDataUrls.map((dataUrl) => ({ type: 'input_image', image_url: dataUrl })),
-    ],
-  }
-}
-
-async function createAgentGeneratedImagesInputItem(round: AgentRound, tasks: TaskRecord[]) {
-  const contentParts: Array<{ type: string; text?: string; image_url?: string }> = []
-  let imageIndex = 0
-  for (const taskId of round.outputTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task) {
-      contentParts.push({ type: 'input_text', text: `<removed_ref id="${getAgentGeneratedImageReferenceId(round, imageIndex)}" />` })
-      imageIndex += 1
-      continue
-    }
-    for (const imageId of task.outputImages) {
-      const dataUrl = await ensureImageCached(imageId)
-      if (dataUrl) {
-        contentParts.push({ type: 'input_image', image_url: dataUrl })
-      }
-      const refId = getAgentGeneratedImageReferenceId(round, imageIndex)
-      const prompt = truncateAgentReferencePrompt(task.prompt || '')
-      const promptAttribute = prompt ? ` prompt="${escapeXmlAttribute(prompt)}"` : ''
-      contentParts.push({ type: 'input_text', text: `<ref id="${refId}"${promptAttribute} />` })
-      imageIndex += 1
-    }
-  }
-  if (contentParts.length === 0) return null
-  return { role: 'user', content: contentParts }
-}
-
-async function createAgentBatchImagesInputItem(round: AgentRound, tasks: TaskRecord[], batchTaskIds: string[]) {
-  const contentParts: Array<{ type: string; text?: string; image_url?: string }> = []
-  // Count existing images in the round to compute correct imageIndex offset
-  let baseImageIndex = 0
-  for (const taskId of round.outputTaskIds) {
-    if (batchTaskIds.includes(taskId)) break
-    const task = tasks.find((item) => item.id === taskId)
-    baseImageIndex += task ? task.outputImages.length : 1
-  }
-  let imageIndex = baseImageIndex
-  for (const taskId of batchTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task || task.status !== 'done') continue
-    for (const imgId of task.outputImages) {
-      const dataUrl = await ensureImageCached(imgId)
-      if (dataUrl) {
-        contentParts.push({ type: 'input_image', image_url: dataUrl })
-      }
-      const refId = getAgentGeneratedImageReferenceId(round, imageIndex)
-      const prompt = truncateAgentReferencePrompt(task.prompt || '')
-      const promptAttribute = prompt ? ` prompt="${escapeXmlAttribute(prompt)}"` : ''
-      contentParts.push({ type: 'input_text', text: `<ref id="${refId}"${promptAttribute} />` })
-      imageIndex += 1
-    }
-  }
-  if (contentParts.length === 0) return null
-  return { role: 'user', content: contentParts }
-}
-
-function escapeXmlAttribute(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function truncateAgentReferencePrompt(prompt: string) {
-  const normalized = prompt.replace(/\s+/g, ' ').trim()
-  return normalized.length > 1200 ? `${normalized.slice(0, 1200)}...` : normalized
-}
-
-function createAgentAssistantFallbackItem(text: string) {
-  return {
-    role: 'assistant',
-    content: [{ type: 'output_text', text }],
-  }
-}
-
-function parseResponseOutputFromPayload(rawResponsePayload?: string): ResponsesOutputItem[] | null {
-  if (!rawResponsePayload) return null
-  try {
-    const payload = JSON.parse(rawResponsePayload) as { output?: unknown }
-    return Array.isArray(payload.output) ? payload.output as ResponsesOutputItem[] : null
-  } catch {
-    return null
-  }
-}
-
-function sanitizeResponseOutputItemForInput(item: ResponsesOutputItem): unknown | null {
-  if (item.type === 'web_search_call') return null
-  if (item.type === 'image_generation_call') return null
-
-  if (item.type === 'message') {
-    const content = (item.content ?? [])
-      .map((part) => {
-        if (typeof part.text !== 'string') return null
-        if (part.type === 'output_text' || part.type === 'text') {
-          return { type: 'output_text', text: part.text }
-        }
-        return null
-      })
-      .filter((part): part is { type: 'output_text'; text: string } => Boolean(part))
-
-    return content.length > 0 ? { role: 'assistant', content } : null
-  }
-
-  return item
-}
-
-function filterAgentRoundResponseOutputForInput(_round: AgentRound, _tasks: TaskRecord[], output: ResponsesOutputItem[]) {
-  // image_generation_call items are now dropped by sanitizeResponseOutputItemForInput;
-  // this filter is kept as a structural pass-through for future use.
-  return output
-}
-
-function scrubResponseOutputForDeletedAgentTasks(round: AgentRound, output: ResponsesOutputItem[], deletedTasks: TaskRecord[]) {
-  const deletedTaskIds = new Set(deletedTasks.map((task) => task.id))
-  const deletedToolCallIds = new Set(
-    deletedTasks
-      .filter((task) => task.agentRoundId === round.id && task.agentToolCallId)
-      .map((task) => task.agentToolCallId!),
-  )
-  if (deletedTaskIds.size === 0) return output
-
-  let anonymousImageIndex = 0
-  return output.filter((item) => {
-    if (item.type !== 'image_generation_call') return true
-
-    if (typeof item.id === 'string' && item.id) {
-      return !deletedToolCallIds.has(item.id)
-    }
-
-    const taskId = round.outputTaskIds[anonymousImageIndex]
-    anonymousImageIndex += 1
-    return !deletedTaskIds.has(taskId)
-  })
-}
-
-function scrubAgentConversationsForDeletedTasks(conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
-  if (deletedTasks.length === 0) return conversations
-
-  return conversations.map((conversation) => ({
-    ...conversation,
-    rounds: conversation.rounds.map((round) => {
-      const roundDeletedTasks = deletedTasks.filter((task) => round.outputTaskIds.includes(task.id))
-      if (roundDeletedTasks.length === 0 || !round.responseOutput?.length) return round
-      return {
-        ...round,
-        responseOutput: scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks),
-      }
-    }),
-  }))
-}
-
-function scrubTaskRawResponsePayloadForDeletedTasks(task: TaskRecord, conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
-  if (!task.rawResponsePayload || !task.agentRoundId) return task
-
-  const round = conversations
-    .flatMap((conversation) => conversation.rounds)
-    .find((item) => item.id === task.agentRoundId)
-  if (!round) return task
-
-  const roundDeletedTasks = deletedTasks.filter((item) => round.outputTaskIds.includes(item.id))
-  if (roundDeletedTasks.length === 0) return task
-
-  try {
-    const payload = JSON.parse(task.rawResponsePayload) as ResponsesApiResponse
-    if (!Array.isArray(payload.output)) return task
-    const output = scrubResponseOutputForDeletedAgentTasks(round, payload.output, roundDeletedTasks)
-    if (output.length === payload.output.length) return task
-    return { ...task, rawResponsePayload: JSON.stringify({ ...payload, output }, null, 2) }
-  } catch {
-    return task
-  }
-}
-
-async function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[], remainingTasks: TaskRecord[]) {
-  if (deletedTasks.length === 0) return remainingTasks
-
-  const conversations = scrubAgentConversationsForDeletedTasks(useStore.getState().agentConversations, deletedTasks)
-  const scrubbedTasks = remainingTasks.map((task) => scrubTaskRawResponsePayloadForDeletedTasks(task, conversations, deletedTasks))
-  useStore.setState({ agentConversations: conversations })
-
-  for (const task of scrubbedTasks) {
-    const previous = remainingTasks.find((item) => item.id === task.id)
-    if (previous?.rawResponsePayload !== task.rawResponsePayload) await putTask(task)
-  }
-
-  return scrubbedTasks
-}
-
-function sanitizeResponseOutputForInput(output: ResponsesOutputItem[], options: { allowPendingFunctionCalls?: boolean } = {}) {
-  const items = output
-    .map(sanitizeResponseOutputItemForInput)
-    .filter((item): item is unknown => item != null)
-  if (options.allowPendingFunctionCalls) return items
-
-  const functionCallIds = new Set<string>()
-  const functionOutputCallIds = new Set<string>()
-  for (const item of items) {
-    if (!isRecord(item)) continue
-    const callId = typeof item.call_id === 'string' ? item.call_id : ''
-    if (!callId) continue
-    if (item.type === 'function_call') functionCallIds.add(callId)
-    if (item.type === 'function_call_output') functionOutputCallIds.add(callId)
-  }
-
-  return items.filter((item) => {
-    if (!isRecord(item)) return true
-    const callId = typeof item.call_id === 'string' ? item.call_id : ''
-    if (item.type === 'function_call') return callId && functionOutputCallIds.has(callId)
-    if (item.type === 'function_call_output') return callId && functionCallIds.has(callId)
-    return true
-  })
-}
-
-function mergeResponseOutputItems(previous: ResponsesOutputItem[], next: ResponsesOutputItem[]) {
-  const merged = [...previous]
-  for (const item of next) {
-    const index = item.id ? merged.findIndex((existing) => existing.id === item.id) : -1
-    if (index >= 0) merged[index] = item
-    else merged.push(item)
-  }
-  return merged
-}
-
-function countResponseToolCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
-}
-
-function countResponseImageCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
-}
-
-function createAgentContinuationInputItem(newImageRefs: string[], toolCallsUsed: number, maxToolCalls: number) {
-  const lines = [
-    '[System] The app has saved your generated outputs and is continuing the same Agent turn.',
-  ]
-  if (newImageRefs.length > 0) {
-    lines.push(
-      `The following image ref ids are now available for you to reference in subsequent image_generation prompts: ${newImageRefs.join(', ')}`,
-    )
-  }
-  lines.push(
-    'Continue generating. Do NOT repeat what you already said in earlier responses.',
-    'If you still need another round after this (e.g. more dependent images), call continue_generation.',
-    `Tool-call budget: ${toolCallsUsed}/${maxToolCalls} used.`,
-  )
-  return {
-    role: 'user',
-    content: [{
-      type: 'input_text',
-      text: lines.join('\n'),
-    }],
-  }
-}
-
-function buildAgentContinuationInput(baseInput: unknown[], round: AgentRound, tasks: TaskRecord[], currentRoundOutput: ResponsesOutputItem[], toolCallsUsed: number, maxToolCalls: number) {
-  const input = [...baseInput, ...sanitizeResponseOutputForInput(currentRoundOutput, { allowPendingFunctionCalls: true })]
-  const newImageRefs = collectAgentRoundOutputImageSlots(round, tasks)
-    .map((imageId, index) => imageId ? `<ref id="${getAgentGeneratedImageReferenceId(round, index)}" />` : null)
-    .filter((ref): ref is string => Boolean(ref))
-  input.push(createAgentContinuationInputItem(newImageRefs, toolCallsUsed, maxToolCalls))
-  return input
-}
-
-function getAgentRoundResponseOutput(round: AgentRound, tasks: TaskRecord[]): ResponsesOutputItem[] | null {
-  if (round.responseOutput?.length) return round.responseOutput
-
-  for (const taskId of round.outputTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    const output = parseResponseOutputFromPayload(task?.rawResponsePayload)
-    if (output?.length) return output
-  }
-
-  return null
-}
-
-async function buildAgentApiInput(conversation: AgentConversation, currentRound: AgentRound, tasks: TaskRecord[]): Promise<unknown[]> {
-  const input: unknown[] = []
-  const rounds = getAgentRoundPath(conversation, currentRound.id)
-
-  for (const round of rounds) {
-    const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
-    if (!userMessage) continue
-
-    input.push(await createAgentUserInputItem(conversation, round, userMessage, tasks))
-    if (round.id === currentRound.id) continue
-
-    const output = getAgentRoundResponseOutput(round, tasks)
-    if (output?.length) {
-      const sanitizedOutput = sanitizeResponseOutputForInput(filterAgentRoundResponseOutputForInput(round, tasks, output))
-      if (sanitizedOutput.length > 0) {
-        input.push(...sanitizedOutput)
-      } else {
-        // All output items were filtered (e.g. only image_generation_call); add fallback
-        const assistantMessage = round.assistantMessageId
-          ? conversation.messages.find((message) => message.id === round.assistantMessageId)
-          : null
-        input.push(createAgentAssistantFallbackItem(
-          assistantMessage?.content || '图像已生成。',
-        ))
-      }
-    } else {
-      const assistantMessage = round.assistantMessageId
-        ? conversation.messages.find((message) => message.id === round.assistantMessageId)
-        : null
-      input.push(createAgentAssistantFallbackItem(
-        assistantMessage?.content || '[No text response]',
-      ))
-    }
-
-    // Inject generated images as a separate user message with input_image parts
-    if (round.outputTaskIds.length > 0) {
-      const imagesItem = await createAgentGeneratedImagesInputItem(round, tasks)
-      if (imagesItem) input.push(imagesItem)
-    }
-  }
-
-  return input
-}
-
-export async function submitAgentMessage() {
-  const state = useStore.getState()
-  const { settings, prompt, inputImages, maskDraft, params, showToast } = state
-  const normalizedSettings = normalizeSettings(settings)
-  const activeProfile = getActiveApiProfile(normalizedSettings)
-
-  if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
-    state.setAppMode('agent')
-    return
-  }
-
-  if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
-    state.setShowSettings(true)
-    return
-  }
-
-  const trimmedPrompt = prompt.trim()
-  if (!trimmedPrompt) {
-    showToast('请输入消息', 'error')
-    return
-  }
-
-  const conversation = getActiveAgentConversation()
-  if (conversation.rounds.some((round) => round.status === 'running')) {
-    showToast('请等待生成完成，或先停止生成', 'info')
-    return
-  }
-
-  let orderedInputImages = inputImages
-  let maskImageId: string | null = null
-  let maskTargetImageId: string | null = null
-
-  if (maskDraft) {
-    try {
-      orderedInputImages = orderInputImagesForMask(inputImages, maskDraft.targetImageId)
-      await validateMaskMatchesImage(maskDraft.maskDataUrl, orderedInputImages[0].dataUrl)
-      maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
-      cacheImage(maskImageId, maskDraft.maskDataUrl)
-      maskTargetImageId = maskDraft.targetImageId
-    } catch (err) {
-      if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
-        state.clearMaskDraft()
-      }
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-      return
-    }
-  }
-
-  const inputImageIds = uniqueIds(orderedInputImages.map((image) => image.id))
-
-  for (const image of orderedInputImages) {
-    await storeImage(image.dataUrl)
-  }
-
-  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
-  const now = Date.now()
-  const editingRound = state.agentEditingRoundId
-    ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) ?? null
-    : null
-  const editingRoundAssistantMessage = editingRound?.assistantMessageId
-    ? conversation.messages.find((message) => message.id === editingRound.assistantMessageId) ?? null
-    : conversation.messages.find((message) => message.roundId === editingRound?.id && message.role === 'assistant') ?? null
-  const editingRoundHasAssistantMessage = Boolean(editingRoundAssistantMessage)
-  const editingRoundHasErrorAssistantMessage = Boolean(
-    editingRound?.status === 'error' && editingRoundAssistantMessage?.content.startsWith('请求失败：'),
-  )
-  const editingRoundHasChildren = editingRound
-    ? conversation.rounds.some((round) => (round.parentRoundId ?? null) === editingRound.id)
-    : false
-  const shouldAppendToEditingRound = Boolean(
-    editingRound && !editingRoundHasChildren && (!editingRoundHasAssistantMessage || editingRoundHasErrorAssistantMessage),
-  )
-  const roundId = shouldAppendToEditingRound && editingRound ? editingRound.id : genId()
-  const userMessageId = shouldAppendToEditingRound && editingRound ? editingRound.userMessageId : genId()
-  const activeRounds = getActiveAgentRounds(conversation)
-  const activeLeafId = activeRounds[activeRounds.length - 1]?.id ?? null
-  const parentRoundId = editingRound ? editingRound.parentRoundId ?? null : activeLeafId
-  const parentPath = parentRoundId ? getAgentRoundPath(conversation, parentRoundId) : []
-  const normalizedParams = {
-    ...normalizeParamsForSettings(params, requestSettings, { hasInputImages: inputImageIds.length > 0 }),
-    n: DEFAULT_PARAMS.n,
-  }
-  const round: AgentRound = {
-    id: roundId,
-    index: shouldAppendToEditingRound && editingRound ? editingRound.index : parentPath.length + 1,
-    parentRoundId,
-    ...(editingRoundHasErrorAssistantMessage && editingRoundAssistantMessage ? { assistantMessageId: editingRoundAssistantMessage.id } : {}),
-    userMessageId,
-    prompt: trimmedPrompt,
-    inputImageIds,
-    maskTargetImageId,
-    maskImageId,
-    outputTaskIds: [],
-    status: 'running',
-    error: null,
-    createdAt: now,
-    finishedAt: null,
-  }
-  const userMessage: AgentMessage = {
-    id: userMessageId,
-    role: 'user',
-    content: trimmedPrompt,
-    roundId,
-    inputImageIds,
-    maskTargetImageId,
-    maskImageId,
-    createdAt: now,
-  }
-
-  let fallbackTitle: string | null = null
-  updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(trimmedPrompt, current.title) : current.title
-    if (current.rounds.length === 0) fallbackTitle = nextTitle
-    const messages = shouldAppendToEditingRound
-      ? current.messages.some((message) => message.id === userMessageId)
-        ? current.messages.map((message) => {
-            if (message.id === userMessageId) return userMessage
-            if (editingRoundHasErrorAssistantMessage && message.id === editingRoundAssistantMessage?.id) {
-              return { ...message, content: '', outputTaskIds: [] }
-            }
-            return message
-          })
-        : [...current.messages, userMessage]
-      : [...current.messages, userMessage]
-
-    return {
-      ...current,
-      title: nextTitle,
-      activeRoundId: roundId,
-      updatedAt: now,
-      rounds: shouldAppendToEditingRound
-        ? current.rounds.map((item) => item.id === roundId ? round : item)
-        : [...current.rounds, round],
-      messages,
-    }
-  })
-
-  state.setPrompt('')
-  state.clearInputImages()
-  state.clearMaskDraft()
-  state.setAgentEditingRoundId(null)
-
-  if (fallbackTitle) {
-    void generateAgentConversationTitle(conversation.id, trimmedPrompt, inputImageIds, requestSettings, activeProfile, fallbackTitle)
-  }
-
-  void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile)
-}
-
-export async function regenerateAgentAssistantMessage(conversationId: string, roundId: string) {
-  const state = useStore.getState()
-  const { settings, params, showToast } = state
-  const normalizedSettings = normalizeSettings(settings)
-  const activeProfile = getActiveApiProfile(normalizedSettings)
-
-  if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
-    state.setAppMode('agent')
-    return
-  }
-
-  if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
-    state.setShowSettings(true)
-    return
-  }
-
-  const conversation = state.agentConversations.find((item) => item.id === conversationId)
-  const sourceRound = conversation?.rounds.find((item) => item.id === roundId) ?? null
-  const sourceUserMessage = sourceRound
-    ? conversation?.messages.find((message) => message.id === sourceRound.userMessageId) ?? null
-    : null
-  if (!conversation || !sourceRound || !sourceUserMessage) {
-    showToast('找不到要重新生成的 Agent 消息', 'error')
-    return
-  }
-
-  if (conversation.rounds.some((round) => round.status === 'running')) {
-    showToast('请等待生成完成，或先停止生成', 'info')
-    return
-  }
-
-  const inputImageIds = uniqueIds(sourceRound.inputImageIds)
-  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
-  const normalizedParams = {
-    ...normalizeParamsForSettings(params, requestSettings, { hasInputImages: inputImageIds.length > 0 }),
-    n: DEFAULT_PARAMS.n,
-  }
-  const now = Date.now()
-  if (sourceRound.status === 'error') {
-    const assistantMessageId = sourceRound.assistantMessageId
-      ?? conversation.messages.find((message) => message.roundId === sourceRound.id && message.role === 'assistant')?.id
-    updateAgentConversation(conversationId, (current) => ({
-      ...current,
-      activeRoundId: sourceRound.id,
-      updatedAt: now,
-      rounds: current.rounds.map((round) =>
-        round.id === sourceRound.id
-          ? {
-              ...round,
-              outputTaskIds: [],
-              responseId: undefined,
-              responseOutput: undefined,
-              status: 'running',
-              error: null,
-              finishedAt: null,
-            }
-          : round,
-      ),
-      messages: assistantMessageId
-        ? current.messages.map((message) =>
-            message.id === assistantMessageId ? { ...message, content: '', outputTaskIds: [] } : message,
-          )
-        : current.messages,
-    }))
-    state.setAgentEditingRoundId(null)
-    void executeAgentRound(conversationId, sourceRound.id, normalizedParams, requestSettings, activeProfile)
-    return
-  }
-
-  const newRoundId = genId()
-  const newUserMessageId = genId()
-  const newRound: AgentRound = {
-    id: newRoundId,
-    index: sourceRound.index,
-    parentRoundId: sourceRound.parentRoundId ?? null,
-    userMessageId: newUserMessageId,
-    prompt: sourceRound.prompt || sourceUserMessage.content.trim(),
-    inputImageIds,
-    maskTargetImageId: sourceRound.maskTargetImageId ?? sourceUserMessage.maskTargetImageId ?? null,
-    maskImageId: sourceRound.maskImageId ?? sourceUserMessage.maskImageId ?? null,
-    outputTaskIds: [],
-    status: 'running',
-    error: null,
-    createdAt: now,
-    finishedAt: null,
-  }
-  const newUserMessage: AgentMessage = {
-    id: newUserMessageId,
-    role: 'user',
-    content: sourceUserMessage.content,
-    roundId: newRoundId,
-    inputImageIds,
-    maskTargetImageId: sourceRound.maskTargetImageId ?? sourceUserMessage.maskTargetImageId ?? null,
-    maskImageId: sourceRound.maskImageId ?? sourceUserMessage.maskImageId ?? null,
-    createdAt: now,
-  }
-
-  updateAgentConversation(conversationId, (current) => ({
-    ...current,
-    activeRoundId: newRoundId,
-    updatedAt: now,
-    rounds: [...current.rounds, newRound],
-    messages: [...current.messages, newUserMessage],
-  }))
-  state.setAgentEditingRoundId(null)
-  void executeAgentRound(conversationId, newRoundId, normalizedParams, requestSettings, activeProfile)
-}
-
-async function executeAgentRound(
-  conversationId: string,
-  roundId: string,
-  params: TaskParams,
-  requestSettings: AppSettings,
-  activeProfile: ApiProfile,
-) {
-  const startedAt = Date.now()
-  const controller = new AbortController()
-  const controllerKey = getAgentRoundControllerKey(conversationId, roundId)
-  agentRoundControllers.set(controllerKey, controller)
-  try {
-    const latestState = useStore.getState()
-    const conversation = latestState.agentConversations.find((item) => item.id === conversationId)
-    if (!conversation) return
-    const round = conversation.rounds.find((item) => item.id === roundId)
-    const userMessage = round ? conversation.messages.find((message) => message.id === round.userMessageId) : null
-    if (!round || !userMessage) return
-    const maskDataUrl = round.maskImageId ? await ensureImageCached(round.maskImageId) : undefined
-    if (round.maskImageId && !maskDataUrl) throw new Error('遮罩图片已不存在')
-
-    const apiInput = await buildAgentApiInput(conversation, round, latestState.tasks)
-    if (controller.signal.aborted) throw createAgentAbortError()
-    const existingAssistantMessage = round.assistantMessageId
-      ? conversation.messages.find((message) => message.id === round.assistantMessageId) ?? null
-      : conversation.messages.find((message) => message.roundId === roundId && message.role === 'assistant') ?? null
-    const assistantMessageId = existingAssistantMessage?.id ?? genId()
-    const shouldStreamAssistantMessage = activeProfile.streamImages === true
-    const streamingTaskIds: string[] = []
-    const taskIdByToolCallId = new Map<string, string>()
-
-    const attachTaskToAgentRound = (taskId: string) => {
-      if (streamingTaskIds.includes(taskId)) return
-      streamingTaskIds.push(taskId)
-      updateAgentConversation(conversationId, (current) => ({
-        ...current,
-        updatedAt: Date.now(),
-        rounds: current.rounds.map((item) =>
-          item.id === roundId
-            ? { ...item, outputTaskIds: item.outputTaskIds.includes(taskId) ? item.outputTaskIds : [...item.outputTaskIds, taskId] }
-            : item,
-        ),
-        messages: current.messages.map((message) =>
-          message.id === assistantMessageId
-            ? { ...message, outputTaskIds: [...new Set([...(message.outputTaskIds ?? []), taskId])] }
-            : message,
-        ),
-      }))
-    }
-
-    const ensureStreamingAgentTask = async (
-      toolCallId: string,
-      taskPrompt = '',
-      inputImageIds = round.inputImageIds ?? [],
-      options: { createdAt?: number; agentBatchCallId?: string; maskTargetImageId?: string | null; maskImageId?: string | null } = {},
-    ) => {
-      const existingTaskId = taskIdByToolCallId.get(toolCallId)
-      if (existingTaskId) return existingTaskId
-
-      const existingTask = useStore.getState().tasks.find((task) => task.agentToolCallId === toolCallId)
-      if (existingTask) {
-        taskIdByToolCallId.set(toolCallId, existingTask.id)
-        attachTaskToAgentRound(existingTask.id)
-        return existingTask.id
-      }
-
-      const task: TaskRecord = {
-        id: genId(),
-        prompt: taskPrompt,
-        params: { ...params, n: 1 },
-        apiProvider: activeProfile.provider,
-        apiProfileId: activeProfile.id,
-        apiProfileName: activeProfile.name,
-        apiMode: activeProfile.apiMode,
-        apiModel: activeProfile.model,
-        inputImageIds,
-        maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : round.maskTargetImageId ?? null,
-        maskImageId: options.maskImageId !== undefined ? options.maskImageId : round.maskImageId ?? null,
-        outputImages: [],
-        status: 'running',
-        error: null,
-        createdAt: options.createdAt ?? Date.now(),
-        finishedAt: null,
-        elapsed: null,
-        sourceMode: 'agent',
-        agentConversationId: conversationId,
-        agentRoundId: roundId,
-        agentMessageId: assistantMessageId,
-        agentToolCallId: toolCallId,
-        ...(options.agentBatchCallId ? { agentBatchCallId: options.agentBatchCallId } : {}),
-      }
-
-      taskIdByToolCallId.set(toolCallId, task.id)
-      useStore.getState().setTasks([task, ...useStore.getState().tasks])
-      attachTaskToAgentRound(task.id)
-      await putTask(task)
-      return task.id
-    }
-
-    const completeAgentImageTask = async (image: AgentApiResultImage, rawResponsePayload?: string) => {
-      const toolCallId = image.toolCallId ?? genId()
-      const taskId = await ensureStreamingAgentTask(toolCallId)
-      const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
-      if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
-
-      const imgId = await storeImage(image.dataUrl, 'generated')
-      cacheImage(imgId, image.dataUrl)
-      const actualParams: Partial<TaskParams> = {
-        ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
-        n: 1,
-      }
-      updateTaskInStore(taskId, {
-        prompt: image.revisedPrompt ?? latestTask?.prompt ?? '',
-        outputImages: [imgId],
-        actualParams,
-        actualParamsByImage: { [imgId]: actualParams },
-        revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
-        rawResponsePayload,
-        status: 'done',
-        error: null,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - (latestTask?.createdAt ?? startedAt),
-        agentToolAction: image.action,
-      })
-      useStore.getState().setTaskStreamPreview(taskId)
-      return taskId
-    }
-
-    if (shouldStreamAssistantMessage) {
-      updateAgentConversation(conversationId, (current) => ({
-        ...current,
-        updatedAt: Date.now(),
-        rounds: current.rounds.map((item) =>
-          item.id === roundId ? { ...item, assistantMessageId } : item,
-        ),
-        messages: current.messages.some((message) => message.id === assistantMessageId)
-          ? current.messages.map((message) => message.id === assistantMessageId ? { ...message, content: '', outputTaskIds: [] } : message)
-          : [
-              ...current.messages,
-              {
-                id: assistantMessageId,
-                role: 'assistant',
-                content: '',
-                roundId,
-                createdAt: Date.now(),
-              },
-            ],
-      }))
-    }
-    const maxToolCalls = Number.isFinite(requestSettings.agentMaxToolRounds)
-      ? Math.max(1, Math.trunc(requestSettings.agentMaxToolRounds))
-      : DEFAULT_AGENT_MAX_TOOL_ROUNDS
-    let apiInputForTurn = apiInput
-    let accumulatedOutputItems: ResponsesOutputItem[] = []
-    let accumulatedText = ''
-    const textSegments: string[] = []
-    let lastResponseId: string | undefined
-    let toolCallsUsed = 0
-    let reachedToolLimit = false
-    let pendingToolTextSeparator = false
-
-    // Helper: resolve reference image ids to data URLs for batch image calls
-    const resolveReferenceImages = async (referenceIds: string[]): Promise<{ dataUrls: string[]; imageIds: string[] }> => {
-      const dataUrls: string[] = []
-      const imageIds: string[] = []
-      for (const refId of referenceIds) {
-        // Resolve both generated image refs and current/user input refs from XML tags.
-        const latestConv = useStore.getState().agentConversations.find((item) => item.id === conversationId)
-        if (!latestConv) continue
-        for (const r of getAgentRoundPath(latestConv, roundId)) {
-          for (let imgIdx = 0; imgIdx < r.inputImageIds.length; imgIdx++) {
-            const currentRefId = getAgentCurrentReferenceId(r, imgIdx)
-            if (currentRefId === refId) {
-              const imageId = r.inputImageIds[imgIdx]
-              const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) dataUrls.push(dataUrl)
-              imageIds.push(imageId)
-            }
-          }
-          const outputImages = collectAgentRoundOutputImageSlots(r, useStore.getState().tasks)
-          for (let imgIdx = 0; imgIdx < outputImages.length; imgIdx++) {
-            const generatedRefId = getAgentGeneratedImageReferenceId(r, imgIdx)
-            if (generatedRefId === refId) {
-              const imageId = outputImages[imgIdx]
-              if (!imageId) continue
-              const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) dataUrls.push(dataUrl)
-              imageIds.push(imageId)
-            }
-          }
-        }
-      }
-      return { dataUrls, imageIds }
-    }
-
-    // Helper: execute a generate_image_batch function call concurrently
-    const executeBatchFunctionCall = async (functionCallItem: ResponsesOutputItem): Promise<string> => {
-      const callId = functionCallItem.call_id ?? ''
-      const args = functionCallItem.arguments ?? ''
-      const batchItems = parseBatchImageCallArguments(args)
-
-      if (!batchItems || batchItems.length === 0) {
-        return JSON.stringify({ error: 'Invalid or empty batch arguments' })
-      }
-
-      // Create task cards in model-provided order before starting network calls.
-      const batchExecutionItems = []
-      for (const item of batchItems) {
-        const referenceIds = uniqueIds(extractAgentReferenceIds(item.prompt))
-        const references = await resolveReferenceImages(referenceIds)
-        const batchToolCallId = genId()
-        await ensureStreamingAgentTask(batchToolCallId, item.prompt, references.imageIds, {
-          createdAt: Date.now(),
-          maskTargetImageId: null,
-          maskImageId: null,
-          ...(callId ? { agentBatchCallId: callId } : {}),
-        })
-        batchExecutionItems.push({ item, batchToolCallId, references, referenceIds })
-      }
-
-      // Fire all batch items concurrently after all cards are visible.
-      const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds }) => {
-
-        const batchResult = await callBatchImageSingle({
-          profile: activeProfile,
-          params,
-          batchItemId: item.id,
-          prompt: item.prompt,
-          referenceImageDataUrls: references.dataUrls,
-          referenceIds,
-          signal: controller.signal,
-          onImageToolStarted: shouldStreamAssistantMessage
-            ? async () => {
-                if (controller.signal.aborted) return
-              }
-            : undefined,
-          onPartialImage: shouldStreamAssistantMessage
-            ? async ({ image, partialImageIndex }) => {
-                if (controller.signal.aborted) return
-                const taskId = taskIdByToolCallId.get(batchToolCallId)
-                if (taskId) {
-                  useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
-                  if (partialImageIndex === 0 || partialImageIndex == null) {
-                    void persistTaskStreamPartialImage(taskId, image)
-                  }
-                }
-              }
-            : undefined,
-          onImageToolCompleted: shouldStreamAssistantMessage
-            ? async (image) => {
-                if (controller.signal.aborted) return
-                await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
-              }
-            : undefined,
-        })
-
-        // If not streaming and we have an image, complete the pre-created task.
-        if (batchResult.image && !shouldStreamAssistantMessage) {
-          await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
-        }
-
-        return batchResult
-      })
-
-      const batchResults = await Promise.allSettled(batchPromises)
-
-      // Build function_call_output
-      const outputImages: Array<{ id: string; status: string; error?: string }> = []
-      for (let i = 0; i < batchItems.length; i++) {
-        const settled = batchResults[i]
-        const batchItem = batchItems[i]
-        if (settled.status === 'fulfilled') {
-          const r = settled.value
-          outputImages.push({
-            id: r.batchItemId,
-            status: r.image ? 'done' : 'error',
-            ...(r.error ? { error: r.error } : {}),
-          })
-        } else {
-          outputImages.push({
-            id: batchItem.id,
-            status: 'error',
-            error: settled.reason instanceof Error ? settled.reason.message : String(settled.reason),
-          })
-        }
-      }
-
-      const successCount = outputImages.filter((img) => img.status === 'done').length
-      toolCallsUsed += successCount
-
-      return JSON.stringify({ images: outputImages })
-    }
-
-    while (true) {
-      if (controller.signal.aborted) throw createAgentAbortError()
-      const textBeforeResponse = accumulatedText
-      let currentResponseOutputItems: ResponsesOutputItem[] = []
-      const result = await callAgentResponsesApi({
-        settings: requestSettings,
-        profile: activeProfile,
-        params,
-        input: apiInputForTurn,
-        maskDataUrl,
-        signal: controller.signal,
-        onTextDelta: shouldStreamAssistantMessage
-          ? (delta) => {
-              if (controller.signal.aborted) return
-              if (pendingToolTextSeparator && delta && accumulatedText.trim()) {
-                accumulatedText += '\n\n'
-                appendAgentAssistantMessageContent(conversationId, assistantMessageId, '\n\n')
-              }
-              pendingToolTextSeparator = false
-              accumulatedText += delta
-              appendAgentAssistantMessageContent(conversationId, assistantMessageId, delta)
-            }
-          : undefined,
-        onOutputItems: shouldStreamAssistantMessage
-          ? (outputItems) => {
-              if (controller.signal.aborted) return
-              currentResponseOutputItems = outputItems
-              updateAgentConversation(conversationId, (current) => ({
-                ...current,
-                rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseOutput: mergeResponseOutputItems(accumulatedOutputItems, outputItems) } : item),
-              }))
-            }
-          : undefined,
-        onImageToolStarted: shouldStreamAssistantMessage
-          ? async ({ toolCallId }) => {
-              if (controller.signal.aborted) return
-              await ensureStreamingAgentTask(toolCallId)
-            }
-          : undefined,
-        onImagePartialImage: shouldStreamAssistantMessage
-          ? async ({ toolCallId, image, partialImageIndex }) => {
-              if (controller.signal.aborted) return
-              const taskId = await ensureStreamingAgentTask(toolCallId)
-              if (controller.signal.aborted) return
-              useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
-              if (partialImageIndex === 0 || partialImageIndex == null) {
-                void persistTaskStreamPartialImage(taskId, image)
-              }
-            }
-          : undefined,
-        onImageToolCompleted: shouldStreamAssistantMessage
-          ? async (image) => {
-              if (controller.signal.aborted) return
-              await completeAgentImageTask(image)
-            }
-          : undefined,
-      })
-      if (controller.signal.aborted) throw createAgentAbortError()
-
-      lastResponseId = result.responseId ?? lastResponseId
-      currentResponseOutputItems = currentResponseOutputItems.length ? currentResponseOutputItems : result.outputItems ?? []
-      accumulatedOutputItems = mergeResponseOutputItems(accumulatedOutputItems, currentResponseOutputItems)
-
-      const responseText = result.text.trim()
-      if (responseText && accumulatedText === textBeforeResponse) {
-        const textToAppend = accumulatedText ? `\n\n${responseText}` : responseText
-        accumulatedText += textToAppend
-        if (shouldStreamAssistantMessage) appendAgentAssistantMessageContent(conversationId, assistantMessageId, textToAppend)
-      }
-      const newTextInThisResponse = accumulatedText.slice(textBeforeResponse.length).trim()
-      if (newTextInThisResponse) textSegments.push(newTextInThisResponse)
-
-      // Process built-in image_generation_call results (single images)
-      for (const image of result.images) {
-        if (image.toolCallId && taskIdByToolCallId.has(image.toolCallId)) {
-          const completedTaskId = await completeAgentImageTask(image, result.rawResponsePayload)
-          const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
-          if (promptRefIds.length > 0) {
-            const promptRefs = await resolveReferenceImages(promptRefIds)
-            if (promptRefs.imageIds.length > 0) {
-              const latestTask = useStore.getState().tasks.find((t) => t.id === completedTaskId)
-              if (latestTask) {
-                const mergedInputIds = uniqueIds([...latestTask.inputImageIds, ...promptRefs.imageIds])
-                if (mergedInputIds.length !== latestTask.inputImageIds.length) {
-                  updateTaskInStore(completedTaskId, { inputImageIds: mergedInputIds })
-                }
-              }
-            }
-          }
-          continue
-        }
-        const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
-        const promptRefs = await resolveReferenceImages(promptRefIds)
-        const imgId = await storeImage(image.dataUrl, 'generated')
-        cacheImage(imgId, image.dataUrl)
-        const actualParams: Partial<TaskParams> = {
-          ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
-          n: 1,
-        }
-        const task: TaskRecord = {
-          id: genId(),
-          prompt: image.revisedPrompt ?? round?.prompt ?? userMessage.content,
-          params,
-          apiProvider: activeProfile.provider,
-          apiProfileId: activeProfile.id,
-          apiProfileName: activeProfile.name,
-          apiMode: activeProfile.apiMode,
-          apiModel: activeProfile.model,
-          inputImageIds: uniqueIds([...(round?.inputImageIds ?? []), ...promptRefs.imageIds]),
-          maskTargetImageId: round?.maskTargetImageId ?? null,
-          maskImageId: round?.maskImageId ?? null,
-          outputImages: [imgId],
-          actualParams,
-          actualParamsByImage: { [imgId]: actualParams },
-          revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
-          rawResponsePayload: result.rawResponsePayload,
-          status: 'done',
-          error: null,
-          createdAt: startedAt,
-          finishedAt: Date.now(),
-          elapsed: Date.now() - startedAt,
-          sourceMode: 'agent',
-          agentConversationId: conversationId,
-          agentRoundId: roundId,
-          agentMessageId: assistantMessageId,
-          agentToolCallId: image.toolCallId,
-          agentToolAction: image.action,
-        }
-        useStore.getState().setTasks([task, ...useStore.getState().tasks])
-        attachTaskToAgentRound(task.id)
-        await putTask(task)
-      }
-
-      if (result.rawResponsePayload && streamingTaskIds.length > 0) {
-        for (const taskId of streamingTaskIds) {
-          const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
-          if (latestTask && !latestTask.rawResponsePayload) updateTaskInStore(taskId, { rawResponsePayload: result.rawResponsePayload })
-        }
-      }
-
-      // Check for function calls that require continuation
-      const batchFunctionCalls = currentResponseOutputItems.filter(
-        (item) => item.type === 'function_call' && item.name === 'generate_image_batch',
-      )
-      const continueFunctionCalls = currentResponseOutputItems.filter(
-        (item) => item.type === 'function_call' && item.name === 'continue_generation',
-      )
-
-      // Count built-in tool calls (image_generation, web_search) for budget tracking
-      const responseToolCalls = countResponseToolCalls(currentResponseOutputItems)
-      toolCallsUsed += responseToolCalls
-
-      // Collect function_call_output items for all function calls that need responses
-      const functionCallOutputs: ResponsesOutputItem[] = []
-
-      if (batchFunctionCalls.length > 0) {
-        for (const fc of batchFunctionCalls) {
-          const output = await executeBatchFunctionCall(fc)
-          functionCallOutputs.push({
-            type: 'function_call_output',
-            call_id: fc.call_id,
-            output,
-          })
-        }
-      }
-
-      for (const fc of continueFunctionCalls) {
-        functionCallOutputs.push({
-          type: 'function_call_output',
-          call_id: fc.call_id,
-          output: JSON.stringify({ status: 'continued' }),
-        })
-      }
-
-      // If no function calls need output → model decided the task is done → break
-      if (functionCallOutputs.length === 0) {
-        updateAgentConversation(conversationId, (current) => ({
-          ...current,
-          updatedAt: Date.now(),
-          rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseId: lastResponseId, responseOutput: accumulatedOutputItems } : item),
-        }))
-        break
-      }
-
-      const accumulatedOutputItemsWithFunctionOutputs = mergeResponseOutputItems(accumulatedOutputItems, functionCallOutputs)
-
-      updateAgentConversation(conversationId, (current) => ({
-        ...current,
-        updatedAt: Date.now(),
-        rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseId: lastResponseId, responseOutput: accumulatedOutputItemsWithFunctionOutputs } : item),
-      }))
-
-      if (toolCallsUsed >= maxToolCalls) {
-        reachedToolLimit = true
-        break
-      }
-
-      // Build continuation input with function call outputs and available refs
-      const latestConversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
-      const latestRound = latestConversation?.rounds.find((item) => item.id === roundId)
-      if (!latestRound) break
-
-      const continuationBase = buildAgentContinuationInput(
-        apiInput,
-        latestRound,
-        useStore.getState().tasks,
-        accumulatedOutputItems,
-        toolCallsUsed,
-        maxToolCalls,
-      )
-      // Insert function_call_output items before the continuation system message
-      continuationBase.splice(continuationBase.length - 1, 0, ...functionCallOutputs)
-      // Inject batch-generated images as input_image user message for model visibility
-      const batchImagesItem = await createAgentBatchImagesInputItem(latestRound, useStore.getState().tasks, streamingTaskIds)
-      if (batchImagesItem) continuationBase.splice(continuationBase.length - 1, 0, batchImagesItem)
-      apiInputForTurn = continuationBase
-      accumulatedOutputItems = accumulatedOutputItemsWithFunctionOutputs
-      pendingToolTextSeparator = true
-    }
-
-    const taskIds: string[] = [...streamingTaskIds]
-    const outputIds = taskIds.flatMap((taskId) => useStore.getState().tasks.find((task) => task.id === taskId)?.outputImages ?? [])
-    const limitNotice = reachedToolLimit ? `已达到最大工具调用次数（${maxToolCalls}），已停止自动续跑。` : ''
-    const joinedText = textSegments.join('\n\n').trim()
-    const finalContent = [joinedText, limitNotice]
-      .filter(Boolean)
-      .join(joinedText ? '\n\n' : '')
-      || (taskIds.length > 0 || outputIds.length > 0 ? '图像已生成。' : '')
-
-    const assistantMessage: AgentMessage = {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: finalContent,
-      roundId,
-      outputTaskIds: taskIds,
-      createdAt: Date.now(),
-    }
-
-    updateAgentConversation(conversationId, (current) => ({
-      ...current,
-      updatedAt: Date.now(),
-      rounds: current.rounds.map((round) =>
-        round.id === roundId
-          ? {
-              ...round,
-              assistantMessageId,
-              outputTaskIds: taskIds,
-              responseId: lastResponseId,
-              responseOutput: accumulatedOutputItems,
-              status: 'done',
-              error: null,
-              finishedAt: Date.now(),
-            }
-          : round,
-      ),
-      messages: current.messages.some((message) => message.id === assistantMessageId)
-        ? current.messages.map((message) => message.id === assistantMessageId ? assistantMessage : message)
-        : [...current.messages, assistantMessage],
-    }))
-
-    useStore.getState().showToast(outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复', 'success')
-  } catch (err) {
-    if (controller.signal.aborted) {
-      if (markAgentRoundStopped(conversationId, roundId)) {
-        useStore.getState().showToast('已停止生成', 'info')
-      }
-      return
-    }
-
-    let message = err instanceof Error ? err.message : String(err)
-    const usesApiProxy = activeProfile.apiProxy ?? requestSettings.apiProxy
-    const networkErrorHint = getApiRequestNetworkErrorHint(err, startedAt, usesApiProxy, activeProfile)
-    if (networkErrorHint && !message.includes(IMAGE_FETCH_CORS_HINT)) {
-      message += `\n${networkErrorHint}`
-    } else {
-      const upstreamHint = getUpstreamApiErrorHint(err)
-      if (upstreamHint) message += `\n${upstreamHint}`
-    }
-
-    updateAgentConversation(conversationId, (current) => {
-      const failedRound = current.rounds.find((round) => round.id === roundId)
-      const existingAssistantMessage = failedRound?.assistantMessageId
-        ? current.messages.find((item) => item.id === failedRound.assistantMessageId)
-        : current.messages.find((item) => item.roundId === roundId && item.role === 'assistant')
-      const errorContent = `请求失败：${message}`
-
-      return {
-        ...current,
-        title: current.rounds.length === 1 && current.rounds[0].id === roundId ? '新对话' : current.title,
-        updatedAt: Date.now(),
-        rounds: current.rounds.map((round) =>
-          round.id === roundId
-            ? {
-                ...round,
-                ...(existingAssistantMessage ? { assistantMessageId: existingAssistantMessage.id } : {}),
-                status: 'error',
-                error: message,
-                finishedAt: Date.now(),
-              }
-            : round,
-        ),
-        messages: existingAssistantMessage
-          ? current.messages.map((item) => item.id === existingAssistantMessage.id ? { ...item, content: errorContent } : item)
-          : [
-              ...current.messages,
-              {
-                id: genId(),
-                role: 'assistant',
-                content: errorContent,
-                roundId,
-                createdAt: Date.now(),
-              },
-            ],
-      }
-    })
-    useStore.getState().showToast(`Agent 请求失败：${message}`, 'error')
-  } finally {
-    if (agentRoundControllers.get(controllerKey) === controller) {
-      agentRoundControllers.delete(controllerKey)
-    }
   }
 }
 
@@ -4061,6 +2084,7 @@ async function executeTask(taskId: string) {
         const upstreamHint = getUpstreamApiErrorHint(err)
         if (upstreamHint) errorMessage += `\n${upstreamHint}`
       }
+      errorMessage = getUserFacingErrorMessage(errorMessage, '生成失败')
       updateTaskInStore(taskId, {
         status: 'error',
         error: errorMessage,
@@ -4075,7 +2099,7 @@ async function executeTask(taskId: string) {
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
     for (const imgId of task.inputImageIds) {
-      imageCache.delete(imgId)
+      evictCachedImage(imgId)
     }
   }
 }
@@ -4095,7 +2119,10 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
 export async function retryTask(task: TaskRecord) {
   const { settings } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(task.params, settings, {
+    hasInputImages: task.inputImageIds.length > 0,
+    maxOutputImages: getCachedAuthUser()?.maxBatchImages,
+  })
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,
@@ -4193,7 +2220,7 @@ export async function retryFailedImages(taskId: string): Promise<void> {
       stillFailed > 0 ? 'info' : 'success',
     )
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = getUserFacingErrorMessage(err, '重试失败')
     logger.error('task', '重试失败图片出错', { taskId, error: serializeError(err) })
     state.showToast(`重试失败：${message}`, 'error')
   }
@@ -4210,7 +2237,10 @@ export async function reuseConfig(task: TaskRecord) {
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
   const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(normalizedSettings, matchedProfile) : normalizedSettings
 
-  setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
+  setParams(normalizeParamsForSettings(task.params, paramsSettings, {
+    hasInputImages: task.inputImageIds.length > 0,
+    maxOutputImages: getCachedAuthUser()?.maxBatchImages,
+  }))
   setReusedTaskApiProfile(
     shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.id : null,
     missingReusedProfile,
@@ -4317,8 +2347,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
   for (const imgId of deletedImageIds) {
     if (!stillUsed.has(imgId)) {
       await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
+      evictCachedImage(imgId)
     }
   }
 
@@ -4361,8 +2390,7 @@ export async function removeTask(task: TaskRecord) {
   for (const imgId of taskImageIds) {
     if (!stillUsed.has(imgId)) {
       await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
+      evictCachedImage(imgId)
     }
   }
 
@@ -4383,9 +2411,7 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     await dbClearTasks()
     await dbClearAgentConversations()
     await clearImages()
-    imageCache.clear()
-    thumbnailCache.clear()
-    thumbnailBackfillIds.clear()
+    clearImageCaches()
     setTasks([])
     useStore.setState({
       agentConversations: [],
@@ -4404,27 +2430,6 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   }
 
   showToast('所选数据已清空', 'success')
-}
-
-/** 从 dataUrl 解析出 MIME 扩展名和二进制数据 */
-function dataUrlToBytes(dataUrl: string): { ext: string; bytes: Uint8Array } {
-  const match = dataUrl.match(/^data:image\/(\w+);base64,/)
-  const ext = match?.[1] ?? 'png'
-  const b64 = dataUrl.replace(/^data:[^;]+;base64,/, '')
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return { ext, bytes }
-}
-
-/** 将二进制数据还原为 dataUrl */
-function bytesToDataUrl(bytes: Uint8Array, filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? 'png'
-  const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
-  const mime = mimeMap[ext] ?? 'image/png'
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-  return `data:${mime};base64,${btoa(binary)}`
 }
 
 async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<ReturnType<typeof getCustomQueuedImageResult>>) {
@@ -4473,18 +2478,13 @@ async function recoverCustomTask(taskId: string) {
     clearCustomRecoveryTimer(taskId)
     updateTaskInStore(taskId, {
       status: 'error',
-      error: err instanceof Error ? err.message : String(err),
+      error: getUserFacingErrorMessage(err, '自定义任务恢复失败'),
       ...getRawErrorPayload(err),
       customRecoverable: false,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
     })
   }
-}
-
-function formatExportFileTime(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }
 
 /** 导出选项 */
@@ -4579,7 +2579,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `gpt-image-playground-backup_${formatExportFileTime(new Date(exportedAt))}.zip`
+    a.download = `picpilot-backup_${formatExportFileTime(new Date(exportedAt))}.zip`
     a.click()
     URL.revokeObjectURL(url)
     useStore.getState().showToast('数据已导出', 'success')
@@ -4587,7 +2587,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     useStore
       .getState()
       .showToast(
-        `导出失败：${e instanceof Error ? e.message : String(e)}`,
+        `导出失败：${getUserFacingErrorMessage(e, '无法生成备份文件')}`,
         'error',
       )
   }
@@ -4689,7 +2689,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
     useStore
       .getState()
       .showToast(
-        `导入失败：${e instanceof Error ? e.message : String(e)}`,
+        `导入失败：${getUserFacingErrorMessage(e, '备份文件无法读取')}`,
         'error',
       )
     return false
@@ -4716,26 +2716,18 @@ export async function addImageFromUrl(src: string): Promise<void> {
   const res = await fetch(src)
   const blob = await res.blob()
   if (!blob.type.startsWith('image/')) throw new Error('不是有效的图片')
-  const dataUrl = await blobToDataUrl(blob)
+  const dataUrl = await readBlobAsDataUrl(blob)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
+bindAgentOrchestrator({
+  getState: () => useStore.getState(),
+  setState: (partial) => { useStore.setState(partial as never) },
+  updateTaskInStore,
+  genId,
+  putTask,
+  createSettingsForApiProfile,
+  persistTaskStreamPartialImage,
+})

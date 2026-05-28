@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
-import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import ModalShell from './ModalShell'
 import { Checkbox } from './Checkbox'
 import { CopyIcon } from './icons'
 
@@ -76,9 +75,6 @@ export default function ConfirmDialog() {
     handleClose()
   }
 
-  useCloseOnEscape(Boolean(confirmDialog) && canConfirm, handleClose)
-  usePreventBackgroundScroll(Boolean(confirmDialog))
-
   if (!confirmDialog) return null
   const isDestructive = confirmDialog.title.includes('删除') || confirmDialog.title.includes('清空')
   const confirmTone = confirmDialog.tone ?? (isDestructive ? 'danger' : undefined)
@@ -88,16 +84,13 @@ export default function ConfirmDialog() {
   const customButtons = confirmDialog.buttons?.filter((button) => button.label.trim()) ?? []
 
   return (
-    <div
-      data-no-drag-select
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4"
-      onClick={handleClose}
+    <ModalShell
+      onClose={handleClose}
+      closeOnEscape={canConfirm}
+      zIndexClass="z-[110]"
+      backdropVariant="confirm"
+      panelClassName="bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
-      <div
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
-        onClick={(e) => e.stopPropagation()}
-      >
         <h3 className="mb-2 flex items-center gap-2 text-base font-bold text-gray-800 dark:text-gray-100">
           {confirmDialog.icon === 'info' && (
             <svg className="h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
@@ -164,7 +157,6 @@ export default function ConfirmDialog() {
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   )
 }
