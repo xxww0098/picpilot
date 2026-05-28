@@ -75,7 +75,6 @@ body:
       label: 部署方式
       description: 请选择你使用的部署方式。
       options:
-        - Vercel
         - Cloudflare Workers
         - Docker
         - 本地部署

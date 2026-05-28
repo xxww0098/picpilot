@@ -1,4 +1,27 @@
+# Dependencies
 node_modules/
+server/node_modules/
+
+# Build output
 dist/
-dev-proxy.config.json
 .wrangler/
+
+# Local dev config
+dev-proxy.config.json
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data (auth.db, avatars, uploaded images, etc.)
+data/
+
+# Local overrides
+*.local
+
+# Editor / IDE / agent settings
+.claude/
+.vscode/
+.idea/
+.DS_Store

@@ -1,12 +1,12 @@
 <div align="center">
 
-# 🎨 GPT Image Playground
+# 🎨 picpilot
 
 [![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-**基于 OpenAI gpt-image-2 API 的图片生成与编辑工具**
+**面向电商商品图的 AI 图片生成与编辑工作台**
 
 提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口、fal.ai 与可导入的自定义 HTTP 服务商。<br>
 支持文本生图、参考图与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
@@ -105,47 +105,34 @@
 支持多种部署与开发方式。无论使用哪种方式，你都可以预设默认的 API 节点。
 
 <details>
-<summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
-
-在 Vercel 中导入仓库，Vercel 会自动执行构建并部署静态文件。
-
-**配置默认 API URL**：在 Vercel 项目的 **Settings → Environment Variables** 中添加 `VITE_DEFAULT_API_URL`（如 `https://api.openai.com/v1`），然后重新部署即可生效。
-
-**导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
-
-**绑定自定义域名 (国内直连)**：Vercel 默认分配的 `.vercel.app` 域名在国内通常无法直接访问。如果你希望在国内直连访问，请在 Vercel 项目的 **Settings → Domains** 中绑定你自己的域名。
-
-</details>
-
-<details>
-<summary><strong>☁️ 方式二：Cloudflare Workers 部署</strong></summary>
+<summary><strong>☁️ 方式一：Cloudflare Workers 部署</strong></summary>
 
 项目已内置 Wrangler 配置，可将 Vite 构建产物作为 Cloudflare Workers 静态资源部署。
 
 **1. 登录 Cloudflare**
 
 ```bash
-npx wrangler login
+bunx wrangler login
 ```
 
 **2. 部署到 Workers**
 
 ```bash
-npm run deploy:cf
+bun run deploy:cf
 ```
 
-部署脚本会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
+部署脚本会先执行 `bun run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
 
 **配置默认 API URL**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需预设默认 API 地址，请在构建前设置 `VITE_DEFAULT_API_URL` 后再部署。
 
 ```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1 npm run deploy:cf
+VITE_DEFAULT_API_URL=https://api.openai.com/v1 bun run deploy:cf
 ```
 
 PowerShell 示例：
 
 ```powershell
-$env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; npm run deploy:cf
+$env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; bun run deploy:cf
 ```
 
 **导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
@@ -153,23 +140,25 @@ $env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; npm run deploy:cf
 </details>
 
 <details>
-<summary><strong>🐳 方式三：Docker 部署</strong></summary>
+<summary><strong>🐳 方式二：Docker 部署</strong></summary>
 
 官方镜像已发布至 GitHub Container Registry。Docker 部署支持在运行时注入默认配置。
 
 **环境变量说明：**
 
 - `DEFAULT_API_URL`：设置页面上默认显示的 API 地址（如 `https://api.openai.com/v1`）。也支持填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL 来导入自定义服务商配置（详见下方说明）。
-- `API_PROXY_URL`：配置内置代理实际转发到的完整 API 基础地址（仅开启代理时有效）。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.openai.com/v1`。
-- `ENABLE_API_PROXY`：设为 `true` 开启容器内置 Nginx 同源代理，用于解决浏览器跨域（CORS）限制。开启后，前端 **API 代理** 开关默认开启，浏览器会请求同源的 `/api-proxy/{接口相对路径}`，再由 Nginx 拼接到 `API_PROXY_URL` 后转发；用户仍可在设置中手动关闭。
+- `API_PROXY_URL` / `TEAM_API_BASE_URL`：配置团队默认上游 API 基础地址（仅开启代理时有效）。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.openai.com/v1`。
+- `API_PROXY_API_KEY` / `TEAM_API_KEY`：配置团队共享 API Key。开启代理后，默认配置可不在前端填写 Key，由服务端注入该密钥。
+- `DEFAULT_HOURLY_IMAGE_QUOTA`：新用户默认团队服务小时额度，按「过去 1 小时成功输出图片张数」计算，默认 `100`。管理员可在管理面板为每个用户单独调整。
+- `ENABLE_API_PROXY`：设为 `true` 开启容器内置同源代理。前端请求 `/api-proxy/{接口相对路径}` 时会先校验当前登录用户，再由服务端转发到团队上游 API；用户仍可在设置中手动关闭代理并填写自己的 API URL / API Key。
 - `LOCK_API_PROXY`：设为 `true` 时，在 `ENABLE_API_PROXY=true` 的前提下将前端 **API 代理** 开关强制锁定为开启，用户无法关闭。
-- `HOST` / `PORT`：指定容器内 Nginx 监听的地址和端口（默认 `0.0.0.0:80`）。
+- `HOST` / `PORT`：指定容器内 Caddy 监听的地址和端口（默认 `0.0.0.0:80`）。
 
-> ⚠️ **安全警告**：开启 API 代理后，任何人都能将你的服务器作为代理来请求目标 API。建议仅在有访问控制（如 IP 白名单）或本地网络中开启。
+> 💡 **团队默认配置**：50 人小团队共用一个上游时，推荐设置 `ENABLE_API_PROXY=true`、`API_PROXY_URL`、`API_PROXY_API_KEY`，并让默认配置留空 API URL / API Key。需要自定义上游的成员可在设置中关闭 **API 代理**，再填写自己的 URL 和 Key。
 
 > 💡 **导入自定义服务商配置**：`DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
 
-> 💡 **隐藏真实 API 地址**：如果不希望用户在前端看到真实的 API 上游地址，可以配合 `ENABLE_API_PROXY=true` 和 `LOCK_API_PROXY=true` 强制所有请求走服务器代理，再将 `API_PROXY_URL` 设为真实的 API 上游地址。根据使用的服务商类型，`DEFAULT_API_URL` 的填法不同：
+> 💡 **隐藏真实 API 地址**：如果不希望用户在前端看到真实的 API 上游地址，可以配合 `ENABLE_API_PROXY=true` 和 `LOCK_API_PROXY=true` 强制所有请求走服务器代理，再将 `API_PROXY_URL` 与 `API_PROXY_API_KEY` 设为真实上游配置。根据使用的服务商类型，`DEFAULT_API_URL` 的填法不同：
 >
 > - **OpenAI 兼容接口**：将 `DEFAULT_API_URL` 留空或填写一个占位地址（如 `https://proxy`）。
 > - **自定义服务商配置**：将 `DEFAULT_API_URL` 设为配置 URL（`.json` 或带 `settings` 参数的分享 URL），配置 JSON 中 profile 的 `baseUrl` 留空或填占位地址，并设置 `apiProxy:true`。
@@ -180,60 +169,51 @@ $env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; npm run deploy:cf
 
 > 💡 **兼容迁移**：旧版本中的 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`。容器启动时会自动将遗留的 `API_URL` 作为两个新变量的兜底值，实现无缝兼容。建议更新配置文件，逐步迁移至新变量。
 
-**1. Docker CLI 示例**
+**1. Docker Compose 示例（推荐团队部署）**
+
+在项目根目录创建 `.env`：
+
+```env
+PORT=8080
+ENABLE_API_PROXY=true
+API_PROXY_URL=https://api.openai.com/v1
+API_PROXY_API_KEY=sk-xxxx
+DEFAULT_HOURLY_IMAGE_QUOTA=100
+JWT_SECRET=请替换为长随机字符串
+ADMIN_USERS=admin:请替换为强密码
+```
+
+然后启动内置的前端 + 鉴权服务：
 
 ```bash
-docker run -d -p 8080:80 \
-  -e DEFAULT_API_URL=https://api.openai.com/v1 \
-  -e ENABLE_API_PROXY=true \
-  -e LOCK_API_PROXY=true \
-  -e API_PROXY_URL=https://api.openai.com/v1 \
-  your-image:latest
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-**隐藏真实 API 地址示例（OpenAI 兼容接口）：**
-
-```bash
-docker run -d -p 8080:80 \
-  -e DEFAULT_API_URL= \
-  -e API_PROXY_URL=https://real-api.example.com/v1 \
-  -e ENABLE_API_PROXY=true \
-  -e LOCK_API_PROXY=true \
-  your-image:latest
-```
-
-> 上例中设置页的 API URL 为空，实际请求通过代理转发到 `API_PROXY_URL`。
-
-*(注：使用 host 网络时加 `--network host`，修改容器监听端口使用 `-e PORT=28080`)*
-
-**2. Docker Compose 示例**
-
-```yaml
-services:
-  gpt-image-playground:
-    image: your-image:latest
-    environment:
-      - DEFAULT_API_URL=https://api.openai.com/v1
-    ports:
-      - "8080:80"
-    restart: unless-stopped
-```
+单容器 Docker CLI 更适合纯静态前端部署；团队默认 Key、登录鉴权、公开画廊和服务端代理需要同时运行 `frontend` 与 `auth` 两个服务，建议使用上面的 Compose 方式。
 
 </details>
 
 <details>
-<summary><strong>💻 方式四：本地开发与静态构建</strong></summary>
+<summary><strong>💻 方式三：本地开发与静态构建</strong></summary>
 
 **1. 环境准备与启动**
 
-你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。然后安装依赖并启动：
+本项目完全使用 Bun 驱动。你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。前端热更新开发可运行：
 
 **导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
 
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
+
+如果需要一键执行“安装依赖 -> 构建 -> 预览静态产物”，可运行：
+
+```bash
+bun run start:local
+```
+
+`start:local` 会构建前端产物，然后启动单个 Hono 应用服务：Hono 同时负责 `/api/*` 接口和 `dist/` 静态文件，因此访问 `http://localhost:3001` 会显示登录界面。默认本地管理员为 `admin` / `admin`；如需自定义，可在启动前设置 `ADMIN_USERS="用户名:密码"` 和 `JWT_SECRET="长随机字符串"`。
 
 **2. 本地开发跨域代理 (可选)**
 
@@ -243,14 +223,14 @@ npm run dev
 cp dev-proxy.config.example.json dev-proxy.config.json
 ```
 
-修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.example.com/v1`。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `npm run dev` 阶段生效，不会影响打包产物。
+修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.example.com/v1`。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `bun run dev` 阶段生效，不会影响打包产物。
 
 **3. 本地故障模拟 API (可选)**
 
 如果需要复现图片 URL 跨域、接口返回结构异常、原始响应查看等问题，可启动内置模拟服务：
 
 ```powershell
-npm run mock:api
+bun run mock:api
 ```
 
 使用方式见 [本地故障模拟 API](docs/mock-image-api.md)。
@@ -258,10 +238,10 @@ npm run mock:api
 **4. 构建静态产物**
 
 ```bash
-npm run build
+bun run build
 ```
 
-构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如普通 Nginx、GitHub Pages、Netlify 等）。
+构建会先执行前端、Node 配置脚本和 Service Worker 的 TypeScript 检查；如需连同服务端一起检查，可运行 `bun run typecheck:all`。构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如 Caddy、GitHub Pages、Netlify 等）。
 
 </details>
 
