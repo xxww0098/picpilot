@@ -34,6 +34,9 @@ find /usr/share/caddy/assets -type f -name "*.js" -exec sed -i "s|__VITE_DOCKER_
 # 检查是否启用了 API 代理
 if [ "$ENABLE_API_PROXY" != "true" ]; then
     sed -i '/# BEGIN API PROXY/,/# END API PROXY/d' /etc/caddy/Caddyfile
+    # 折叠连续空行，避免 sed 删块后留下双空行触发 Caddy "not formatted" 警告
+    awk '/^[[:space:]]*$/{if(blank)next;blank=1;print;next}{blank=0;print}' /etc/caddy/Caddyfile > /tmp/Caddyfile.tmp \
+        && mv /tmp/Caddyfile.tmp /etc/caddy/Caddyfile
 fi
 
 exec "$@"

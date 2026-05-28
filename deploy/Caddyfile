@@ -25,7 +25,6 @@
 		reverse_proxy auth:3001 {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
 		}
 	}
 
@@ -38,8 +37,6 @@
 		reverse_proxy auth:3001 {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
 			transport http {
 				dial_timeout 60s
 				response_header_timeout 600s
