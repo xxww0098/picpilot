@@ -8,7 +8,7 @@
 
 **面向电商商品图的 AI 图片生成与编辑工作台**
 
-提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口、fal.ai 与可导入的自定义 HTTP 服务商。<br>
+提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口以及可导入的自定义 HTTP 服务商。<br>
 支持文本生图、参考图与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
 
 </div>
@@ -90,9 +90,9 @@
 - **极致性能与隐私**：所有记录与图片均存放在浏览器 IndexedDB 中（采用 SHA-256 去重压缩），不经过任何第三方服务器。支持一键打包导出 ZIP 备份。
 
 ### 🔌 多配置与服务商增强
-- **多配置管理**：支持创建并保存多个 API 配置（包含服务商、API Key、模型等），按需快速切换；支持一键复制当前配置到列表底部，并通过拖拽对配置列表与服务商列表进行自定义排序。
-- **多服务商接入**：内置 OpenAI 兼容接口（含 `Images API` 和 `Responses API`）、fal.ai（支持队列），并支持通过 JSON 导入自定义 HTTP 服务商配置（兼容同步/异步任务）。
-- **API 代理**：OpenAI 兼容接口与 fal.ai 均可配置自定义代理。其中 OpenAI 兼容接口可开启同源 `/api-proxy/` 代理，交由 Docker 或本地开发环境转发至真实 API，绕开浏览器 CORS 限制。
+- **多配置管理**：支持创建并保存多个 API 配置（服务商 / 模型 / 接口模式 等），按需快速切换；支持一键复制当前配置到列表底部，并通过拖拽对配置列表与服务商列表进行自定义排序。**上游地址 (`base_url`) 与 API Key 由部署侧 env var 统一管理，用户在前端不可见、不可改。**
+- **多服务商接入**：内置 OpenAI 兼容接口（含 `Images API` 和 `Responses API`），并支持通过 JSON 导入自定义 HTTP 服务商配置（团队代理模式下仅支持同步返回图片的接口）。
+- **团队 API 代理**：所有 OpenAI 兼容请求一律走同源 `/api-proxy/` 路径，由服务端按当前登录用户校验后转发到 `API_PROXY_URL` 指定的上游，自动注入 `API_PROXY_API_KEY`。前端不暴露真实上游地址。
 - **Codex CLI 兼容模式**：对上游为 Codex CLI 的 API，开启后应用 Codex CLI 实际支持的参数，并将多图生成拆分为并发单图。
 - **提示词防改写**：Responses API 会始终在请求文本前加入强制指令防止提示词被改写；开启 Codex CLI 模式后，Images API 也会获得同等保护。
 - **智能诊断提示**：当检测到接口异常改写行为或缺少常规参数时，自动提示开启相应的兼容模式。
@@ -102,7 +102,7 @@
 
 ## 🚀 部署与使用
 
-支持多种部署与开发方式。无论使用哪种方式，你都可以预设默认的 API 节点。
+支持多种部署与开发方式。团队上游 API 节点统一由服务端环境变量管理；前端只接收非凭据配置。
 
 <details>
 <summary><strong>☁️ 方式一：Cloudflare Workers 部署</strong></summary>
@@ -123,64 +123,205 @@ bun run deploy:cf
 
 部署脚本会先执行 `bun run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
 
-**配置默认 API URL**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需预设默认 API 地址，请在构建前设置 `VITE_DEFAULT_API_URL` 后再部署。
+**导入默认自定义服务商配置**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需在页面启动后自动导入自定义服务商配置，请在构建前将 `VITE_DEFAULT_API_URL` 设为 `.json` 配置 URL 或带 `settings` 参数的分享 URL 后再部署。
 
 ```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1 bun run deploy:cf
+VITE_DEFAULT_API_URL=https://example.com/picpilot-provider.json bun run deploy:cf
 ```
 
 PowerShell 示例：
 
 ```powershell
-$env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; bun run deploy:cf
+$env:VITE_DEFAULT_API_URL="https://example.com/picpilot-provider.json"; bun run deploy:cf
 ```
 
-**导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
+> 普通 API 地址不会写入前端配置；真实上游地址与 Key 始终由服务端 `API_PROXY_URL` / `API_PROXY_API_KEY` 决定。
 
 </details>
 
 <details>
 <summary><strong>🐳 方式二：Docker 部署</strong></summary>
 
-官方镜像已发布至 GitHub Container Registry。Docker 部署支持在运行时注入默认配置。
+Docker 部署建议把上游凭据放在服务端环境变量里。PicPilot 当前由 `frontend` 与 `auth` 两个容器组成；如果同一台服务器上还部署 CLIProxyAPI，推荐把它们放进同一个 Docker Compose 网络，由 `auth` 通过服务名访问 CLIProxyAPI。
 
 **环境变量说明：**
 
-- `DEFAULT_API_URL`：设置页面上默认显示的 API 地址（如 `https://api.openai.com/v1`）。也支持填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL 来导入自定义服务商配置（详见下方说明）。
-- `API_PROXY_URL` / `TEAM_API_BASE_URL`：配置团队默认上游 API 基础地址（仅开启代理时有效）。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.openai.com/v1`。
-- `API_PROXY_API_KEY` / `TEAM_API_KEY`：配置团队共享 API Key。开启代理后，默认配置可不在前端填写 Key，由服务端注入该密钥。
-- `DEFAULT_HOURLY_IMAGE_QUOTA`：新用户默认团队服务小时额度，按「过去 1 小时成功输出图片张数」计算，默认 `100`。管理员可在管理面板为每个用户单独调整。
-- `ENABLE_API_PROXY`：设为 `true` 开启容器内置同源代理。前端请求 `/api-proxy/{接口相对路径}` 时会先校验当前登录用户，再由服务端转发到团队上游 API；用户仍可在设置中手动关闭代理并填写自己的 API URL / API Key。
-- `LOCK_API_PROXY`：设为 `true` 时，在 `ENABLE_API_PROXY=true` 的前提下将前端 **API 代理** 开关强制锁定为开启，用户无法关闭。
+> 完整模板见 [`deploy/.env.example`](deploy/.env.example)，下面按重要性分组列出。
+
+**必填**
+
+- `JWT_SECRET`：JWT 签名密钥，请使用长随机串（`openssl rand -hex 32`）。
+- `ADMIN_USERS`：引导期管理员账号列表，格式 `用户名:初始密码`，多个用逗号分隔。
+- `API_PROXY_URL` / `TEAM_API_BASE_URL`：团队 API 代理转发的上游地址。OpenAI 兼容接口需要写到版本前缀（如 `https://api.openai.com/v1` 或 `http://cliproxyapi:8317/v1`），不会自动补 `/v1`。
+- `API_PROXY_API_KEY` / `TEAM_API_KEY`：团队共享 API Key，由服务端注入到 `Authorization: Bearer ...`，前端永远看不到。
+
+**可选**
+
+- `DEFAULT_API_URL`：可填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL，用来在页面启动后自动导入自定义服务商配置（详见下方说明）。普通 API 地址会被前端忽略。
+- `DEFAULT_HOURLY_IMAGE_QUOTA`：新用户默认每小时生图配额（按「过去 1 小时成功输出图片张数」计算）。默认 `100`，`0` 表示默认暂停团队服务，管理员可在管理面板单独调整。
+- `DEFAULT_MAX_BATCH_IMAGES`：单次批量任务最多生成的图片张数，默认 `10`。
+- `PER_USER_PUBLIC_QUOTA_BYTES`：每用户公开画廊存储配额（字节）。默认 500 MB。
+- `EVENT_RETENTION_DAYS`：事件流水保留天数，默认 `30`。
+- `JWT_EXPIRES_IN_SECONDS`：JWT 有效期（秒），默认 30 天。
 - `HOST` / `PORT`：指定容器内 Caddy 监听的地址和端口（默认 `0.0.0.0:80`）。
 
-> 💡 **团队默认配置**：50 人小团队共用一个上游时，推荐设置 `ENABLE_API_PROXY=true`、`API_PROXY_URL`、`API_PROXY_API_KEY`，并让默认配置留空 API URL / API Key。需要自定义上游的成员可在设置中关闭 **API 代理**，再填写自己的 URL 和 Key。
+> 💡 **上游地址与 Key 仅在 env var 里**：前端用户不能也不需要在设置里填 `base_url` 或 `API Key` —— 所有 OpenAI 兼容请求一律走同源 `/api-proxy/...`，由服务端读 `API_PROXY_URL`/`API_PROXY_API_KEY` 后转发。这样真实上游对所有用户都是不可见的。
 
-> 💡 **导入自定义服务商配置**：`DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
+> 💡 **导入自定义服务商配置**：`DEFAULT_API_URL` 可填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置。
 
-> 💡 **隐藏真实 API 地址**：如果不希望用户在前端看到真实的 API 上游地址，可以配合 `ENABLE_API_PROXY=true` 和 `LOCK_API_PROXY=true` 强制所有请求走服务器代理，再将 `API_PROXY_URL` 与 `API_PROXY_API_KEY` 设为真实上游配置。根据使用的服务商类型，`DEFAULT_API_URL` 的填法不同：
->
-> - **OpenAI 兼容接口**：将 `DEFAULT_API_URL` 留空或填写一个占位地址（如 `https://proxy`）。
-> - **自定义服务商配置**：将 `DEFAULT_API_URL` 设为配置 URL（`.json` 或带 `settings` 参数的分享 URL），配置 JSON 中 profile 的 `baseUrl` 留空或填占位地址，并设置 `apiProxy:true`。
->
-> 这样前端设置页只会显示空值或占位地址，真实 API 地址仅存在于服务器侧的 `API_PROXY_URL`，不会暴露给用户。
->
-> 自定义服务商开启代理仅支持同步返回图片的配置；包含 `taskIdPath` 或 `poll` 的异步任务自定义服务商暂不支持 API 代理。
+> 💡 **自定义服务商限制**：团队代理模式下仅支持同步返回图片的自定义服务商；包含 `taskIdPath` 或 `poll` 的异步任务配置会被拒绝。
 
-> 💡 **兼容迁移**：旧版本中的 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`。容器启动时会自动将遗留的 `API_URL` 作为两个新变量的兜底值，实现无缝兼容。建议更新配置文件，逐步迁移至新变量。
+> 💡 **兼容迁移**：旧版本中的 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`，`ENABLE_API_PROXY` / `LOCK_API_PROXY` 也已被移除——代理目前恒为启用。容器启动时会自动将遗留的 `API_URL` 作为新变量的兜底值。
 
-**1. Docker Compose 示例（推荐团队部署）**
+> 💡 **Docker 内网地址**：如果 CLIProxyAPI 与 PicPilot 在同一个 Compose 里，`API_PROXY_URL` 要写服务名，例如 `http://cliproxyapi:8317/v1`。不要写 `localhost`，容器里的 `localhost` 只代表容器自己。
+
+> 💡 **`/v1` 路径规则**：`API_PROXY_URL` 推荐写到 `/v1`。服务端会容忍外部请求路径里也带 `/v1` 的情况，例如 `/api-proxy/v1/models` 会转成上游 `/v1/models`，不会拼成 `/v1/v1/models`。如果你从旧镜像升级，请重新构建或拉取最新镜像。
+
+**1. 推荐：同机 Caddy + PicPilot + CLIProxyAPI**
+
+适合一台服务器同时运行入口 Caddy、PicPilot 和 CLIProxyAPI。CLIProxyAPI 不需要暴露公网端口，只在 Docker 内网给 `auth` 服务访问。
 
 在项目根目录创建 `.env`：
 
 ```env
-PORT=8080
-ENABLE_API_PROXY=true
+PUBLIC_ORIGIN=picpilot.example.com
+JWT_SECRET=请替换为长随机字符串
+ADMIN_USERS=admin:请替换为强密码
+CLIPROXY_API_KEY=请替换为长随机字符串
+DEFAULT_HOURLY_IMAGE_QUOTA=100
+DEFAULT_MAX_BATCH_IMAGES=10
+```
+
+创建 CLIProxyAPI 配置：
+
+```bash
+mkdir -p cliproxy/auths cliproxy/logs
+```
+
+`cliproxy/config.yaml`：
+
+```yaml
+host: ""
+port: 8317
+auth-dir: "/data/auths"
+
+api-keys:
+  - "请替换为与 CLIPROXY_API_KEY 相同的值"
+
+debug: false
+logging-to-file: true
+```
+
+`docker-compose.yml`：
+
+```yaml
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN}", "--to", "frontend:80"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    networks:
+      - picpilot_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      - DEFAULT_API_URL=${DEFAULT_API_URL:-}
+    depends_on:
+      - auth
+    expose:
+      - "80"
+    networks:
+      - picpilot_net
+
+  auth:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - ADMIN_USERS=${ADMIN_USERS}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN_SECONDS=${JWT_EXPIRES_IN_SECONDS:-2592000}
+      - EVENT_RETENTION_DAYS=${EVENT_RETENTION_DAYS:-30}
+      - PER_USER_PUBLIC_QUOTA_BYTES=${PER_USER_PUBLIC_QUOTA_BYTES:-524288000}
+      - DEFAULT_HOURLY_IMAGE_QUOTA=${DEFAULT_HOURLY_IMAGE_QUOTA:-100}
+      - DEFAULT_MAX_BATCH_IMAGES=${DEFAULT_MAX_BATCH_IMAGES:-10}
+      - API_PROXY_URL=http://cliproxyapi:8317/v1
+      - API_PROXY_API_KEY=${CLIPROXY_API_KEY}
+      - DATA_DIR=/data
+      - DB_PATH=/data/auth.db
+    volumes:
+      - picpilot_auth_data:/data
+    depends_on:
+      - cliproxyapi
+    expose:
+      - "3001"
+    networks:
+      - picpilot_net
+
+  cliproxyapi:
+    image: eceasy/cli-proxy-api:latest
+    restart: unless-stopped
+    volumes:
+      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml:ro
+      - ./cliproxy/auths:/data/auths
+      - ./cliproxy/logs:/CLIProxyAPI/logs
+    expose:
+      - "8317"
+    networks:
+      - picpilot_net
+
+networks:
+  picpilot_net:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  picpilot_auth_data:
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+验证内网连通性：
+
+```bash
+docker compose exec auth bun -e "const r = await fetch('http://cliproxyapi:8317/v1/models', { headers: { authorization: 'Bearer ' + process.env.API_PROXY_API_KEY } }); console.log(r.status, await r.text())"
+```
+
+如果返回 `200 {"data":[],"object":"list"}`，说明 PicPilot 到 CLIProxyAPI 的内网链路与 Key 都正常。`data` 为空通常表示 CLIProxyAPI 当前没有加载上游账号或模型凭据，不代表网络不通。
+
+**2. 仅部署 PicPilot**
+
+复制模板并填入实际值：
+
+```bash
+cp deploy/.env.example deploy/.env
+```
+
+最小可用 `.env`：
+
+```env
+JWT_SECRET=请替换为长随机字符串
+ADMIN_USERS=admin:请替换为强密码
 API_PROXY_URL=https://api.openai.com/v1
 API_PROXY_API_KEY=sk-xxxx
 DEFAULT_HOURLY_IMAGE_QUOTA=100
-JWT_SECRET=请替换为长随机字符串
-ADMIN_USERS=admin:请替换为强密码
 ```
 
 然后启动内置的前端 + 鉴权服务：
@@ -189,7 +330,7 @@ ADMIN_USERS=admin:请替换为强密码
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-单容器 Docker CLI 更适合纯静态前端部署；团队默认 Key、登录鉴权、公开画廊和服务端代理需要同时运行 `frontend` 与 `auth` 两个服务，建议使用上面的 Compose 方式。
+仅部署 PicPilot 时，上游可以是 OpenAI 官方地址、New API、CLIProxyAPI 或其他 OpenAI 兼容代理；如果上游也在 Docker 里，仍然推荐把它接入同一个 Docker network 后用服务名访问。
 
 </details>
 
@@ -198,9 +339,9 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 **1. 环境准备与启动**
 
-本项目完全使用 Bun 驱动。你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。前端热更新开发可运行：
+本项目完全使用 Bun 驱动。你可以在项目根目录新建 `.env.local` 文件，用 `VITE_DEFAULT_API_URL` 配置默认导入的自定义服务商 JSON 或分享 URL。前端热更新开发可运行：
 
-**导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
+**导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 设为 `.json` 配置 URL 或带 `settings` 参数的分享 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置。普通 API 地址不会写入前端配置。
 
 ```bash
 bun install
@@ -223,7 +364,7 @@ bun run start:local
 cp dev-proxy.config.example.json dev-proxy.config.json
 ```
 
-修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.example.com/v1`。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `bun run dev` 阶段生效，不会影响打包产物。
+修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址（OpenAI 兼容接口需要填到 `/v1` 版本前缀）。重启开发服务器后，所有 `/api-proxy/...` 请求会被转发到该 `target`。仅 `bun run dev` 阶段生效，不影响构建产物。
 
 **3. 本地故障模拟 API (可选)**
 
@@ -252,31 +393,26 @@ bun run build
 应用支持通过 URL 查询参数快速填入配置，非常适合创建书签或集成分享。根据你的服务商类型，选择对应的方式：
 
 **方式一：标准 OpenAI 兼容服务商**
-直接使用简短的查询参数配置：
-- `?apiUrl=https://你的代理地址.com`
-- `?apiKey=sk-xxxx`
+直接使用简短的查询参数预填非凭据字段：
 - `?apiMode=images` 或 `?apiMode=responses`（未传时默认为 `images`）
 - `?model=gpt-image-2`（未传时按 `apiMode` 使用默认模型）
 - `?codexCli=true`（开启 Codex CLI 兼容模式）
+- `?streamImages=true` / `?streamPartialImages=2`
 
-例如，集成到 New API 的聊天系统：
-
-```text
-https://your-deployed-url?apiUrl={address}&apiKey={key}&model={model}
-```
+> 上游地址与 API Key 由部署侧 env var 管理，URL 参数里不再支持 `apiUrl` / `apiKey`（旧链接里这两个参数会被静默忽略）。
 
 **方式二：自定义格式服务商**
 如果需要导入自定义格式的 API 配置，请使用 `settings` 参数并传入 URL 编码后的完整 JSON：
-- `?settings={URL编码后的JSON}`（只读取 `customProviders` 和 `profiles` 列表）
+- `?settings={URL编码后的JSON}`（只读取 `customProviders` 和 `profiles` 列表，profile 里的 `baseUrl` / `apiKey` 会被丢弃）
 
 > 推荐先在项目内完成配置生成与导入：
 >
 > **设置 - API 配置 - 服务商类型 - 创建自定义服务商 - AI 一键生成与导入**
 >
-> 完成后可在 **API 配置 - 当前配置** 使用右侧快捷按钮：
+> 完成后可在 **API 配置 - 当前连接配置** 使用右侧快捷按钮：
 >
-> - **链接按钮**：复制可导入配置的 URL。复制时可选择不包含 API Key，并使用 `{address}`、`{key}`、`{model}` 等变量，便于在 New API 等平台中集成分享。
-> - **复制按钮**：将当前配置复制一份到配置列表底部，新配置名称会追加“（复制）”。
+> - **链接按钮**：一键复制可分享的导入 URL（仅包含 profile 名称、模型、接口模式等非凭据字段）。
+> - **复制按钮**：将当前配置复制一份到配置列表底部，新配置名称会追加"（复制）"。
 
 JSON 结构示例：
 
@@ -284,8 +420,8 @@ JSON 结构示例：
 {
   "customProviders": [
     {
-      "id": "custom-example-task",
-      "name": "示例异步任务服务商",
+      "id": "custom-example-sync",
+      "name": "示例同步服务商",
       "submit": {
         "path": "images/generations",
         "method": "POST",
@@ -297,31 +433,19 @@ JSON 结构示例：
           "quality": "$params.quality",
           "output_format": "$params.output_format",
           "output_compression": "$params.output_compression",
-          "n": "$params.n",
-          "image_urls": "$inputImages.dataUrls"
+          "n": "$params.n"
         },
-        "taskIdPath": "data.0.task_id"
-      },
-      "poll": {
-        "path": "tasks/{task_id}",
-        "method": "GET",
-        "intervalSeconds": 5,
-        "statusPath": "data.status",
-        "successValues": ["completed"],
-        "failureValues": ["failed", "cancelled"],
-        "errorPath": "data.error.message",
         "result": {
-          "imageUrlPaths": ["data.result.images.*.url.*"],
-          "b64JsonPaths": []
+          "imageUrlPaths": ["data.*.url"],
+          "b64JsonPaths": ["data.*.b64_json"]
         }
       }
     }
   ],
   "profiles": [
     {
-      "name": "示例异步任务服务商",
-      "provider": "custom-example-task",
-      "baseUrl": "https://api.example.com/v1",
+      "name": "示例同步服务商",
+      "provider": "custom-example-sync",
       "model": "example-image-model",
       "apiMode": "images"
     }
@@ -329,7 +453,9 @@ JSON 结构示例：
 }
 ```
 
-第三方服务商可以参考 [自定义服务商 LLM 提示词](docs/custom-provider-llm-prompt.md)，让 LLM 根据自己的 API 文档生成可导入的完整配置。导入后只需要在设置里补充 API Key。
+> profile 内的 `baseUrl` / `apiKey` 字段会被静默丢弃 —— 同步请求一律走团队 API 代理，对应的真实上游由部署侧 `API_PROXY_URL` / `API_PROXY_API_KEY` 决定。
+
+第三方服务商可以参考 [自定义服务商 LLM 提示词](docs/custom-provider-llm-prompt.md)，让 LLM 根据自己的 API 文档生成可导入的完整配置。导入后无需再填任何凭据。
 
 ---
 
