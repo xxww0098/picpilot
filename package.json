@@ -1,7 +1,7 @@
 {
   "name": "picpilot",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "fflate": "^0.8.2",
+    "jszip": "^3.10.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "streamdown": "^2.5.0",

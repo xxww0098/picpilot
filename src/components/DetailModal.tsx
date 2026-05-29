@@ -739,7 +739,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-5 overflow-y-auto overscroll-contain flex flex-col">
+        <div className="md:w-1/2 w-full flex-1 min-h-0 md:max-h-[90vh] md:flex-none p-5 overflow-y-auto overscroll-contain flex flex-col">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"

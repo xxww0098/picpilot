@@ -8,6 +8,16 @@ let previousBodyOverflow = ''
 let previousBodyOverscrollBehavior = ''
 let previousDocumentOverscrollBehavior = ''
 
+// 嵌套模态时，每个激活的滚动锁把自己允许滚动的区域压入栈。
+// 只有栈顶（最上层的模态）决定哪些区域可滚动，避免外层锁把
+// portal 到 body 的内层模态的滚轮/触摸事件 preventDefault 掉。
+type AllowRefsEntry = { refs?: ScrollBoundaryRef | ScrollBoundaryRef[] }
+const allowRefsStack: AllowRefsEntry[] = []
+
+function getActiveAllowRefs(): ScrollBoundaryRef | ScrollBoundaryRef[] | undefined {
+  return allowRefsStack.length ? allowRefsStack[allowRefsStack.length - 1].refs : undefined
+}
+
 function getAllowedRoot(target: EventTarget | null, allowRefs?: ScrollBoundaryRef | ScrollBoundaryRef[]) {
   if (!(target instanceof Node) || !allowRefs) return null
 
@@ -74,11 +84,15 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
     }
     lockCount += 1
 
+    const entry: AllowRefsEntry = { refs: allowRefs }
+    allowRefsStack.push(entry)
+
     let lastTouchX = 0
     let lastTouchY = 0
 
     const preventOutsideWheel = (event: WheelEvent) => {
-      const root = getAllowedRoot(event.target, allowRefs)
+      const activeRefs = getActiveAllowRefs()
+      const root = getAllowedRoot(event.target, activeRefs)
       if (!root || !canScrollWithin(root, event.target, { x: event.deltaX, y: event.deltaY })) {
         event.preventDefault()
       }
@@ -95,7 +109,7 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
       const touch = event.touches[0]
       if (!touch) return
       
-      const root = getAllowedRoot(event.target, allowRefs)
+      const root = getAllowedRoot(event.target, getActiveAllowRefs())
       if (!root) {
         event.preventDefault()
         return
@@ -116,6 +130,9 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
       document.removeEventListener('wheel', preventOutsideWheel, { capture: true })
       document.removeEventListener('touchstart', trackTouchStart, { capture: true })
       document.removeEventListener('touchmove', preventOutsideTouch, { capture: true })
+
+      const entryIndex = allowRefsStack.indexOf(entry)
+      if (entryIndex !== -1) allowRefsStack.splice(entryIndex, 1)
 
       lockCount = Math.max(0, lockCount - 1)
       if (lockCount === 0) {

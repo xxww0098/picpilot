@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthProvider";
 import {
     deleteGalleryImage,
@@ -7,6 +8,7 @@ import {
     type PublicGalleryImage,
 } from "../lib/galleryApi";
 import { adminRevokeGalleryImage } from "../lib/notificationApi";
+import { downloadGalleryImage } from "../lib/downloadGallery";
 import { formatTimestamp } from "../lib/format";
 import {
     openDestructiveConfirm,
@@ -14,11 +16,11 @@ import {
     showAppToast,
 } from "../lib/dialog";
 import { getUserFacingErrorMessage } from "../lib/userFacingText";
-import { useAsyncQuery } from "../hooks/useAsyncQuery";
+import { useCloseOnEscape } from "../hooks/useCloseOnEscape";
 import PanelShell from "./PanelShell";
 import ModalShell from "./ModalShell";
 import Avatar from "./Avatar";
-import { CloseIcon } from "./icons";
+import { CloseIcon, DownloadIcon, TrashIcon } from "./icons";
 
 const PAGE_SIZE = 24;
 
@@ -33,18 +35,46 @@ function AuthImage({
     src,
     alt,
     className,
+    lazy = false,
 }: {
     src: string;
     alt?: string;
     className?: string;
+    lazy?: boolean;
 }) {
     const [url, setUrl] = useState<string | null>(null);
-    const [status, setStatus] = useState<"loading" | "loaded" | "error">(
-        "loading",
+    const [status, setStatus] = useState<"idle" | "loading" | "loaded" | "error">(
+        lazy ? "idle" : "loading",
     );
     const [retryKey, setRetryKey] = useState(0);
+    // 懒加载 + 有限内存：只保留视口附近（上下各 600px）范围内的缩略图 blob。
+    // 进入该范围才下载，滚远后释放对象 URL 回收解码内存；滚回来时再取——
+    // 命中浏览器对缩略图的 immutable 缓存，几乎不产生新网络请求。
+    const [near, setNear] = useState(!lazy);
+    const observerRef = useRef<IntersectionObserver | null>(null);
+
+    // callback ref 挂在当前渲染的元素（占位 / <img>）上，元素切换时自动重连 observer
+    const setNode = useCallback(
+        (node: HTMLElement | null) => {
+            observerRef.current?.disconnect();
+            observerRef.current = null;
+            if (!lazy) return;
+            if (!node || typeof IntersectionObserver === "undefined") {
+                setNear(true);
+                return;
+            }
+            const observer = new IntersectionObserver(
+                (entries) => setNear(entries[entries.length - 1].isIntersecting),
+                { rootMargin: "600px" },
+            );
+            observer.observe(node);
+            observerRef.current = observer;
+        },
+        [lazy],
+    );
 
     useEffect(() => {
+        if (!near || status === "error") return;
         let aborted = false;
         let objectUrl: string | null = null;
         setStatus("loading");
@@ -53,17 +83,20 @@ function AuthImage({
                 if (aborted) return;
                 objectUrl = URL.createObjectURL(blob);
                 setUrl(objectUrl);
+                setStatus("loaded");
             })
             .catch((err) => {
                 if (aborted) return;
                 console.error("[AuthImage] fetch failed:", src, err);
                 setStatus("error");
             });
+        // 离开视口范围 / 切换 src / 卸载时：中止并释放 blob，回到占位
         return () => {
             aborted = true;
             if (objectUrl) URL.revokeObjectURL(objectUrl);
+            setUrl(null);
         };
-    }, [src, retryKey]);
+    }, [near, src, retryKey]);
 
     function retry() {
         setUrl(null);
@@ -94,35 +127,40 @@ function AuthImage({
     if (!url) {
         return (
             <div
+                ref={setNode}
                 className={`flex items-center justify-center bg-[hsl(var(--muted))] ${className ?? ""}`}
             >
-                <svg
-                    className="h-6 w-6 animate-spin text-[hsl(var(--muted-foreground))]"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                >
-                    <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                    />
-                    <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    />
-                </svg>
+                {status === "loading" && (
+                    <svg
+                        className="h-6 w-6 animate-spin text-[hsl(var(--muted-foreground))]"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                    >
+                        <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                        />
+                        <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                    </svg>
+                )}
             </div>
         );
     }
 
     return (
         <img
+            ref={setNode}
             src={url}
             alt={alt}
+            decoding="async"
             className={className}
             onError={() => {
                 console.error("[AuthImage] <img> load failed:", src);
@@ -143,29 +181,141 @@ export default function GalleryView({
     userId,
     title = "公开画廊",
 }: Props) {
-    const [page, setPage] = useState(0);
+    const [images, setImages] = useState<PublicGalleryImage[]>([]);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<unknown>(null);
+    const [loadedOnce, setLoadedOnce] = useState(false);
     const [detail, setDetail] = useState<PublicGalleryImage | null>(null);
     // 详情大图当前展示的图片 id：默认结果图，点参考图缩略图可切到对应原图
     const [activeImageId, setActiveImageId] = useState<string | null>(null);
+    // 卡片右键菜单
+    const [menu, setMenu] = useState<{ img: PublicGalleryImage; x: number; y: number } | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const detailScrollRef = useRef<HTMLDivElement>(null);
     const { user, refresh } = useAuth();
 
-    const { data, loading, error, reload } = useAsyncQuery(
-        () => fetchGalleryPage(PAGE_SIZE, page * PAGE_SIZE, userId),
-        [page, userId],
-        open,
-    );
+    // Esc 关闭右键菜单（注册在全局 ESC 栈顶，先于画廊面板，避免误关整个画廊）
+    useCloseOnEscape(Boolean(menu), () => setMenu(null));
 
-    const images = data?.images ?? [];
-    const total = data?.total ?? 0;
-    const maxPage = useMemo(
-        () => Math.max(0, Math.ceil(total / PAGE_SIZE) - 1),
-        [total],
-    );
-
+    // 点击别处 / 滚动 / 缩放时关闭右键菜单（点菜单内部不关）
     useEffect(() => {
-        if (open) setPage(0);
-    }, [open, userId]);
+        if (!menu) return;
+        const close = (e: Event) => {
+            if (
+                e.target instanceof Node &&
+                menuRef.current?.contains(e.target)
+            ) {
+                return;
+            }
+            setMenu(null);
+        };
+        window.addEventListener("mousedown", close, { capture: true });
+        window.addEventListener("wheel", close, { capture: true });
+        window.addEventListener("scroll", close, { capture: true });
+        window.addEventListener("resize", close);
+        return () => {
+            window.removeEventListener("mousedown", close, { capture: true });
+            window.removeEventListener("wheel", close, { capture: true });
+            window.removeEventListener("scroll", close, { capture: true });
+            window.removeEventListener("resize", close);
+        };
+    }, [menu]);
+
+    async function downloadImage(id: string) {
+        try {
+            await downloadGalleryImage(id);
+        } catch (e) {
+            showAppToast(
+                getUserFacingErrorMessage(e, "下载图片失败"),
+                "error",
+            );
+        }
+    }
+
+    // 无限滚动：累加分页结果，滚动到底部哨兵附近时拉取下一页。
+    // 用 ref 同步最新进度，让 loadMore 保持稳定身份；epoch 让重置后丢弃在途的旧请求。
+    const loadingRef = useRef(false);
+    const epochRef = useRef(0);
+    const progressRef = useRef({ count: 0, total: 0, loadedOnce: false });
+    progressRef.current = { count: images.length, total, loadedOnce };
+
+    const hasMore = !loadedOnce || images.length < total;
+
+    const loadMore = useCallback(async () => {
+        if (loadingRef.current) return;
+        const { count, total: loadedTotal, loadedOnce: done } = progressRef.current;
+        if (done && count >= loadedTotal) return;
+        loadingRef.current = true;
+        const epoch = epochRef.current;
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await fetchGalleryPage(PAGE_SIZE, count, userId);
+            if (epoch !== epochRef.current) return; // 已重置，丢弃旧结果
+            setTotal(data.total);
+            setImages((prev) => {
+                const seen = new Set(prev.map((it) => it.id));
+                const merged = [...prev];
+                for (const img of data.images) {
+                    if (!seen.has(img.id)) {
+                        seen.add(img.id);
+                        merged.push(img);
+                    }
+                }
+                return merged;
+            });
+            setLoadedOnce(true);
+        } catch (e) {
+            if (epoch === epochRef.current) setError(e);
+        } finally {
+            if (epoch === epochRef.current) {
+                loadingRef.current = false;
+                setLoading(false);
+            }
+        }
+    }, [userId]);
+
+    // 打开或切换用户时重置并加载首页
+    useEffect(() => {
+        if (!open) return;
+        epochRef.current += 1;
+        loadingRef.current = false;
+        progressRef.current = { count: 0, total: 0, loadedOnce: false };
+        setImages([]);
+        setTotal(0);
+        setLoadedOnce(false);
+        setError(null);
+        void loadMore();
+    }, [open, userId, loadMore]);
+
+    // 底部哨兵进入视口附近时加载下一页（用 callback ref 以便哨兵增删时自动重连）
+    const observerRef = useRef<IntersectionObserver | null>(null);
+    const sentinelRef = useCallback(
+        (node: HTMLDivElement | null) => {
+            observerRef.current?.disconnect();
+            observerRef.current = null;
+            if (!node || typeof IntersectionObserver === "undefined") return;
+            const observer = new IntersectionObserver(
+                (entries) => {
+                    if (entries.some((entry) => entry.isIntersecting)) {
+                        void loadMore();
+                    }
+                },
+                { rootMargin: "400px" },
+            );
+            observer.observe(node);
+            observerRef.current = observer;
+        },
+        // images.length 变化时重建 observer：新内容加载后若哨兵仍在视口内，
+        // IntersectionObserver 会在 observe 时立即回调，从而继续填满首屏、避免卡住。
+        [loadMore, images.length],
+    );
+
+    function removeImage(id: string) {
+        setImages((prev) => prev.filter((it) => it.id !== id));
+        setTotal((t) => Math.max(0, t - 1));
+    }
 
     // 切换/关闭详情时，大图回到结果图
     useEffect(() => {
@@ -181,7 +331,7 @@ export default function GalleryView({
                 try {
                     await deleteGalleryImage(id);
                     if (detail?.id === id) setDetail(null);
-                    await reload();
+                    removeImage(id);
                     await refresh();
                 } catch (e) {
                     showAppToast(
@@ -210,7 +360,7 @@ export default function GalleryView({
                         reason.trim() || undefined,
                     );
                     if (detail?.id === img.id) setDetail(null);
-                    await reload();
+                    removeImage(img.id);
                     showAppToast("已撤下并通知作者。", "success");
                 } catch (e) {
                     showAppToast(
@@ -226,36 +376,58 @@ export default function GalleryView({
         <>
             <PanelShell open={open} onClose={onClose} title={title}>
                 <div className="flex-1 overflow-y-auto p-6">
-                    {loading && (
+                    {loading && images.length === 0 && (
                         <p className="text-sm text-[hsl(var(--muted-foreground))]">
                             加载中…
                         </p>
                     )}
-                    {error && (
-                        <p className="text-sm text-red-500">
-                            {getUserFacingErrorMessage(
-                                error,
-                                "加载公开画廊失败",
-                            )}
-                        </p>
+                    {Boolean(error) && images.length === 0 && (
+                        <div className="space-y-2">
+                            <p className="text-sm text-red-500">
+                                {getUserFacingErrorMessage(
+                                    error,
+                                    "加载公开画廊失败",
+                                )}
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => void loadMore()}
+                                className="rounded border border-[hsl(var(--border))] px-3 py-1 text-sm hover:bg-[hsl(var(--muted))]"
+                            >
+                                重试
+                            </button>
+                        </div>
                     )}
-                    {!loading && !error && images.length === 0 && (
-                        <p className="py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
-                            {userId
-                                ? "你还没有共享图片。"
-                                : '还没有公开图。生成图片后点"公开到画廊"上传。'}
-                        </p>
-                    )}
-                    {!loading && !error && images.length > 0 && (
+                    {loadedOnce &&
+                        !loading &&
+                        !error &&
+                        images.length === 0 && (
+                            <p className="py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
+                                {userId
+                                    ? "你还没有共享图片。"
+                                    : '还没有公开图。生成图片后点"公开到画廊"上传。'}
+                            </p>
+                        )}
+                    {images.length > 0 && (
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
                             {images.map((img) => (
                                 <button
                                     key={img.id}
                                     type="button"
                                     onClick={() => setDetail(img)}
+                                    onContextMenu={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setMenu({
+                                            img,
+                                            x: e.clientX,
+                                            y: e.clientY,
+                                        });
+                                    }}
                                     className="group relative overflow-hidden rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] aspect-square"
                                 >
                                     <AuthImage
+                                        lazy
                                         src={`/api/gallery/image/${img.id}?thumb=1`}
                                         className="h-full w-full object-cover transition-transform group-hover:scale-105"
                                     />
@@ -280,31 +452,45 @@ export default function GalleryView({
                         </div>
                     )}
 
-                    {maxPage > 0 && (
-                        <div className="mt-6 flex items-center justify-between text-sm">
-                            <span className="text-[hsl(var(--muted-foreground))]">
-                                共 {total} 张 · 第 {page + 1} / {maxPage + 1} 页
-                            </span>
-                            <div className="flex gap-2">
+                    {images.length > 0 && (
+                        <div className="mt-6 flex flex-col items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
+                            {hasMore && (
+                                <div ref={sentinelRef} className="h-px w-full" />
+                            )}
+                            {loading && hasMore && (
+                                <span className="flex items-center gap-2">
+                                    <svg
+                                        className="h-4 w-4 animate-spin"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                    >
+                                        <circle
+                                            className="opacity-25"
+                                            cx="12"
+                                            cy="12"
+                                            r="10"
+                                            stroke="currentColor"
+                                            strokeWidth="4"
+                                        />
+                                        <path
+                                            className="opacity-75"
+                                            fill="currentColor"
+                                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                                        />
+                                    </svg>
+                                    加载中…
+                                </span>
+                            )}
+                            {Boolean(error) && !loading && (
                                 <button
-                                    disabled={page === 0}
-                                    onClick={() =>
-                                        setPage((p) => Math.max(0, p - 1))
-                                    }
-                                    className="rounded border border-[hsl(var(--border))] px-3 py-1 disabled:opacity-50"
+                                    type="button"
+                                    onClick={() => void loadMore()}
+                                    className="rounded border border-[hsl(var(--border))] px-3 py-1 hover:bg-[hsl(var(--muted))]"
                                 >
-                                    上一页
+                                    加载失败，点击重试
                                 </button>
-                                <button
-                                    disabled={page >= maxPage}
-                                    onClick={() =>
-                                        setPage((p) => Math.min(maxPage, p + 1))
-                                    }
-                                    className="rounded border border-[hsl(var(--border))] px-3 py-1 disabled:opacity-50"
-                                >
-                                    下一页
-                                </button>
-                            </div>
+                            )}
+                            {!hasMore && <span>共 {total} 张，已全部加载</span>}
                         </div>
                     )}
                 </div>
@@ -335,7 +521,7 @@ export default function GalleryView({
                             </button>
                         )}
                     </div>
-                    <div ref={detailScrollRef} className="flex w-full shrink-0 flex-col gap-3 p-6 md:shrink md:overflow-y-auto md:w-80">
+                    <div ref={detailScrollRef} className="flex w-full shrink-0 flex-col gap-3 overscroll-contain p-6 md:max-h-[90vh] md:min-h-0 md:shrink md:overflow-y-auto md:w-80">
                         <div className="flex items-center justify-between gap-2">
                             <div className="flex min-w-0 items-center gap-2">
                                 <Avatar
@@ -421,6 +607,81 @@ export default function GalleryView({
                     </div>
                 </ModalShell>
             )}
+
+            {menu &&
+                createPortal(
+                    (() => {
+                        const isOwner = Boolean(
+                            user && menu.img.user_id === user.userId,
+                        );
+                        const isAdminOther = Boolean(
+                            user &&
+                                user.isAdmin &&
+                                menu.img.user_id !== user.userId,
+                        );
+                        const MENU_W = 160;
+                        const MENU_H = 8 + (isOwner || isAdminOther ? 2 : 1) * 38;
+                        const left = Math.max(
+                            8,
+                            Math.min(menu.x, window.innerWidth - MENU_W - 8),
+                        );
+                        const top = Math.max(
+                            8,
+                            Math.min(menu.y, window.innerHeight - MENU_H - 8),
+                        );
+                        return (
+                            <div
+                                ref={menuRef}
+                                className="fixed z-[9999] min-w-[150px] overflow-hidden rounded-lg border border-gray-100 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-800 animate-fade-in"
+                                style={{ left, top }}
+                                onContextMenu={(e) => e.preventDefault()}
+                            >
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const id = menu.img.id;
+                                        setMenu(null);
+                                        void downloadImage(id);
+                                    }}
+                                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/50"
+                                >
+                                    <DownloadIcon className="h-4 w-4 shrink-0" />
+                                    下载
+                                </button>
+                                {isOwner && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const id = menu.img.id;
+                                            setMenu(null);
+                                            deleteImage(id);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+                                    >
+                                        <TrashIcon className="h-4 w-4 shrink-0" />
+                                        删除
+                                    </button>
+                                )}
+                                {!isOwner && isAdminOther && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const img = menu.img;
+                                            setMenu(null);
+                                            revokeImage(img);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+                                        title="以管理员身份撤下，并向作者发送通知"
+                                    >
+                                        <TrashIcon className="h-4 w-4 shrink-0" />
+                                        撤下（管理员）
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })(),
+                    document.body,
+                )}
         </>
     );
 }

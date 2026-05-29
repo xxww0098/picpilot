@@ -5,9 +5,12 @@ import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HistoryModal from './HistoryModal'
-import { BellIcon, EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
+import { BellIcon, DownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
 import { useAuth } from '../contexts/AuthProvider'
 import { useNotificationUnread } from '../hooks/useNotificationUnread'
+import { openConfirmDialog, showAppToast } from '../lib/dialog'
+import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { downloadGalleryAsZip, fetchAllGalleryImages } from '../lib/downloadGallery'
 import UserMenu from './UserMenu'
 
 const HelpModal = lazy(() => import('./HelpModal'))
@@ -15,22 +18,11 @@ const GalleryView = lazy(() => import('./GalleryView'))
 const AdminPanel = lazy(() => import('./admin/AdminPanel'))
 const NotificationsPanel = lazy(() => import('./NotificationsPanel'))
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
-}
-
-function isInstalledPwa() {
-  const nav = window.navigator as Navigator & { standalone?: boolean }
-  return window.matchMedia('(display-mode: standalone)').matches || nav.standalone === true
-}
-
 export default function Header() {
   const appMode = useStore((s) => s.appMode)
   const setAppMode = useStore((s) => s.setAppMode)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setShowLogPanel = useStore((s) => s.setShowLogPanel)
-  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
   const setAgentMobileHeaderVisible = useStore((s) => s.setAgentMobileHeaderVisible)
   const agentConversations = useStore((s) => s.agentConversations)
@@ -40,8 +32,7 @@ export default function Header() {
   const activeConversation = agentConversations.find((item) => item.id === activeAgentConversationId)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
-  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
-  const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
+  const [downloadingGallery, setDownloadingGallery] = useState(false)
   const [hintVisible, setHintVisible] = useState(false)
   const [scrollDirection, setScrollDirection] = useState<'up' | 'down'>('up')
   const [showHistoryModal, setShowHistoryModal] = useState(false)
@@ -89,7 +80,7 @@ export default function Header() {
     }
   }, [appMode, agentMobileHeaderVisible])
 
-  const installTooltip = useTooltip()
+  const downloadTooltip = useTooltip()
   const helpTooltip = useTooltip()
   const logsTooltip = useTooltip()
   const settingsTooltip = useTooltip()
@@ -103,61 +94,42 @@ export default function Header() {
   const [showNotifications, setShowNotifications] = useState(false)
   const { unread: unreadNotifications, setUnread: setUnreadNotifications, refresh: refreshUnreadNotifications } = useNotificationUnread(Boolean(user))
 
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault()
-      setInstallPrompt(event as BeforeInstallPromptEvent)
-      setIsPwaInstalled(false)
+  const handleDownloadGallery = async () => {
+    if (downloadingGallery) return
+    let images
+    try {
+      images = await fetchAllGalleryImages()
+    } catch (e) {
+      showAppToast(getUserFacingErrorMessage(e, '获取画廊列表失败'), 'error')
+      return
     }
-
-    const handleAppInstalled = () => {
-      setInstallPrompt(null)
-      setIsPwaInstalled(true)
+    if (images.length === 0) {
+      showAppToast('画廊还没有图片。', 'info')
+      return
     }
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
-    window.addEventListener('appinstalled', handleAppInstalled)
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
-      window.removeEventListener('appinstalled', handleAppInstalled)
-    }
-  }, [])
-
-  const handleInstallClick = async () => {
-    if (installPrompt) {
-      const promptEvent = installPrompt
-      setInstallPrompt(null)
-
-      try {
-        await promptEvent.prompt()
-        const choice = await promptEvent.userChoice
-        setIsPwaInstalled(choice.outcome === 'accepted')
-      } catch {
-        setIsPwaInstalled(isInstalledPwa())
-      }
-    } else {
-      const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-      if (isIos) {
-        setConfirmDialog({
-          title: '安装为应用',
-          message: '在 Safari 浏览器中，点击底部「分享」按钮，选择「添加到主屏幕」即可安装此应用。',
-          showCancel: false,
-          confirmText: '我知道了',
-          icon: 'info',
-          action: () => {},
-        })
-      } else {
-        setConfirmDialog({
-          title: '安装为应用',
-          message: '请在浏览器的菜单中选择「添加到主屏幕」或「安装应用」。\n\n（如果在微信等内置浏览器中，请先在外部浏览器打开）',
-          showCancel: false,
-          confirmText: '我知道了',
-          icon: 'info',
-          action: () => {},
-        })
-      }
-    }
+    openConfirmDialog({
+      title: '下载画廊图片',
+      message: `将把画廊全部 ${images.length} 张图片打包成一个 ZIP 文件下载，确定吗？`,
+      confirmText: '下载',
+      onConfirm: async () => {
+        setDownloadingGallery(true)
+        showAppToast(`正在打包 ${images.length} 张图片，请稍候…`, 'info')
+        try {
+          const { successCount, failCount } = await downloadGalleryAsZip(images)
+          if (successCount === 0) {
+            showAppToast('全部图片下载失败，请稍后重试。', 'error')
+          } else if (failCount > 0) {
+            showAppToast(`已打包 ${successCount} 张，${failCount} 张获取失败。`, 'error')
+          } else {
+            showAppToast(`已打包下载 ${successCount} 张图片。`, 'success')
+          }
+        } catch (e) {
+          showAppToast(getUserFacingErrorMessage(e, '打包下载失败'), 'error')
+        } finally {
+          setDownloadingGallery(false)
+        }
+      },
+    })
   }
 
   return (
@@ -250,23 +222,31 @@ export default function Header() {
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {!isPwaInstalled && (
+            {user && (
               <div
                 className="relative"
-                {...installTooltip.handlers}
+                {...downloadTooltip.handlers}
               >
                 <button
                   onClick={() => {
                     dismissAllTooltips()
-                    handleInstallClick()
+                    void handleDownloadGallery()
                   }}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                  aria-label="安装为应用"
+                  disabled={downloadingGallery}
+                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="下载画廊图片"
                 >
-                  <InstallIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  {downloadingGallery ? (
+                    <svg className="h-5 w-5 animate-spin text-gray-600 dark:text-gray-400" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <DownloadIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  )}
                 </button>
-                <ViewportTooltip visible={installTooltip.visible} className="whitespace-nowrap">
-                  安装为应用
+                <ViewportTooltip visible={downloadTooltip.visible} className="whitespace-nowrap">
+                  下载画廊图片
                 </ViewportTooltip>
               </div>
             )}
