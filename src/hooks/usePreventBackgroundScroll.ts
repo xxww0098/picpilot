@@ -21,19 +21,19 @@ function getAllowedRoot(target: EventTarget | null, allowRefs?: ScrollBoundaryRe
 }
 
 function canScrollAxis(element: HTMLElement, axis: 'x' | 'y', delta: number) {
-  if (delta === 0) return false
-
   const style = window.getComputedStyle(element)
   const overflow = axis === 'y' ? style.overflowY : style.overflowX
   if (!/(auto|scroll|overlay)/.test(overflow)) return false
 
   if (axis === 'y') {
     if (element.scrollHeight <= element.clientHeight) return false
+    if (delta === 0) return true
     if (delta < 0) return element.scrollTop > 0
     return element.scrollTop + element.clientHeight < element.scrollHeight - 1
   }
 
   if (element.scrollWidth <= element.clientWidth) return false
+  if (delta === 0) return true
   if (delta < 0) return element.scrollLeft > 0
   return element.scrollLeft + element.clientWidth < element.scrollWidth - 1
 }
@@ -93,8 +93,10 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
 
     const preventOutsideTouch = (event: TouchEvent) => {
       const touch = event.touches[0]
+      if (!touch) return
+      
       const root = getAllowedRoot(event.target, allowRefs)
-      if (!touch || !root) {
+      if (!root) {
         event.preventDefault()
         return
       }
