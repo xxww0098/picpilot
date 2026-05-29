@@ -317,13 +317,13 @@ export default function GalleryView({
                     scrollRef={detailScrollRef}
                     zIndexClass="z-50"
                     backdropClassName="bg-black/60"
-                    panelClassName="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-[hsl(240_10%_12%)] md:flex-row"
+                    panelClassName="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-[hsl(240_10%_12%)] md:flex-row md:overflow-hidden"
                 >
-                    <div className="relative flex flex-1 items-center justify-center bg-black p-4">
+                    <div className="relative flex shrink-0 items-center justify-center bg-black p-4 md:flex-1">
                         <AuthImage
                             key={activeImageId ?? detail.id}
                             src={`/api/gallery/image/${activeImageId ?? detail.id}`}
-                            className="max-h-[80vh] max-w-full object-contain"
+                            className="max-h-[60vh] max-w-full object-contain md:max-h-[80vh]"
                         />
                         {activeImageId && (
                             <button
@@ -335,7 +335,7 @@ export default function GalleryView({
                             </button>
                         )}
                     </div>
-                    <div ref={detailScrollRef} className="flex w-full flex-col gap-3 overflow-y-auto p-6 md:w-80">
+                    <div ref={detailScrollRef} className="flex w-full shrink-0 flex-col gap-3 p-6 md:shrink md:overflow-y-auto md:w-80">
                         <div className="flex items-center justify-between gap-2">
                             <div className="flex min-w-0 items-center gap-2">
                                 <Avatar
