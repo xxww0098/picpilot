@@ -26,7 +26,7 @@ export default function UserList() {
     return users.filter((u) => u.username.toLowerCase().includes(q))
   }, [users, query])
 
-  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string; hourlyImageQuota?: number; maxBatchImages?: number }) {
+  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string; maxBatchImages?: number }) {
     setBusyId(id)
     try {
       await patchAdminUser(id, body)
@@ -68,21 +68,6 @@ export default function UserList() {
         await patchUser(id, { password: pwd })
         showAppToast('密码已更新。', 'success')
       },
-    })
-  }
-
-  function updateHourlyQuota(id: string, username: string, currentQuota: number) {
-    openPromptDialog({
-      title: '调整额度',
-      message: `设置「${username}」每小时可成功生成的图片数。\n输入 0 表示暂停该用户使用团队服务。`,
-      defaultValue: String(currentQuota),
-      inputType: 'number',
-      validate: (raw) => {
-        const quota = Number(raw)
-        if (!Number.isFinite(quota) || quota < 0 || quota > 100000) return '请输入 0 到 100000 之间的数字。'
-        return null
-      },
-      onConfirm: (raw) => patchUser(id, { hourlyImageQuota: Math.trunc(Number(raw)) }),
     })
   }
 
@@ -146,7 +131,6 @@ export default function UserList() {
                 busy={busyId === user.id}
                 isSelf={user.id === currentUser?.userId}
                 onToggleAdmin={() => void patchUser(user.id, { isAdmin: user.is_admin !== 1 })}
-                onUpdateHourlyQuota={() => updateHourlyQuota(user.id, user.username, user.hourly_image_quota)}
                 onUpdateMaxBatchImages={() => updateMaxBatchImages(user.id, user.username, user.max_batch_images)}
                 onResetPassword={() => resetPassword(user.id, user.username)}
                 onDelete={() => deleteUser(user.id, user.username)}
@@ -191,7 +175,6 @@ function UserCard({
   busy,
   isSelf,
   onToggleAdmin,
-  onUpdateHourlyQuota,
   onUpdateMaxBatchImages,
   onResetPassword,
   onDelete,
@@ -200,18 +183,10 @@ function UserCard({
   busy: boolean
   isSelf: boolean
   onToggleAdmin: () => void
-  onUpdateHourlyQuota: () => void
   onUpdateMaxBatchImages: () => void
   onResetPassword: () => void
   onDelete: () => void
 }) {
-  const hourlyUsed = user.hourly_success_images ?? 0
-  const hourlyQuota = user.hourly_image_quota ?? 0
-  const quotaExceeded = hourlyQuota > 0 && hourlyUsed >= hourlyQuota
-  const quotaPaused = hourlyQuota === 0
-  const quotaPercent =
-    hourlyQuota > 0 ? Math.min(100, Math.round((hourlyUsed / hourlyQuota) * 100)) : hourlyUsed > 0 ? 100 : 0
-
   const successCount = user.success_count ?? 0
   const failureCount = user.failure_count ?? 0
   const totalRequests = user.total_requests ?? 0
@@ -239,16 +214,6 @@ function UserCard({
                 成员
               </span>
             )}
-            {quotaPaused && (
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.65rem] font-medium text-amber-600 dark:text-amber-400">
-                已暂停
-              </span>
-            )}
-            {quotaExceeded && !quotaPaused && (
-              <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[0.65rem] font-medium text-red-600 dark:text-red-400">
-                额度已满
-              </span>
-            )}
           </div>
           <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
             上次登录 {formatRelative(user.last_login_at)}
@@ -262,51 +227,26 @@ function UserCard({
           isAdmin={!!user.is_admin}
           isSelf={isSelf}
           onToggleAdmin={onToggleAdmin}
-          onUpdateHourlyQuota={onUpdateHourlyQuota}
           onUpdateMaxBatchImages={onUpdateMaxBatchImages}
           onResetPassword={onResetPassword}
           onDelete={onDelete}
         />
       </div>
 
-      <div className="mt-4">
-        <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="font-medium text-[hsl(var(--foreground))]">小时额度</span>
-          <span
-            className={`tabular-nums ${
-              quotaExceeded ? 'font-medium text-red-600 dark:text-red-400' : 'text-[hsl(var(--muted-foreground))]'
-            }`}
-          >
-            {hourlyUsed} / {hourlyQuota}
-          </span>
+      <div className="mt-4 grid grid-cols-3 gap-3 text-center text-xs">
+        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
+          <div className="font-medium text-[hsl(var(--foreground))]">{totalRequests}</div>
+          <div className="text-[hsl(var(--muted-foreground))]">总请求</div>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]">
-          <div
-            className={`h-full rounded-full transition-[width] ${
-              quotaPaused
-                ? 'bg-amber-500/70'
-                : quotaExceeded
-                  ? 'bg-red-500'
-                  : 'bg-[hsl(var(--primary))]'
-            }`}
-            style={{ width: `${quotaPercent}%` }}
-          />
+        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
+          <div className="font-medium text-green-600 dark:text-green-400">{successCount}</div>
+          <div className="text-[hsl(var(--muted-foreground))]">成功</div>
+        </div>
+        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
+          <div className="font-medium text-red-600 dark:text-red-400">{failureCount}</div>
+          <div className="text-[hsl(var(--muted-foreground))]">失败</div>
         </div>
       </div>
-
-      <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric label="成功请求" value={String(successCount)} tone="success" />
-        <Metric label="失败请求" value={String(failureCount)} tone={failureCount > 0 ? 'danger' : 'default'} />
-        <Metric label="总请求" value={String(totalRequests)} />
-        <Metric label="批量上限" value={`${user.max_batch_images} 张`} />
-        <Metric label="累计耗时" value={formatDurationLong(user.total_duration_ms)} className="sm:col-span-2" />
-        <Metric label="累计图片" value={formatBytes(user.total_output_bytes)} className="sm:col-span-2" />
-        <Metric
-          label="成功率"
-          value={totalRequests > 0 ? `${Math.round((successCount / totalRequests) * 100)}%` : '—'}
-          className="sm:col-span-2"
-        />
-      </dl>
     </article>
   )
 }
@@ -342,7 +282,6 @@ function UserActionsMenu({
   isAdmin,
   isSelf,
   onToggleAdmin,
-  onUpdateHourlyQuota,
   onUpdateMaxBatchImages,
   onResetPassword,
   onDelete,
@@ -351,7 +290,6 @@ function UserActionsMenu({
   isAdmin: boolean
   isSelf: boolean
   onToggleAdmin: () => void
-  onUpdateHourlyQuota: () => void
   onUpdateMaxBatchImages: () => void
   onResetPassword: () => void
   onDelete: () => void
@@ -406,7 +344,6 @@ function UserActionsMenu({
           {!(isSelf && isAdmin) && (
             <MenuButton onClick={() => run(onToggleAdmin)}>{isAdmin ? '取消管理员' : '设为管理员'}</MenuButton>
           )}
-          <MenuButton onClick={() => run(onUpdateHourlyQuota)}>调整额度</MenuButton>
           <MenuButton onClick={() => run(onUpdateMaxBatchImages)}>批量上限</MenuButton>
           <MenuButton onClick={() => run(onResetPassword)}>重置密码</MenuButton>
           {!isSelf && (

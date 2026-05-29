@@ -17,9 +17,7 @@ export interface AdminUserRow {
   id: string
   username: string
   is_admin: number
-  hourly_image_quota: number
   max_batch_images: number
-  hourly_success_images: number
   created_at: number
   last_login_at: number | null
   avatar_updated_at: number | null
@@ -32,7 +30,9 @@ export interface AdminUserRow {
 }
 
 export interface AdminTeamSettings {
-  defaultHourlyImageQuota: number
+  defaultMaxBatchImages: number
+  maxConcurrent: number
+  maxConcurrentPerUser: number
 }
 
 export interface AdminInviteRedemption {
@@ -92,7 +92,7 @@ export function fetchAdminTeamSettings() {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', undefined, '加载失败')
 }
 
-export function patchAdminTeamSettings(body: { defaultHourlyImageQuota?: number }) {
+export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number }) {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -100,7 +100,7 @@ export function patchAdminTeamSettings(body: { defaultHourlyImageQuota?: number 
   }, '保存失败')
 }
 
-export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string; hourlyImageQuota?: number; maxBatchImages?: number }) {
+export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string; maxBatchImages?: number }) {
   return authJson<{ ok: true }>(`/api/admin/users/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
+import { DEFAULT_RESPONSES_MODEL } from './apiProfiles'
 import { getStoredAuthToken } from './auth'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
@@ -608,6 +609,12 @@ async function parseAgentStreamResponse(
   }
 }
 
+// Agent 走 Responses API（经 env 配置的上游代理）。仅当配置本身就是 Responses 模式时才沿用其模型，
+// 否则该模型多半是图像模型（如 gpt-image-2），需回退到对话模型，让 Agent 模式开箱即用。
+function resolveAgentModel(profile: ApiProfile): string {
+  return profile.apiMode === 'responses' && profile.model.trim() ? profile.model : DEFAULT_RESPONSES_MODEL
+}
+
 export async function callAgentResponsesApi(opts: {
   settings: AppSettings
   profile: ApiProfile
@@ -633,7 +640,7 @@ export async function callAgentResponsesApi(opts: {
 
   try {
     const body: Record<string, unknown> = {
-      model: profile.model || settings.model,
+      model: resolveAgentModel(profile),
       instructions: createAgentInstructions(settings),
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
@@ -680,7 +687,7 @@ export async function callAgentConversationTitleApi(opts: {
   imageDataUrls?: string[]
   signal?: AbortSignal
 }): Promise<string> {
-  const { settings, profile, prompt, imageDataUrls, signal } = opts
+  const { profile, prompt, imageDataUrls, signal } = opts
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy()
   const controller = new AbortController()
@@ -702,7 +709,7 @@ export async function callAgentConversationTitleApi(opts: {
       headers: createHeaders(profile, useApiProxy),
       cache: 'no-store',
       body: JSON.stringify({
-        model: profile.model || settings.model,
+        model: resolveAgentModel(profile),
         instructions: AGENT_TITLE_INSTRUCTIONS,
         input: [{ role: 'user', content }],
         max_output_tokens: 32,
@@ -805,7 +812,7 @@ export async function callBatchImageSingle(opts: {
     }
 
     const body: Record<string, unknown> = {
-      model: profile.model,
+      model: resolveAgentModel(profile),
       input,
       tools: [tool],
       tool_choice: 'required',

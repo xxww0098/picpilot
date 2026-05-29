@@ -46,11 +46,9 @@ export interface AuthUser {
   displayName: string
   isAdmin: boolean
   avatarUpdatedAt: number | null
-  hourlyImageQuota: number
   maxBatchImages: number
-  hourlyUsed: number
-  hourlyRemaining: number
-  quotaResetAt: number | null
+  maxConcurrent: number
+  maxConcurrentPerUser: number
   publicGalleryCount: number
   publicStorageBytes: number
   publicStorageQuotaBytes: number
@@ -63,19 +61,15 @@ export function getCachedAuthUser(): AuthUser | null {
 }
 
 function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
-  const hourlyImageQuota = Number(data.hourlyImageQuota ?? 0)
-  const hourlyUsed = Number(data.hourlyUsed ?? 0)
   return {
     userId: data.userId ?? '',
     username: data.username ?? '',
     displayName: data.displayName || data.username || '',
     isAdmin: !!data.isAdmin,
     avatarUpdatedAt: data.avatarUpdatedAt ?? null,
-    hourlyImageQuota,
-    maxBatchImages: Number(data.maxBatchImages ?? 10),
-    hourlyUsed,
-    hourlyRemaining: Number(data.hourlyRemaining ?? Math.max(0, hourlyImageQuota - hourlyUsed)),
-    quotaResetAt: data.quotaResetAt ?? null,
+    maxBatchImages: Number(data.maxBatchImages ?? 4),
+    maxConcurrent: Number(data.maxConcurrent ?? 5),
+    maxConcurrentPerUser: Number(data.maxConcurrentPerUser ?? 2),
     publicGalleryCount: Number(data.publicGalleryCount ?? 0),
     publicStorageBytes: Number(data.publicStorageBytes ?? 0),
     publicStorageQuotaBytes: Number(data.publicStorageQuotaBytes ?? 0),

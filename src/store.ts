@@ -692,46 +692,18 @@ export const useStore = create<AppState>()(
           return
         }
 
+        // Agent 模式经 env 配置的上游代理（cliproxyapi）调用 Responses API，无需用户手动配置接口模式，直接进入。
         const state = get()
-        const settings = normalizeSettings(state.settings)
-        const activeProfile = getActiveApiProfile(settings)
-
-        if (activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses') {
-          const galleryInputDraft = saveGalleryInputDraft(state)
-          set((state) => ({
-            appMode: 'agent',
-            galleryInputDraft,
-            agentMobileHeaderVisible: false,
-            agentSidebarCollapsed: true,
-            agentAssetPanelCollapsed: true,
-            selectedTaskIds: [],
-            ...restoreAgentInputDraftState(state.agentInputDrafts, state.activeAgentConversationId),
-          }))
-          return
-        }
-
-        if (activeProfile.provider === 'openai' && activeProfile.apiMode !== 'responses') {
-          state.setConfirmDialog({
-            title: '需要 Responses API 配置',
-            message: `当前配置「${activeProfile.name}」使用的是 Images API，仅支持生成图片，无 Agent 模式需要的对话能力。\n\n请前往 API 配置页，将当前配置调整为 Responses API，或切换/新建一个支持 Responses API 的配置。`,
-            confirmText: '去设置',
-            cancelText: '取消',
-            action: () => {
-              useStore.getState().setShowSettings(true, 'api')
-            },
-          })
-          return
-        }
-
-        state.setConfirmDialog({
-          title: '配置不支持 Agent 模式',
-          message: `当前配置「${activeProfile.name}」所属的服务商暂不支持 Agent 模式。Agent 模式需要使用支持 Responses API 的 OpenAI 配置。\n\n请前往 API 配置页，切换或新建一个支持 Responses API 的配置。`,
-          confirmText: '去设置',
-          cancelText: '取消',
-          action: () => {
-            useStore.getState().setShowSettings(true, 'api')
-          },
-        })
+        const galleryInputDraft = saveGalleryInputDraft(state)
+        set((state) => ({
+          appMode: 'agent',
+          galleryInputDraft,
+          agentMobileHeaderVisible: false,
+          agentSidebarCollapsed: true,
+          agentAssetPanelCollapsed: true,
+          selectedTaskIds: [],
+          ...restoreAgentInputDraftState(state.agentInputDrafts, state.activeAgentConversationId),
+        }))
       },
 
       // Settings

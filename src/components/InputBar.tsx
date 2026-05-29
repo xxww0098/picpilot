@@ -157,7 +157,7 @@ export default function InputBar() {
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
-  const agentAutoImageCount = appMode === 'agent' && activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses'
+  const agentAutoImageCount = appMode === 'agent'
   const compressionDisabled = params.output_format === 'png'
   const providerOutputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings, user?.maxBatchImages)

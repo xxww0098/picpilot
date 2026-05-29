@@ -640,11 +640,6 @@ export async function submitAgentMessage() {
   const normalizedSettings = normalizeSettings(settings)
   const activeProfile = getActiveApiProfile(normalizedSettings)
 
-  if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
-    state.setAppMode('agent')
-    return
-  }
-
   const apiProfileError = validateApiProfile(activeProfile)
   if (apiProfileError) {
     showToast(`API 与模型配置未完成：${apiProfileError}`, 'error')
@@ -793,11 +788,6 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
   const { settings, params, showToast } = state
   const normalizedSettings = normalizeSettings(settings)
   const activeProfile = getActiveApiProfile(normalizedSettings)
-
-  if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
-    state.setAppMode('agent')
-    return
-  }
 
   const apiProfileError = validateApiProfile(activeProfile)
   if (apiProfileError) {

@@ -24,8 +24,8 @@ describe('userFacingText', () => {
     expect(getUserFacingErrorMessage(new TypeError('Failed to fetch'))).toContain('网络请求失败')
   })
 
-  it('preserves quota messages from the server', () => {
-    const message = '团队服务小时额度已用完：过去 1 小时成功 100/100 张'
+  it('preserves server error messages', () => {
+    const message = '服务繁忙，当前 5 个请求在处理中，请几秒后重试。'
     expect(getUserFacingErrorMessage(message)).toBe(message)
   })
 })

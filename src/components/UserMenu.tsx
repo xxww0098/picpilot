@@ -126,16 +126,9 @@ export default function UserMenu({ user, onOpenGallery }: Props) {
 
   const hasAvatar = user.avatarUpdatedAt != null
   const displayName = user.displayName || user.username
-  const quotaPercent = user.hourlyImageQuota > 0
-    ? Math.min(100, Math.round((user.hourlyUsed / user.hourlyImageQuota) * 100))
-    : 100
   const storagePercent = user.publicStorageQuotaBytes > 0
     ? Math.min(100, Math.round((user.publicStorageBytes / user.publicStorageQuotaBytes) * 100))
     : 0
-  const quotaText = user.hourlyImageQuota === 0
-    ? '已暂停'
-    : `${user.hourlyUsed}/${user.hourlyImageQuota} 张`
-  const quotaWarning = user.hourlyImageQuota === 0 || user.hourlyRemaining === 0
 
   return (
     <>
@@ -207,11 +200,11 @@ export default function UserMenu({ user, onOpenGallery }: Props) {
 
           <div className="relative grid grid-cols-2 gap-3 px-5 sm:px-6">
             <InfoTile
-              label="本小时额度"
-              value={quotaText}
-              sub={user.hourlyImageQuota === 0 ? '团队服务暂停' : `剩余 ${user.hourlyRemaining} 张`}
-              percent={quotaPercent}
-              tone={quotaWarning ? 'warning' : 'primary'}
+              label="并发上限"
+              value={`${user.maxConcurrentPerUser} 个`}
+              sub={`团队 ${user.maxConcurrent} 并发`}
+              percent={100}
+              tone="primary"
             />
             <InfoTile
               label="单次上限"

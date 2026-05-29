@@ -4,8 +4,8 @@ import { Database } from 'bun:sqlite'
 import pino from 'pino'
 import sharp from 'sharp'
 import path from 'path'
-import { existsSync, mkdirSync, statSync, unlinkSync } from 'fs'
-import { writeFile } from 'fs/promises'
+import { existsSync, mkdirSync, statSync } from 'fs'
+import { unlink, writeFile } from 'fs/promises'
 import { fileURLToPath } from 'url'
 
 const logger = pino({
@@ -36,15 +36,17 @@ const THUMBS_DIR = path.join(PUBLIC_DIR, 'thumbs')
 const AVATARS_DIR = path.join(DATA_DIR, 'avatars')
 const EVENT_RETENTION_DAYS = Number(process.env.EVENT_RETENTION_DAYS ?? 30)
 const PER_USER_PUBLIC_QUOTA_BYTES = Number(process.env.PER_USER_PUBLIC_QUOTA_BYTES ?? 500 * 1024 * 1024)
-const API_PROXY_URL = (process.env.API_PROXY_URL || process.env.TEAM_API_BASE_URL || process.env.API_URL || '').trim()
-const API_PROXY_API_KEY = (process.env.API_PROXY_API_KEY || process.env.TEAM_API_KEY || '').trim()
-const DEFAULT_HOURLY_IMAGE_QUOTA = normalizeQuotaValue(process.env.DEFAULT_HOURLY_IMAGE_QUOTA ?? process.env.TEAM_HOURLY_IMAGE_QUOTA, 100)
-const DEFAULT_MAX_BATCH_IMAGES = normalizeBatchImageLimit(process.env.DEFAULT_MAX_BATCH_IMAGES, 10)
+const API_PROXY_URL = (process.env.API_PROXY_URL || '').trim()
+const API_PROXY_API_KEY = (process.env.API_PROXY_API_KEY || '').trim()
+const CLIPROXY_API_URL = (process.env.CLIPROXY_API_URL || 'http://cliproxy:8317').replace(/\/+$/, '')
+const CLIPROXY_MGMT_KEY = (process.env.CLIPROXY_MGMT_KEY || '').trim()
+const MAX_CONCURRENT = Math.max(1, Number(process.env.MAX_CONCURRENT_PROXY_REQUESTS ?? 5))
+const MAX_CONCURRENT_PER_USER = Math.max(1, Number(process.env.MAX_CONCURRENT_PER_USER ?? 2))
+const DEFAULT_MAX_BATCH_IMAGES = normalizeBatchImageLimit(process.env.DEFAULT_MAX_BATCH_IMAGES, 4)
 const MAX_IMAGE_LONG_EDGE = 2048
 const THUMB_LONG_EDGE = 256
 const AVATAR_SIZE = 256
 const MAX_AVATAR_INPUT_BYTES = 5 * 1024 * 1024
-const HOUR_MS = 60 * 60 * 1000
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
@@ -61,6 +63,11 @@ const MIME_TYPES: Record<string, string> = {
 
 if (!JWT_SECRET) {
   logger.fatal({ scope: 'auth' }, 'JWT_SECRET environment variable is required')
+  process.exit(1)
+}
+
+if (JWT_SECRET.length < 32) {
+  logger.fatal({ scope: 'auth' }, 'JWT_SECRET must be at least 32 characters for security')
   process.exit(1)
 }
 
@@ -81,7 +88,6 @@ db.exec(`
     display_name         TEXT,
     password_hash        TEXT NOT NULL,
     is_admin             INTEGER NOT NULL DEFAULT 0,
-    hourly_image_quota   INTEGER NOT NULL DEFAULT ${DEFAULT_HOURLY_IMAGE_QUOTA},
     max_batch_images     INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_BATCH_IMAGES},
     created_at           INTEGER NOT NULL,
     last_login_at        INTEGER,
@@ -181,15 +187,6 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_notifications_user_time ON notifications(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
-
-  CREATE TABLE IF NOT EXISTS proxy_usage (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     TEXT NOT NULL,
-    image_count INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_proxy_usage_user_time ON proxy_usage(user_id, created_at DESC);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {
@@ -201,7 +198,6 @@ function ensureColumn(table: string, column: string, definition: string) {
 
 ensureColumn('users', 'is_admin', 'is_admin INTEGER NOT NULL DEFAULT 0')
 ensureColumn('users', 'display_name', 'display_name TEXT')
-ensureColumn('users', 'hourly_image_quota', `hourly_image_quota INTEGER NOT NULL DEFAULT ${DEFAULT_HOURLY_IMAGE_QUOTA}`)
 ensureColumn('users', 'max_batch_images', `max_batch_images INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_BATCH_IMAGES}`)
 ensureColumn('users', 'last_login_at', 'last_login_at INTEGER')
 ensureColumn('users', 'avatar_updated_at', 'avatar_updated_at INTEGER')
@@ -215,7 +211,6 @@ interface UserRow {
   display_name: string | null
   password_hash: string
   is_admin: number
-  hourly_image_quota: number
   max_batch_images: number
   created_at: number
   last_login_at: number | null
@@ -236,12 +231,11 @@ async function seedAdmins(envValue: string | undefined, isAdmin: boolean) {
       continue
     }
     const hash = await Bun.password.hash(password, { algorithm: 'bcrypt', cost: 10 })
-    db.query('INSERT INTO users (id, username, password_hash, is_admin, hourly_image_quota, max_batch_images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    db.query('INSERT INTO users (id, username, password_hash, is_admin, max_batch_images, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
       crypto.randomUUID(),
       username,
       hash,
       isAdmin ? 1 : 0,
-      getDefaultHourlyImageQuota(),
       DEFAULT_MAX_BATCH_IMAGES,
       Date.now(),
     )
@@ -266,33 +260,20 @@ function purgeOldEvents() {
 purgeOldEvents()
 setInterval(purgeOldEvents, 24 * 60 * 60 * 1000)
 
-// 超过 1 小时的代理用量记录已不再影响配额，按天清理
-function purgeOldProxyUsage() {
-  const cutoff = Date.now() - 6 * HOUR_MS
-  const result = db.query('DELETE FROM proxy_usage WHERE created_at < ?').run(cutoff)
-  if (result.changes > 0) logger.info({ scope: 'quota', deleted: result.changes }, 'Purged old proxy_usage rows')
-}
-purgeOldProxyUsage()
-setInterval(purgeOldProxyUsage, HOUR_MS)
+// 定期清理过期的登录限速记录，防止内存泄漏
+setInterval(() => {
+  const now = Date.now()
+  for (const [ip, entry] of loginAttempts) {
+    if (entry.resetAt < now) loginAttempts.delete(ip)
+  }
+}, 5 * 60 * 1000)
 
 // ===== 工具 =====
 
-function normalizeQuotaValue(value: unknown, fallback = 100): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.max(0, Math.min(100_000, Math.trunc(numeric)))
-}
-
-function normalizeBatchImageLimit(value: unknown, fallback = 10): number {
+function normalizeBatchImageLimit(value: unknown, fallback = 4): number {
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) return fallback
   return Math.max(1, Math.min(100, Math.trunc(numeric)))
-}
-
-function parseQuotaPatchValue(value: unknown): number | null {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100_000) return null
-  return Math.trunc(numeric)
 }
 
 function parseBatchImageLimitPatchValue(value: unknown): number | null {
@@ -301,27 +282,46 @@ function parseBatchImageLimitPatchValue(value: unknown): number | null {
   return Math.trunc(numeric)
 }
 
+let cachedTeamSettings: Record<string, unknown> | null = null
+
+// 返回缓存的浅拷贝，避免调用方原地改写污染缓存（缓存与数据库在写库失败时会分叉）
 function readTeamSettingsRecord(): Record<string, unknown> {
+  if (cachedTeamSettings) return { ...cachedTeamSettings }
   const row = db.query('SELECT settings_json FROM team_config WHERE id = 1').get() as { settings_json: string } | null
-  if (!row) return {}
+  if (!row) { cachedTeamSettings = {}; return {} }
   try {
     const parsed = JSON.parse(row.settings_json)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      cachedTeamSettings = parsed as Record<string, unknown>
+      return { ...cachedTeamSettings }
+    }
   } catch {
     logger.warn({ scope: 'admin' }, 'Invalid team_config.settings_json, using defaults')
   }
+  cachedTeamSettings = {}
   return {}
 }
 
 function getTeamSettingsPayload() {
   const settings = readTeamSettingsRecord()
   return {
-    defaultHourlyImageQuota: normalizeQuotaValue(settings.defaultHourlyImageQuota, DEFAULT_HOURLY_IMAGE_QUOTA),
+    defaultMaxBatchImages: normalizeBatchImageLimit(settings.defaultMaxBatchImages, DEFAULT_MAX_BATCH_IMAGES),
+    maxConcurrent: MAX_CONCURRENT,
+    maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
   }
 }
 
-function getDefaultHourlyImageQuota(): number {
-  return getTeamSettingsPayload().defaultHourlyImageQuota
+// 新注册用户的默认批量上限：优先采用管理端配置的团队设置，未配置时回退到环境默认值
+function getDefaultMaxBatchImages(): number {
+  return getTeamSettingsPayload().defaultMaxBatchImages
+}
+
+// 删除一张公开图对应的原图与缩略图文件，忽略文件不存在等错误
+function deletePublicImageFiles(id: string): Promise<unknown> {
+  return Promise.allSettled([
+    unlink(path.join(PUBLIC_DIR, `${id}.webp`)).catch(() => {}),
+    unlink(path.join(THUMBS_DIR, `${id}.webp`)).catch(() => {}),
+  ])
 }
 
 function saveTeamSettingsRecord(settings: Record<string, unknown>, updatedBy: string | null) {
@@ -333,6 +333,7 @@ function saveTeamSettingsRecord(settings: Record<string, unknown>, updatedBy: st
       updated_at = excluded.updated_at,
       updated_by = excluded.updated_by
   `).run(JSON.stringify(settings), Date.now(), updatedBy)
+  cachedTeamSettings = { ...settings }
 }
 
 const RATE_LIMIT = 5
@@ -350,9 +351,9 @@ function isRateLimited(ip: string): boolean {
 }
 
 function getClientIp(c: Context): string {
-  const xff = c.req.header('x-forwarded-for')
-  if (xff) return xff.split(',')[0].trim()
-  return c.req.header('x-real-ip') ?? 'unknown'
+  return c.req.header('x-real-ip')
+    ?? c.req.header('x-forwarded-for')?.split(',')[0].trim()
+    ?? 'unknown'
 }
 
 function resolveStaticPath(urlPath: string): string | null {
@@ -427,27 +428,6 @@ function generateInviteCode(): string {
   return code
 }
 
-function getHourlySuccessfulImages(userId: string, now = Date.now()): { used: number; resetAt: number | null } {
-  const cutoff = now - HOUR_MS
-  const row = db.query(`
-    SELECT COALESCE(SUM(image_count), 0) AS used, MIN(created_at) AS first_at
-    FROM proxy_usage
-    WHERE user_id = ? AND created_at >= ?
-  `).get(userId, cutoff) as { used: number | null; first_at: number | null }
-
-  const used = Math.max(0, Number(row.used ?? 0))
-  return { used, resetAt: row.first_at ? row.first_at + HOUR_MS : null }
-}
-
-function recordProxyUsage(userId: string, imageCount: number, now = Date.now()): void {
-  db.query('INSERT INTO proxy_usage (user_id, image_count, created_at) VALUES (?, ?, ?)').run(userId, Math.max(1, imageCount), now)
-}
-
-function getUserHourlyQuota(userId: string): number | null {
-  const row = db.query('SELECT hourly_image_quota FROM users WHERE id = ?').get(userId) as { hourly_image_quota: number } | null
-  return row ? normalizeQuotaValue(row.hourly_image_quota, DEFAULT_HOURLY_IMAGE_QUOTA) : null
-}
-
 function getUserMaxBatchImages(userId: string): number | null {
   const row = db.query('SELECT max_batch_images FROM users WHERE id = ?').get(userId) as { max_batch_images: number } | null
   return row ? normalizeBatchImageLimit(row.max_batch_images, DEFAULT_MAX_BATCH_IMAGES) : null
@@ -464,14 +444,13 @@ function normalizeDisplayNameValue(value: unknown): { value: string } | { error:
 
 function getAuthUserPayload(userId: string) {
   const user = db.query(`
-    SELECT id, username, display_name, is_admin, hourly_image_quota, max_batch_images, avatar_updated_at, public_storage_bytes
-    FROM users WHERE id = ?
-  `).get(userId) as Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'hourly_image_quota' | 'max_batch_images' | 'avatar_updated_at' | 'public_storage_bytes'> | null
+    SELECT u.id, u.username, u.display_name, u.is_admin, u.max_batch_images,
+           u.avatar_updated_at, u.public_storage_bytes,
+           (SELECT COUNT(*) FROM public_images pi WHERE pi.user_id = u.id) AS public_gallery_count
+    FROM users u WHERE u.id = ?
+  `).get(userId) as (Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'max_batch_images' | 'avatar_updated_at' | 'public_storage_bytes'> & { public_gallery_count: number }) | null
   if (!user) return null
 
-  const hourlyImageQuota = normalizeQuotaValue(user.hourly_image_quota, DEFAULT_HOURLY_IMAGE_QUOTA)
-  const hourlyUsage = getHourlySuccessfulImages(user.id)
-  const publicGalleryCount = (db.query('SELECT COUNT(*) AS n FROM public_images WHERE user_id = ?').get(user.id) as { n: number }).n
   const publicStorageBytes = Math.max(0, Number(user.public_storage_bytes ?? 0))
 
   return {
@@ -480,12 +459,10 @@ function getAuthUserPayload(userId: string) {
     displayName: user.display_name || user.username,
     isAdmin: user.is_admin === 1,
     avatarUpdatedAt: user.avatar_updated_at,
-    hourlyImageQuota,
     maxBatchImages: normalizeBatchImageLimit(user.max_batch_images, DEFAULT_MAX_BATCH_IMAGES),
-    hourlyUsed: hourlyUsage.used,
-    hourlyRemaining: Math.max(0, hourlyImageQuota - hourlyUsage.used),
-    quotaResetAt: hourlyUsage.resetAt,
-    publicGalleryCount,
+    maxConcurrent: MAX_CONCURRENT,
+    maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
+    publicGalleryCount: user.public_gallery_count,
     publicStorageBytes,
     publicStorageQuotaBytes: PER_USER_PUBLIC_QUOTA_BYTES,
   }
@@ -580,6 +557,8 @@ function createApiProxyResponseHeaders(response: Response): Headers {
 const app = new Hono()
 
 app.use('*', async (c, next) => {
+  const pathname = new URL(c.req.url).pathname
+  if (pathname.startsWith('/api/') || pathname.startsWith('/api-proxy/')) return next()
   const response = serveStaticAsset(c)
   if (response) return response
   return next()
@@ -640,7 +619,7 @@ app.post('/api/auth/register', async (c) => {
   const userId = crypto.randomUUID()
   const now = Date.now()
   const hash = await Bun.password.hash(password, { algorithm: 'bcrypt', cost: 10 })
-  const defaultHourlyQuota = getDefaultHourlyImageQuota()
+  const defaultMaxBatchImages = getDefaultMaxBatchImages()
 
   let inviteExhausted = false
   try {
@@ -652,8 +631,8 @@ app.post('/api/auth/register', async (c) => {
         inviteExhausted = true
         throw new Error('INVITE_EXHAUSTED')
       }
-      db.query('INSERT INTO users (id, username, password_hash, is_admin, hourly_image_quota, max_batch_images, created_at, last_login_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)').run(
-        userId, username, hash, defaultHourlyQuota, DEFAULT_MAX_BATCH_IMAGES, now, now,
+      db.query('INSERT INTO users (id, username, password_hash, is_admin, max_batch_images, created_at, last_login_at) VALUES (?, ?, ?, 0, ?, ?, ?)').run(
+        userId, username, hash, defaultMaxBatchImages, now, now,
       )
       db.query('INSERT INTO invite_redemptions (code, user_id, redeemed_at) VALUES (?, ?, ?)').run(invite, userId, now)
     })()
@@ -722,9 +701,9 @@ app.post('/api/auth/avatar', async (c) => {
   return c.json({ avatarUpdatedAt: now })
 })
 
-app.delete('/api/auth/avatar', (c) => {
+app.delete('/api/auth/avatar', async (c) => {
   const payload = c.get('jwtPayload') as { sub: string }
-  try { unlinkSync(path.join(AVATARS_DIR, `${payload.sub}.webp`)) } catch {}
+  await unlink(path.join(AVATARS_DIR, `${payload.sub}.webp`)).catch(() => {})
   db.query('UPDATE users SET avatar_updated_at = NULL WHERE id = ?').run(payload.sub)
   return c.json({ ok: true })
 })
@@ -746,6 +725,60 @@ app.get('/api/avatars/:user_id', (c) => {
 })
 
 // ===== Authenticated API Proxy =====
+
+let teamInflight = 0
+const userInflight = new Map<string, number>()
+
+// SSE 静默期心跳间隔：上游分片之间的安静期超过此值就注入一行注释，保持 socket 活跃。
+const PROXY_SSE_HEARTBEAT_MS = Math.max(1000, Number(process.env.PROXY_SSE_HEARTBEAT_MS ?? 15_000))
+const PROXY_HEARTBEAT_BYTES = new TextEncoder().encode(': ping\n')
+
+// 转发上游响应体。对 SSE 流，在行边界（上一字节为换行）的静默期注入注释行心跳，
+// 规避 Bun idleTimeout（最大 255s）；注释行（: 开头、单换行结尾）会被前端 SSE 解析器忽略，
+// 且不含空行，不会提前终止多行事件。完成 / 取消 / 出错时调用 onSettled 释放并发槽位。
+function createProxyBodyStream(
+  upstreamBody: ReadableStream<Uint8Array>,
+  isSse: boolean,
+  onSettled: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = upstreamBody.getReader()
+  let heartbeat: ReturnType<typeof setInterval> | null = null
+  let atLineBoundary = true
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (isSse) {
+        heartbeat = setInterval(() => {
+          if (!atLineBoundary) return
+          try { controller.enqueue(PROXY_HEARTBEAT_BYTES) } catch { /* 已关闭 */ }
+        }, PROXY_SSE_HEARTBEAT_MS)
+      }
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (value && value.length > 0) {
+              atLineBoundary = value[value.length - 1] === 0x0a
+              controller.enqueue(value)
+            }
+          }
+          controller.close()
+        } catch (err) {
+          controller.error(err)
+        } finally {
+          if (heartbeat) clearInterval(heartbeat)
+          onSettled()
+        }
+      })()
+    },
+    cancel(reason) {
+      if (heartbeat) clearInterval(heartbeat)
+      onSettled()
+      return reader.cancel(reason)
+    },
+  })
+}
 
 app.use('/api-proxy/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256', headerName: 'X-PicPilot-Authorization' }))
 app.use('/api-proxy/*', requireUser)
@@ -772,19 +805,16 @@ app.all('/api-proxy/*', async (c) => {
   try {
     target = resolveApiProxyTarget(c)
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : '团队 API 代理配置无效，请管理员检查部署环境变量。' }, 500)
+    return c.json({ error: err instanceof Error ? err.message : 'API 代理配置无效。' }, 500)
   }
-  if (!target) return c.json({ error: '团队 API 代理还没有配置上游地址，请管理员填写 TEAM_API_BASE_URL 或 API_PROXY_URL。' }, 503)
+  if (!target) return c.json({ error: '上游 API 地址未配置，请联系管理员。' }, 503)
 
   const payload = c.get('jwtPayload') as { sub: string }
-  const quota = getUserHourlyQuota(payload.sub)
-  if (quota == null) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
   const maxBatchImages = getUserMaxBatchImages(payload.sub)
   if (maxBatchImages == null) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
 
-  let requestedImages = 0
   if (c.req.method === 'POST') {
-    requestedImages = await estimateRequestedImageCount(c.req.raw, target.pathname)
+    const requestedImages = await estimateRequestedImageCount(c.req.raw, target.pathname)
     if (requestedImages > maxBatchImages) {
       return c.json({
         error: `单次批量生成数量上限为 ${maxBatchImages} 张，本次请求 ${requestedImages} 张。请减少数量后重试。`,
@@ -792,22 +822,36 @@ app.all('/api-proxy/*', async (c) => {
         requested: requestedImages,
       }, 429)
     }
-    const usage = getHourlySuccessfulImages(payload.sub)
-    const remaining = Math.max(0, quota - usage.used)
-    if (usage.used >= quota || requestedImages > remaining) {
-      const resetAtText = usage.resetAt ? `，最早约 ${new Date(usage.resetAt).toLocaleString('zh-CN')} 释放部分额度` : ''
-      const reason = usage.used >= quota
-        ? '团队服务小时额度已用完'
-        : `团队服务剩余额度不足（本次预计 ${requestedImages} 张，剩余 ${remaining} 张）`
-      return c.json({
-        error: `${reason}：过去 1 小时成功 ${usage.used}/${quota} 张${resetAtText}`,
-        quota,
-        used: usage.used,
-        remaining,
-        requested: requestedImages,
-        resetAt: usage.resetAt,
-      }, 429)
-    }
+  }
+
+  // 并发控制
+  const userId = payload.sub
+  const userCount = userInflight.get(userId) ?? 0
+  if (userCount >= MAX_CONCURRENT_PER_USER) {
+    return c.json({
+      error: `你有 ${userCount} 个请求在处理中，请等待完成后再试。`,
+      inflight: userCount,
+      maxPerUser: MAX_CONCURRENT_PER_USER,
+    }, 429)
+  }
+  if (teamInflight >= MAX_CONCURRENT) {
+    return c.json({
+      error: `服务繁忙，当前 ${teamInflight} 个请求在处理中，请几秒后重试。`,
+      inflight: teamInflight,
+      maxConcurrent: MAX_CONCURRENT,
+    }, 429)
+  }
+
+  teamInflight++
+  userInflight.set(userId, userCount + 1)
+  let released = false
+  const releaseSlot = () => {
+    if (released) return
+    released = true
+    teamInflight--
+    const next = (userInflight.get(userId) ?? 1) - 1
+    if (next <= 0) userInflight.delete(userId)
+    else userInflight.set(userId, next)
   }
 
   let upstream: Response
@@ -819,13 +863,25 @@ app.all('/api-proxy/*', async (c) => {
       signal: c.req.raw.signal,
     })
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试或联系管理员检查团队 API。' }, 502)
-  }
-  if (c.req.method === 'POST' && upstream.ok) {
-    recordProxyUsage(payload.sub, requestedImages)
+    releaseSlot()
+    return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试。' }, 502)
   }
 
-  return new Response(upstream.body, {
+  // 槽位必须保持到响应体完全传输（或客户端取消）为止；否则并发限制只覆盖到首字节，
+  // 对流式上游而言整个传输周期都不受约束。
+  if (!upstream.body) {
+    releaseSlot()
+    return new Response(null, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: createApiProxyResponseHeaders(upstream),
+    })
+  }
+
+  const isSse = (upstream.headers.get('content-type') || '').toLowerCase().includes('text/event-stream')
+  const monitoredBody = createProxyBodyStream(upstream.body, isSse, releaseSlot)
+
+  return new Response(monitoredBody, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: createApiProxyResponseHeaders(upstream),
@@ -909,10 +965,10 @@ app.patch('/api/admin/team-settings', async (c) => {
   const settings = readTeamSettingsRecord()
   let hasUpdates = false
 
-  if ('defaultHourlyImageQuota' in record) {
-    const quota = parseQuotaPatchValue(record.defaultHourlyImageQuota)
-    if (quota == null) return c.json({ error: '默认小时额度必须是 0 到 100000 之间的数字。0 表示新用户默认暂停团队服务。' }, 400)
-    settings.defaultHourlyImageQuota = quota
+  if ('defaultMaxBatchImages' in record) {
+    const val = parseBatchImageLimitPatchValue(record.defaultMaxBatchImages)
+    if (val == null) return c.json({ error: '默认批量上限必须是 1 到 100 之间的数字。' }, 400)
+    settings.defaultMaxBatchImages = val
     hasUpdates = true
   }
 
@@ -922,25 +978,16 @@ app.patch('/api/admin/team-settings', async (c) => {
 })
 
 app.get('/api/admin/users', (c) => {
-  const hourAgo = Date.now() - HOUR_MS
   const rows = db.query(`
-    SELECT u.id, u.username, u.is_admin, u.hourly_image_quota, u.max_batch_images, u.created_at, u.last_login_at,
+    SELECT u.id, u.username, u.is_admin, u.max_batch_images, u.created_at, u.last_login_at,
            u.avatar_updated_at,
            s.total_requests, s.success_count, s.failure_count,
            s.last_request_at,
-           s.total_duration_ms, s.total_output_bytes,
-           COALESCE(h.hourly_success_images, 0) AS hourly_success_images
+           s.total_duration_ms, s.total_output_bytes
     FROM users u
     LEFT JOIN user_stats s ON s.user_id = u.id
-    LEFT JOIN (
-      SELECT user_id,
-             COALESCE(SUM(image_count), 0) AS hourly_success_images
-      FROM proxy_usage
-      WHERE created_at >= ?
-      GROUP BY user_id
-    ) h ON h.user_id = u.id
     ORDER BY u.created_at DESC
-  `).all(hourAgo)
+  `).all()
   return c.json({ users: rows })
 })
 
@@ -963,12 +1010,6 @@ app.patch('/api/admin/users/:id', async (c) => {
   const updates: string[] = []
   const args: unknown[] = []
   if (typeof body.isAdmin === 'boolean') { updates.push('is_admin = ?'); args.push(body.isAdmin ? 1 : 0) }
-  if ('hourlyImageQuota' in body) {
-    const quota = parseQuotaPatchValue(body.hourlyImageQuota)
-    if (quota == null) return c.json({ error: '小时额度必须是 0 到 100000 之间的数字。0 表示暂停该用户使用团队服务。' }, 400)
-    updates.push('hourly_image_quota = ?')
-    args.push(quota)
-  }
   if ('maxBatchImages' in body) {
     const maxBatchImages = parseBatchImageLimitPatchValue(body.maxBatchImages)
     if (maxBatchImages == null) return c.json({ error: '批量生成数量上限必须是 1 到 100 之间的数字。' }, 400)
@@ -986,16 +1027,13 @@ app.patch('/api/admin/users/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-app.delete('/api/admin/users/:id', (c) => {
+app.delete('/api/admin/users/:id', async (c) => {
   const id = c.req.param('id')
   const payload = c.get('jwtPayload') as { sub: string }
   if (id === payload.sub) return c.json({ error: '不能删除当前登录的管理员账号。' }, 400)
 
   const imgs = db.query('SELECT id FROM public_images WHERE user_id = ?').all(id) as Array<{ id: string }>
-  for (const img of imgs) {
-    try { unlinkSync(path.join(PUBLIC_DIR, `${img.id}.webp`)) } catch {}
-    try { unlinkSync(path.join(THUMBS_DIR, `${img.id}.webp`)) } catch {}
-  }
+  await Promise.allSettled(imgs.map((img) => deletePublicImageFiles(img.id)))
 
   const result = db.query('DELETE FROM users WHERE id = ?').run(id)
   if (result.changes === 0) return c.json({ error: '用户不存在，可能已被删除。' }, 404)
@@ -1219,8 +1257,7 @@ app.post('/api/admin/gallery/:id/revoke', async (c) => {
   const actor = db.query('SELECT username, display_name FROM users WHERE id = ?').get(payload.sub) as { username: string; display_name: string | null } | null
   const actorName = actor?.display_name?.trim() || actor?.username || payload.username || '管理员'
 
-  try { unlinkSync(path.join(PUBLIC_DIR, `${id}.webp`)) } catch {}
-  try { unlinkSync(path.join(THUMBS_DIR, `${id}.webp`)) } catch {}
+  await deletePublicImageFiles(id)
 
   const promptExcerpt = img.prompt.length > 80 ? `${img.prompt.slice(0, 80)}…` : img.prompt
   const notificationBody = reason
@@ -1345,15 +1382,22 @@ app.post('/api/gallery', async (c) => {
   if (inputBuffer.length > 50 * 1024 * 1024) return c.json({ error: '图片过大，请上传 50MB 以内的图片。' }, 413)
 
   const id = crypto.randomUUID()
-  const finalBuffer = await sharp(inputBuffer)
-    .resize({ width: MAX_IMAGE_LONG_EDGE, height: MAX_IMAGE_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: 85 })
-    .toBuffer()
-  const finalMeta = await sharp(finalBuffer).metadata()
-  const thumbBuffer = await sharp(inputBuffer)
-    .resize({ width: THUMB_LONG_EDGE, height: THUMB_LONG_EDGE, fit: 'inside' })
-    .webp({ quality: 80 })
-    .toBuffer()
+  let finalBuffer: Buffer
+  let finalMeta: { width?: number; height?: number }
+  let thumbBuffer: Buffer
+  try {
+    finalBuffer = await sharp(inputBuffer)
+      .resize({ width: MAX_IMAGE_LONG_EDGE, height: MAX_IMAGE_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 85 })
+      .toBuffer()
+    finalMeta = await sharp(finalBuffer).metadata()
+    thumbBuffer = await sharp(inputBuffer)
+      .resize({ width: THUMB_LONG_EDGE, height: THUMB_LONG_EDGE, fit: 'inside' })
+      .webp({ quality: 80 })
+      .toBuffer()
+  } catch {
+    return c.json({ error: '无法处理这张图片，请换一张试试。' }, 400)
+  }
 
   await Promise.all([
     writeFile(path.join(PUBLIC_DIR, `${id}.webp`), finalBuffer),
@@ -1393,7 +1437,7 @@ app.get('/api/gallery', (c) => {
   return c.json({ images, total })
 })
 
-app.delete('/api/gallery/:id', (c) => {
+app.delete('/api/gallery/:id', async (c) => {
   const payload = c.get('jwtPayload') as { sub: string }
   const id = c.req.param('id')
   const img = db.query('SELECT user_id, file_size FROM public_images WHERE id = ?').get(id) as { user_id: string; file_size: number | null } | null
@@ -1401,8 +1445,7 @@ app.delete('/api/gallery/:id', (c) => {
 
   if (img.user_id !== payload.sub) return c.json({ error: '无权删除这张图片。' }, 403)
 
-  try { unlinkSync(path.join(PUBLIC_DIR, `${id}.webp`)) } catch {}
-  try { unlinkSync(path.join(THUMBS_DIR, `${id}.webp`)) } catch {}
+  await deletePublicImageFiles(id)
   db.transaction(() => {
     db.query('DELETE FROM public_images WHERE id = ?').run(id)
     if (img.file_size) {
@@ -1444,6 +1487,10 @@ app.notFound((c) => {
 const server = Bun.serve({
   fetch: app.fetch,
   port: PORT,
+  // 图像生成 / Agent 的流式响应在分片之间可能出现较长静默（上游 cliproxyapi 代理的 CLI 后端
+  // 在生成大图时会安静一段时间）。Bun 默认 10s 空闲超时会在静默期直接断开 socket，导致前端
+  // fetch 抛出 "network error"。上调到 Bun 允许的最大值 255s，由 Caddy 的 600s 读写超时兜底。
+  idleTimeout: 255,
 })
 
 logger.info({ scope: 'server', url: server.url.href.replace(/\/$/, '') }, 'picpilot ready')
@@ -1454,6 +1501,7 @@ logger.info({
   dataDir: DATA_DIR,
   dbPath: DB_PATH,
   apiProxy: Boolean(API_PROXY_URL),
-  defaultQuota: getDefaultHourlyImageQuota(),
+  maxConcurrent: MAX_CONCURRENT,
+  maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
   defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
 }, 'Runtime configuration')
