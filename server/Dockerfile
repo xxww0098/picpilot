@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libvips42 \
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
-COPY index.ts .
+COPY index.ts config.ts concurrencyQueue.ts ./
+COPY utils/ utils/
 
 FROM oven/bun:1
 

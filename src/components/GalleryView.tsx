@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../contexts/AuthProvider";
 import {
     deleteGalleryImage,
@@ -147,6 +147,7 @@ export default function GalleryView({
     const [detail, setDetail] = useState<PublicGalleryImage | null>(null);
     // 详情大图当前展示的图片 id：默认结果图，点参考图缩略图可切到对应原图
     const [activeImageId, setActiveImageId] = useState<string | null>(null);
+    const detailScrollRef = useRef<HTMLDivElement>(null);
     const { user, refresh } = useAuth();
 
     const { data, loading, error, reload } = useAsyncQuery(
@@ -313,6 +314,7 @@ export default function GalleryView({
                 <ModalShell
                     portal
                     onClose={() => setDetail(null)}
+                    scrollRef={detailScrollRef}
                     zIndexClass="z-50"
                     backdropClassName="bg-black/60"
                     panelClassName="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-[hsl(240_10%_12%)] md:flex-row"
@@ -333,7 +335,7 @@ export default function GalleryView({
                             </button>
                         )}
                     </div>
-                    <div className="flex w-full flex-col gap-3 overflow-y-auto p-6 md:w-80">
+                    <div ref={detailScrollRef} className="flex w-full flex-col gap-3 overflow-y-auto p-6 md:w-80">
                         <div className="flex items-center justify-between gap-2">
                             <div className="flex min-w-0 items-center gap-2">
                                 <Avatar
