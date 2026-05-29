@@ -153,6 +153,37 @@ function isAgentTask(task: TaskRecord) {
   return task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
 }
 
+export interface GalleryFilter {
+  searchQuery: string
+  filterStatus: 'all' | 'running' | 'done' | 'error'
+  filterFavorite: boolean
+}
+
+// 画廊（历史）显示用的过滤 + 排序，TaskGrid 与「下载画廊图片」共用，保证下载与界面一致
+export function filterGalleryTasks(tasks: TaskRecord[], filter: GalleryFilter): TaskRecord[] {
+  const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
+  const q = filter.searchQuery.trim().toLowerCase()
+  return sorted.filter((t) => {
+    if (filter.filterFavorite && !t.isFavorite) return false
+    if (!(filter.filterStatus === 'all' || t.status === filter.filterStatus)) return false
+    if (!q) return true
+    const prompt = (t.prompt || '').toLowerCase()
+    const paramStr = JSON.stringify(t.params).toLowerCase()
+    return prompt.includes(q) || paramStr.includes(q)
+  })
+}
+
+// 当前画廊界面显示的全部输出图片 id（按显示顺序）
+export function getGalleryDisplayedImageIds(
+  state: Pick<AppState, 'tasks' | 'searchQuery' | 'filterStatus' | 'filterFavorite'>,
+): string[] {
+  return filterGalleryTasks(state.tasks, {
+    searchQuery: state.searchQuery,
+    filterStatus: state.filterStatus,
+    filterFavorite: state.filterFavorite,
+  }).flatMap((t) => t.outputImages)
+}
+
 function countSuccessfulOutputImages(tasks: TaskRecord[]) {
   return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages.length : 0), 0)
 }

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, filterGalleryTasks } from '../store'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -28,21 +28,10 @@ export default function TaskGrid() {
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-  const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
-      const matchStatus = filterStatus === 'all' || t.status === filterStatus
-      if (!matchStatus) return false
-      
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      return prompt.includes(q) || paramStr.includes(q)
-    })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  const filteredTasks = useMemo(
+    () => filterGalleryTasks(tasks, { searchQuery, filterStatus, filterFavorite }),
+    [tasks, searchQuery, filterStatus, filterFavorite],
+  )
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({

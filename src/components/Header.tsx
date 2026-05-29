@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { useStore } from '../store'
+import { useStore, getGalleryDisplayedImageIds } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -10,7 +10,7 @@ import { useAuth } from '../contexts/AuthProvider'
 import { useNotificationUnread } from '../hooks/useNotificationUnread'
 import { openConfirmDialog, showAppToast } from '../lib/dialog'
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { downloadGalleryAsZip, fetchAllGalleryImages } from '../lib/downloadGallery'
+import { downloadImagesAsZip, formatExportFileTime } from '../lib/downloadImages'
 import UserMenu from './UserMenu'
 
 const HelpModal = lazy(() => import('./HelpModal'))
@@ -96,26 +96,24 @@ export default function Header() {
 
   const handleDownloadGallery = async () => {
     if (downloadingGallery) return
-    let images
-    try {
-      images = await fetchAllGalleryImages()
-    } catch (e) {
-      showAppToast(getUserFacingErrorMessage(e, '获取画廊列表失败'), 'error')
-      return
-    }
-    if (images.length === 0) {
-      showAppToast('画廊还没有图片。', 'info')
+    // 下载「用户自己的画廊（历史）」当前显示的图片，而非公开/共享画廊
+    const ids = getGalleryDisplayedImageIds(useStore.getState())
+    if (ids.length === 0) {
+      showAppToast('画廊里还没有可下载的图片。', 'info')
       return
     }
     openConfirmDialog({
       title: '下载画廊图片',
-      message: `将把画廊全部 ${images.length} 张图片打包成一个 ZIP 文件下载，确定吗？`,
+      message: `将把当前画廊显示的 ${ids.length} 张图片打包成一个 ZIP 文件下载，确定吗？`,
       confirmText: '下载',
       onConfirm: async () => {
         setDownloadingGallery(true)
-        showAppToast(`正在打包 ${images.length} 张图片，请稍候…`, 'info')
+        showAppToast(`正在打包 ${ids.length} 张图片，请稍候…`, 'info')
         try {
-          const { successCount, failCount } = await downloadGalleryAsZip(images)
+          const { successCount, failCount } = await downloadImagesAsZip(
+            ids,
+            `picpilot-gallery_${formatExportFileTime(new Date())}`,
+          )
           if (successCount === 0) {
             showAppToast('全部图片下载失败，请稍后重试。', 'error')
           } else if (failCount > 0) {

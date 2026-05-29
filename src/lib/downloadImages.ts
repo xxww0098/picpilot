@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { ensureImageCached } from '../store'
 
 const MIME_EXTENSIONS: Record<string, string> = {
@@ -40,6 +41,44 @@ export async function downloadImageIds(imageIds: string[], fileNameBase = 'image
     }
   }
 
+  return { successCount, failCount }
+}
+
+// 把多张本地图片打包成单个 ZIP 一次性下载；单张失败跳过并计数
+export async function downloadImagesAsZip(
+  imageIds: string[],
+  fileNameBase = 'images',
+  onProgress?: (done: number, total: number) => void,
+): Promise<DownloadImagesResult> {
+  const zip = new JSZip()
+  let successCount = 0
+  let failCount = 0
+  let done = 0
+  const pad = String(imageIds.length).length
+
+  const worker = async (start: number) => {
+    for (let i = start; i < imageIds.length; i += 5) {
+      try {
+        const blob = await getImageBlob(imageIds[i])
+        const order = String(i + 1).padStart(pad, '0')
+        zip.file(`${order}.${getBlobExtension(blob)}`, blob)
+        successCount++
+      } catch (err) {
+        console.error('[downloadImagesAsZip] failed:', imageIds[i], err)
+        failCount++
+      } finally {
+        done++
+        onProgress?.(done, imageIds.length)
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(5, imageIds.length)) }, (_, k) => worker(k)),
+  )
+
+  if (successCount === 0) return { successCount, failCount }
+  const archive = await zip.generateAsync({ type: 'blob' })
+  triggerDownload(archive, `${fileNameBase}.zip`)
   return { successCount, failCount }
 }
 
