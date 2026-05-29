@@ -48,7 +48,7 @@ export interface AuthUser {
   avatarUpdatedAt: number | null
   maxBatchImages: number
   maxConcurrent: number
-  maxConcurrentPerUser: number
+  maxQueue: number
   publicGalleryCount: number
   publicStorageBytes: number
   publicStorageQuotaBytes: number
@@ -67,9 +67,9 @@ function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
     displayName: data.displayName || data.username || '',
     isAdmin: !!data.isAdmin,
     avatarUpdatedAt: data.avatarUpdatedAt ?? null,
-    maxBatchImages: Number(data.maxBatchImages ?? 4),
+    maxBatchImages: Number(data.maxBatchImages ?? 10),
     maxConcurrent: Number(data.maxConcurrent ?? 5),
-    maxConcurrentPerUser: Number(data.maxConcurrentPerUser ?? 2),
+    maxQueue: Number(data.maxQueue ?? 50),
     publicGalleryCount: Number(data.publicGalleryCount ?? 0),
     publicStorageBytes: Number(data.publicStorageBytes ?? 0),
     publicStorageQuotaBytes: Number(data.publicStorageQuotaBytes ?? 0),

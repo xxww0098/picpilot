@@ -64,10 +64,10 @@ export default function TeamSettings() {
               </dd>
             </div>
             <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3">
-              <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">每人并发</dt>
+              <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">排队上限</dt>
               <dd className="mt-1 flex items-baseline gap-1 text-[hsl(var(--foreground))]">
-                <span className="text-2xl font-semibold tabular-nums">{data.maxConcurrentPerUser}</span>
-                <span className="text-sm text-[hsl(var(--muted-foreground))]">个请求</span>
+                <span className="text-2xl font-semibold tabular-nums">{data.maxQueue}</span>
+                <span className="text-sm text-[hsl(var(--muted-foreground))]">个等待</span>
               </dd>
             </div>
             <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3">

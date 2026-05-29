@@ -200,9 +200,9 @@ export default function UserMenu({ user, onOpenGallery }: Props) {
 
           <div className="relative grid grid-cols-2 gap-3 px-5 sm:px-6">
             <InfoTile
-              label="并发上限"
-              value={`${user.maxConcurrentPerUser} 个`}
-              sub={`团队 ${user.maxConcurrent} 并发`}
+              label="服务并发"
+              value={`${user.maxConcurrent} 个`}
+              sub="超出自动排队"
               percent={100}
               tone="primary"
             />

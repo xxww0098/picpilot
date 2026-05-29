@@ -218,6 +218,9 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(createApiTimeoutError(profile.timeout)), profile.timeout * 1000)
+  const abortFromCaller = () => controller.abort()
+  if (opts.signal?.aborted) controller.abort()
+  opts.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
     let response: Response
@@ -351,5 +354,6 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
     return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
   } finally {
     clearTimeout(timeoutId)
+    opts.signal?.removeEventListener('abort', abortFromCaller)
   }
 }

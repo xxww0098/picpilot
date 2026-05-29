@@ -97,7 +97,7 @@ vi.mock('./lib/agentApi', () => ({
 }))
 import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { cancelTask, cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -252,6 +252,30 @@ describe('interrupted OpenAI running tasks', () => {
     })
     expect(result.tasks.find((item) => item.id === 'custom-running')).toEqual(customAsyncRunning)
     expect(result.tasks.find((item) => item.id === 'done-task')).toEqual(doneTask)
+  })
+})
+
+describe('cancelTask', () => {
+  it('marks a running task as stopped with the interrupted message', () => {
+    const running = task({ id: 'running-1', status: 'running', createdAt: 1_000, finishedAt: null, elapsed: null })
+    useStore.getState().setTasks([running])
+
+    cancelTask('running-1')
+
+    const updated = useStore.getState().tasks.find((t) => t.id === 'running-1')
+    // 与 TaskCard 的 isInterrupted 判定（error === '已停止生成。'）保持一致
+    expect(updated).toMatchObject({ status: 'error', error: '已停止生成。', customRecoverable: false })
+    expect(updated?.finishedAt).not.toBeNull()
+    expect(updated?.elapsed).not.toBeNull()
+  })
+
+  it('is a no-op for a task that is not running', () => {
+    const doneTask = task({ id: 'done-1', status: 'done' })
+    useStore.getState().setTasks([doneTask])
+
+    cancelTask('done-1')
+
+    expect(useStore.getState().tasks.find((t) => t.id === 'done-1')).toEqual(doneTask)
   })
 })
 

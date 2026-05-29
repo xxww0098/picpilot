@@ -30,7 +30,8 @@ API_PROXY_API_KEY=your-api-key
 CLIPROXY_API_URL=http://cliproxy:8317
 CLIPROXY_MGMT_KEY=your-management-key
 MAX_CONCURRENT_PROXY_REQUESTS=5
-MAX_CONCURRENT_PER_USER=2
+PROXY_QUEUE_MAX=50
+PROXY_QUEUE_MAX_WAIT_MS=120000
 ```
 
 | 变量 | 说明 | 必填 |
@@ -40,20 +41,25 @@ MAX_CONCURRENT_PER_USER=2
 | `API_PROXY_API_KEY` | CLIProxyAPI 的 API Key | 是 |
 | `CLIPROXY_API_URL` | CLIProxyAPI 地址（默认 `http://cliproxy:8317`） | 否 |
 | `CLIPROXY_MGMT_KEY` | CLIProxyAPI 管理密钥（用于查询凭证状态） | 否 |
-| `MAX_CONCURRENT_PROXY_REQUESTS` | 团队全局并发上限（默认 5） | 否 |
-| `MAX_CONCURRENT_PER_USER` | 单用户并发上限（默认 2） | 否 |
+| `MAX_CONCURRENT_PROXY_REQUESTS` | 全局并发上限（默认 5） | 否 |
+| `PROXY_QUEUE_MAX` | 等待队列长度上限（默认 50），已满则立即 429 | 否 |
+| `PROXY_QUEUE_MAX_WAIT_MS` | 排队最长等待毫秒（默认 120000，上限 240000），超时返回 429 | 否 |
 
 ## 并发控制
 
-系统采用三层并发限制：
+只设**一个全局并发上限**，超出的请求进入 **FIFO 队列排队等待**（不再有单用户并发上限）；前一个请求完成、腾出槽位后按先来先到顺序放行。这样高峰期表现为「多等一会儿」而非直接失败。
 
 | 层级 | 参数 | 默认值 | 作用 |
 |------|------|--------|------|
-| 团队并发 | `MAX_CONCURRENT_PROXY_REQUESTS` | 5 | 全局同时最多 5 个生图请求 |
-| 用户并发 | `MAX_CONCURRENT_PER_USER` | 2 | 单用户同时最多 2 个请求 |
-| 单次批量 | `DEFAULT_MAX_BATCH_IMAGES` | 4 | 一次请求最多 4 张图 |
+| 全局并发 | `MAX_CONCURRENT_PROXY_REQUESTS` | 5 | 同时最多 5 个生图请求进入上游 |
+| 排队上限 | `PROXY_QUEUE_MAX` | 50 | 最多 50 个请求排队，超出立即 429 |
+| 排队超时 | `PROXY_QUEUE_MAX_WAIT_MS` | 120000 | 排队等待超过 120s 返回 429 |
+| 单次批量 | `DEFAULT_MAX_BATCH_IMAGES` | 10 | 一次请求最多 10 张图（前端 UI 上限同为 10） |
 
-并发上限应根据 CLIProxyAPI 的上游凭证数量调整。每增加一个 API Key，可将 `MAX_CONCURRENT_PROXY_REQUESTS` 增加 5。
+- 全局并发应根据 CLIProxyAPI 的上游凭证数量调整。每增加一个 API Key，可将 `MAX_CONCURRENT_PROXY_REQUESTS` 增加 5。
+- **排队超时必须小于 Bun 的 socket 空闲超时（255s）**，否则连接会在静默排队期被断开；代码已将其钳制在 240s 内。
+- 客户端 API Profile 的超时（`timeout`）应设得**大于「排队超时 + 单次生成耗时」**，否则请求会在客户端侧先超时。出图慢时单次可达数分钟，建议 profile 超时设到 5–10 分钟。
+- 队列为单进程内存态，适用于当前单 `auth` 容器部署；若横向扩多副本需改用共享协调层（如 Redis），详见代码 `server/concurrencyQueue.ts` 的抽象边界。
 
 ## compose.yml
 
@@ -110,7 +116,8 @@ services:
       - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cliproxy:8317}
       - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY}
       - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
-      - MAX_CONCURRENT_PER_USER=${MAX_CONCURRENT_PER_USER:-2}
+      - PROXY_QUEUE_MAX=${PROXY_QUEUE_MAX:-50}
+      - PROXY_QUEUE_MAX_WAIT_MS=${PROXY_QUEUE_MAX_WAIT_MS:-120000}
       - DATA_DIR=/data
       - DB_PATH=/data/auth.db
     volumes:

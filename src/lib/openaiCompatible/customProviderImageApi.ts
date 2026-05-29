@@ -284,6 +284,9 @@ export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiP
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const controller = new AbortController()
   let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(createApiTimeoutError(profile.timeout)), profile.timeout * 1000)
+  const abortFromCaller = () => controller.abort()
+  if (opts.signal?.aborted) controller.abort()
+  opts.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
     const proxyConfig = readClientDevProxyConfig()
@@ -313,5 +316,6 @@ export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiP
     return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
+    opts.signal?.removeEventListener('abort', abortFromCaller)
   }
 }

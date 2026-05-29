@@ -16,11 +16,11 @@ import type {
 import { DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
+import type { QueueStats } from './lib/queueApi'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
-  putTask as dbPutTask,
   deleteTask as dbDeleteTask,
   clearTasks as dbClearTasks,
   getAllAgentConversations,
@@ -50,7 +50,6 @@ import { getUserFacingErrorMessage } from './lib/userFacingText'
 import {
   getPersistableAgentConversation,
   getPersistableAgentConversations,
-  getPersistableRawResponsePayload,
   isEmptyAgentConversation,
   mergeAgentConversationsForStorage,
   mergeImportedAgentConversations,
@@ -73,6 +72,15 @@ import {
   stopAgentResponse,
   submitAgentMessage,
 } from './lib/agentOrchestrator'
+import {
+  firstActualParams,
+  getPersistableTask,
+  isAsyncCustomProviderTask,
+  isRunningOpenAITask,
+  mapActualParamsByImage,
+  putTask,
+  readImageSizeParamsList,
+} from './lib/taskPersistence'
 import {
   cacheImage,
   cacheThumbnail,
@@ -408,6 +416,10 @@ interface AppState {
   supportPromptSkippedForImportedData: boolean
   setSupportPromptOpen: (v: boolean) => void
   dismissSupportPrompt: () => void
+
+  // Queue stats（后端全局排队深度快照，由 QueueBanner 轮询写入；瞬时态，不持久化）
+  queueStats: QueueStats | null
+  setQueueStats: (stats: QueueStats | null) => void
 
   // Toast
   toast: { message: string; type: ToastType } | null
@@ -1044,6 +1056,10 @@ export const useStore = create<AppState>()(
       setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
       dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
 
+      // Queue stats
+      queueStats: null,
+      setQueueStats: (queueStats) => set({ queueStats }),
+
       // Toast
       toast: null,
       showToast: (message, type = 'info') => {
@@ -1118,29 +1134,9 @@ function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
-function getPersistableTask(task: TaskRecord): TaskRecord {
-  const rawResponsePayload = getPersistableRawResponsePayload(task.rawResponsePayload)
-  return rawResponsePayload === task.rawResponsePayload ? task : { ...task, rawResponsePayload }
-}
-
-function putTask(task: TaskRecord): Promise<IDBValidKey> {
-  return dbPutTask(getPersistableTask(task))
-}
-
 export function getCodexCliPromptKey(settings: AppSettings): string {
   const profile = getActiveApiProfile(settings)
   return `${profile.baseUrl}\n${profile.apiKey}`
-}
-
-function isRunningOpenAITask(task: TaskRecord) {
-  return task.status === 'running'
-}
-
-function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasInputImages: boolean) {
-  const customProvider = getCustomProviderDefinition(settings, provider)
-  if (!customProvider?.poll) return false
-  const submitMapping = hasInputImages && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
-  return Boolean(submitMapping.taskIdPath)
 }
 
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
@@ -1288,65 +1284,6 @@ function scheduleCustomRecovery(taskId: string, delayMs = CUSTOM_RECOVERY_POLL_M
   }, delayMs)
   customRecoveryTimers.set(taskId, timer)
 }
-
-function hasActualParams(params: Partial<TaskParams> | undefined): params is Partial<TaskParams> {
-  return Boolean(params && Object.keys(params).length > 0)
-}
-
-function firstActualParams(paramsList: Array<Partial<TaskParams> | undefined> | undefined): Partial<TaskParams> | undefined {
-  return paramsList?.find(hasActualParams)
-}
-
-function mapActualParamsByImage(outputIds: string[], paramsList: Array<Partial<TaskParams> | undefined> | undefined) {
-  const mapped = paramsList?.reduce<Record<string, Partial<TaskParams>>>((acc, params, index) => {
-    const imgId = outputIds[index]
-    if (imgId && hasActualParams(params)) acc[imgId] = params
-    return acc
-  }, {})
-  return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
-}
-
-async function readImageSizeParam(dataUrl: string): Promise<Partial<TaskParams> | undefined> {
-  if (typeof Image === 'undefined') return undefined
-
-  return new Promise((resolve) => {
-    let settled = false
-    const image = new Image()
-    const finish = (params: Partial<TaskParams> | undefined) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve(params)
-    }
-    const timer = setTimeout(() => finish(undefined), 2000)
-    image.onload = () => {
-      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-        finish({ size: `${image.naturalWidth}x${image.naturalHeight}` })
-      } else {
-        finish(undefined)
-      }
-    }
-    image.onerror = () => finish(undefined)
-    image.src = dataUrl
-    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
-      finish({ size: `${image.naturalWidth}x${image.naturalHeight}` })
-    }
-  })
-}
-
-async function readImageSizeParamsList(images: string[]): Promise<Array<Partial<TaskParams> | undefined>> {
-  return Promise.all(images.map((image) => readImageSizeParam(image)))
-}
-
-async function resolveImageSizeParamsList(
-  images: string[],
-  preferred?: Array<Partial<TaskParams> | undefined>,
-): Promise<Array<Partial<TaskParams> | undefined>> {
-  if (preferred?.length === images.length && preferred.every(hasActualParams)) return preferred
-  const fallback = await readImageSizeParamsList(images)
-  return images.map((_, index) => hasActualParams(preferred?.[index]) ? preferred?.[index] : fallback[index])
-}
-
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
@@ -1723,6 +1660,9 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
   }
 }
 
+// 每个执行中任务的取消控制器；cancelTask 通过它中止底层 fetch（服务端收到 abort 返回 499 释放槽位）。
+const taskAbortControllers = new Map<string, AbortController>()
+
 async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1748,6 +1688,9 @@ async function executeTask(taskId: string) {
   if (!isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0)) {
     scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
   }
+
+  const abortController = new AbortController()
+  taskAbortControllers.set(taskId, abortController)
 
   try {
     // 获取输入图片 data URLs（并行读取，Promise.all 保持顺序）
@@ -1794,6 +1737,7 @@ async function executeTask(taskId: string) {
         useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
         void persistTaskStreamPartialImage(taskId, partial.image)
       },
+      signal: abortController.signal,
     })
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1937,11 +1881,34 @@ async function executeTask(taskId: string) {
       useStore.getState().setDetailTaskId(taskId)
     }
   } finally {
+    taskAbortControllers.delete(taskId)
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
     for (const imgId of task.inputImageIds) {
       evictCachedImage(imgId)
     }
   }
+}
+
+// 用户主动取消执行中的任务：中止底层请求（服务端收到 abort 返回 499 并释放并发槽位），
+// 并同步置为「已停止」终态。因在 fetch 拒绝之前就写入 'error'，executeTask 的 catch 守卫
+// （latestTask.status !== 'running' → return）会据此抑制误报的错误 toast / 详情弹窗。
+export function cancelTask(taskId: string) {
+  const controller = taskAbortControllers.get(taskId)
+  controller?.abort()
+  taskAbortControllers.delete(taskId)
+  const task = useStore.getState().tasks.find((t) => t.id === taskId)
+  if (!task || task.status !== 'running') return
+  clearOpenAIWatchdogTimer(taskId)
+  clearCustomRecoveryTimer(taskId)
+  useStore.getState().setTaskStreamPreview(taskId)
+  updateTaskInStore(taskId, {
+    status: 'error',
+    error: '已停止生成。',
+    customRecoverable: false,
+    finishedAt: Date.now(),
+    elapsed: Date.now() - task.createdAt,
+  })
+  useStore.getState().showToast('已停止生成', 'info')
 }
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {

@@ -1,80 +1,38 @@
 import { Hono, type Context, type Next } from 'hono'
 import { jwt as jwtMiddleware, sign as jwtSign } from 'hono/jwt'
 import { Database } from 'bun:sqlite'
-import pino from 'pino'
 import sharp from 'sharp'
 import path from 'path'
-import { existsSync, mkdirSync, statSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { unlink, writeFile } from 'fs/promises'
-import { fileURLToPath } from 'url'
+import { createConcurrencyQueue, QueueFullError, ClientAbortError } from './concurrencyQueue.ts'
+import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue } from './utils/validation.ts'
 
-const logger = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { app: 'picpilot', component: 'hono-server' },
-  transport: process.env.LOG_PRETTY === '1'
-    ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'SYS:standard',
-          ignore: 'pid,hostname,app,component',
-          messageFormat: '[{component}] {msg}',
-        },
-      }
-    : undefined,
-})
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PORT = Number(process.env.AUTH_PORT ?? '3001')
-const STATIC_DIR = process.env.STATIC_DIR ? path.resolve(process.env.STATIC_DIR) : path.resolve(__dirname, '../dist')
-const JWT_SECRET = process.env.JWT_SECRET
-const JWT_EXPIRES_IN_SECONDS = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 30 * 24 * 60 * 60)
-const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data')
-const DB_PATH = process.env.DB_PATH ?? path.join(DATA_DIR, 'auth.db')
-const PUBLIC_DIR = path.join(DATA_DIR, 'public')
-const THUMBS_DIR = path.join(PUBLIC_DIR, 'thumbs')
-const AVATARS_DIR = path.join(DATA_DIR, 'avatars')
-const EVENT_RETENTION_DAYS = Number(process.env.EVENT_RETENTION_DAYS ?? 30)
-const PER_USER_PUBLIC_QUOTA_BYTES = Number(process.env.PER_USER_PUBLIC_QUOTA_BYTES ?? 500 * 1024 * 1024)
-const API_PROXY_URL = (process.env.API_PROXY_URL || '').trim()
-const API_PROXY_API_KEY = (process.env.API_PROXY_API_KEY || '').trim()
-const CLIPROXY_API_URL = (process.env.CLIPROXY_API_URL || 'http://cliproxy:8317').replace(/\/+$/, '')
-const CLIPROXY_MGMT_KEY = (process.env.CLIPROXY_MGMT_KEY || '').trim()
-const MAX_CONCURRENT = Math.max(1, Number(process.env.MAX_CONCURRENT_PROXY_REQUESTS ?? 5))
-const MAX_CONCURRENT_PER_USER = Math.max(1, Number(process.env.MAX_CONCURRENT_PER_USER ?? 2))
-const DEFAULT_MAX_BATCH_IMAGES = normalizeBatchImageLimit(process.env.DEFAULT_MAX_BATCH_IMAGES, 4)
-const MAX_IMAGE_LONG_EDGE = 2048
-const THUMB_LONG_EDGE = 256
-const AVATAR_SIZE = 256
-const MAX_AVATAR_INPUT_BYTES = 5 * 1024 * 1024
-const MIME_TYPES: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.gif': 'image/gif',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.map': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.txt': 'text/plain; charset=utf-8',
-  '.webp': 'image/webp',
-}
-
-if (!JWT_SECRET) {
-  logger.fatal({ scope: 'auth' }, 'JWT_SECRET environment variable is required')
-  process.exit(1)
-}
-
-if (JWT_SECRET.length < 32) {
-  logger.fatal({ scope: 'auth' }, 'JWT_SECRET must be at least 32 characters for security')
-  process.exit(1)
-}
-
-mkdirSync(DATA_DIR, { recursive: true })
-mkdirSync(PUBLIC_DIR, { recursive: true })
-mkdirSync(THUMBS_DIR, { recursive: true })
-mkdirSync(AVATARS_DIR, { recursive: true })
+import {
+  AVATAR_SIZE,
+  AVATARS_DIR,
+  API_PROXY_API_KEY,
+  API_PROXY_URL,
+  DATA_DIR,
+  DB_PATH,
+  DEFAULT_MAX_BATCH_IMAGES,
+  EVENT_RETENTION_DAYS,
+  JWT_EXPIRES_IN_SECONDS,
+  JWT_SECRET,
+  logger,
+  MAX_AVATAR_INPUT_BYTES,
+  MAX_CONCURRENT,
+  MAX_IMAGE_LONG_EDGE,
+  MIME_TYPES,
+  PER_USER_PUBLIC_QUOTA_BYTES,
+  PORT,
+  PROXY_QUEUE_MAX,
+  PROXY_QUEUE_MAX_WAIT_MS,
+  PUBLIC_DIR,
+  STATIC_DIR,
+  THUMB_LONG_EDGE,
+  THUMBS_DIR,
+} from './config.ts'
 
 const db = new Database(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
@@ -166,6 +124,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_public_created ON public_images(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_public_user ON public_images(user_id);
+
+  -- 公开图对应的「原图」（生成该图时 @ 引用的输入图），随主图一起公开
+  CREATE TABLE IF NOT EXISTS public_image_originals (
+    id         TEXT PRIMARY KEY,
+    image_id   TEXT NOT NULL,
+    position   INTEGER NOT NULL,
+    width      INTEGER,
+    height     INTEGER,
+    file_size  INTEGER,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (image_id) REFERENCES public_images(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_public_originals_image ON public_image_originals(image_id);
 
   CREATE TABLE IF NOT EXISTS team_config (
     id            INTEGER PRIMARY KEY CHECK (id = 1),
@@ -270,18 +241,6 @@ setInterval(() => {
 
 // ===== 工具 =====
 
-function normalizeBatchImageLimit(value: unknown, fallback = 4): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.max(1, Math.min(100, Math.trunc(numeric)))
-}
-
-function parseBatchImageLimitPatchValue(value: unknown): number | null {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric) || numeric < 1 || numeric > 100) return null
-  return Math.trunc(numeric)
-}
-
 let cachedTeamSettings: Record<string, unknown> | null = null
 
 // 返回缓存的浅拷贝，避免调用方原地改写污染缓存（缓存与数据库在写库失败时会分叉）
@@ -307,7 +266,7 @@ function getTeamSettingsPayload() {
   return {
     defaultMaxBatchImages: normalizeBatchImageLimit(settings.defaultMaxBatchImages, DEFAULT_MAX_BATCH_IMAGES),
     maxConcurrent: MAX_CONCURRENT,
-    maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
+    maxQueue: PROXY_QUEUE_MAX,
   }
 }
 
@@ -316,12 +275,50 @@ function getDefaultMaxBatchImages(): number {
   return getTeamSettingsPayload().defaultMaxBatchImages
 }
 
-// 删除一张公开图对应的原图与缩略图文件，忽略文件不存在等错误
+// 公开到画廊时，一张主图最多附带多少张「原图」
+const MAX_PUBLIC_ORIGINALS = 9
+
+interface ProcessedPublicImage {
+  id: string
+  finalBuffer: Buffer
+  thumbBuffer: Buffer
+  width?: number
+  height?: number
+}
+
+class PublicImageTooLargeError extends Error {}
+
+// 将 base64/dataURL 图片处理成画廊存储格式（webp 主图 + 缩略图），并附带尺寸信息。
+// 处理不了（解码失败等）会抛错；过大抛 PublicImageTooLargeError。
+async function processPublicImage(imageBase64: string): Promise<ProcessedPublicImage> {
+  const base64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '')
+  const inputBuffer = Buffer.from(base64, 'base64')
+  if (inputBuffer.length > 50 * 1024 * 1024) throw new PublicImageTooLargeError()
+
+  const finalBuffer = await sharp(inputBuffer)
+    .resize({ width: MAX_IMAGE_LONG_EDGE, height: MAX_IMAGE_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 85 })
+    .toBuffer()
+  const meta = await sharp(finalBuffer).metadata()
+  const thumbBuffer = await sharp(inputBuffer)
+    .resize({ width: THUMB_LONG_EDGE, height: THUMB_LONG_EDGE, fit: 'inside' })
+    .webp({ quality: 80 })
+    .toBuffer()
+
+  return { id: crypto.randomUUID(), finalBuffer, thumbBuffer, width: meta.width, height: meta.height }
+}
+
+// 删除一张公开图（含其原图）对应的图片与缩略图文件，忽略文件不存在等错误。
+// 需在删除 public_images 行之前调用，否则 originals 行已被级联删除、无法取回 id。
 function deletePublicImageFiles(id: string): Promise<unknown> {
-  return Promise.allSettled([
-    unlink(path.join(PUBLIC_DIR, `${id}.webp`)).catch(() => {}),
-    unlink(path.join(THUMBS_DIR, `${id}.webp`)).catch(() => {}),
-  ])
+  const originals = db.query('SELECT id FROM public_image_originals WHERE image_id = ?').all(id) as Array<{ id: string }>
+  const ids = [id, ...originals.map((o) => o.id)]
+  return Promise.allSettled(
+    ids.flatMap((fileId) => [
+      unlink(path.join(PUBLIC_DIR, `${fileId}.webp`)).catch(() => {}),
+      unlink(path.join(THUMBS_DIR, `${fileId}.webp`)).catch(() => {}),
+    ]),
+  )
 }
 
 function saveTeamSettingsRecord(settings: Record<string, unknown>, updatedBy: string | null) {
@@ -421,16 +418,11 @@ async function requireUser(c: Context, next: Next) {
   return next()
 }
 
-function generateInviteCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let code = ''
-  for (let i = 0; i < 12; i++) code += chars[Math.floor(Math.random() * chars.length)]
-  return code
-}
-
+// 批量上限统一为团队默认（option B）：不再按 per-user 列区分。
+// 仍校验用户是否存在（保留对已删除用户的 401；/api-proxy/* 另有 requireUser 兜底）。
 function getUserMaxBatchImages(userId: string): number | null {
-  const row = db.query('SELECT max_batch_images FROM users WHERE id = ?').get(userId) as { max_batch_images: number } | null
-  return row ? normalizeBatchImageLimit(row.max_batch_images, DEFAULT_MAX_BATCH_IMAGES) : null
+  const row = db.query('SELECT 1 FROM users WHERE id = ?').get(userId)
+  return row ? getDefaultMaxBatchImages() : null
 }
 
 function normalizeDisplayNameValue(value: unknown): { value: string } | { error: string } {
@@ -444,11 +436,11 @@ function normalizeDisplayNameValue(value: unknown): { value: string } | { error:
 
 function getAuthUserPayload(userId: string) {
   const user = db.query(`
-    SELECT u.id, u.username, u.display_name, u.is_admin, u.max_batch_images,
+    SELECT u.id, u.username, u.display_name, u.is_admin,
            u.avatar_updated_at, u.public_storage_bytes,
            (SELECT COUNT(*) FROM public_images pi WHERE pi.user_id = u.id) AS public_gallery_count
     FROM users u WHERE u.id = ?
-  `).get(userId) as (Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'max_batch_images' | 'avatar_updated_at' | 'public_storage_bytes'> & { public_gallery_count: number }) | null
+  `).get(userId) as (Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'avatar_updated_at' | 'public_storage_bytes'> & { public_gallery_count: number }) | null
   if (!user) return null
 
   const publicStorageBytes = Math.max(0, Number(user.public_storage_bytes ?? 0))
@@ -459,21 +451,18 @@ function getAuthUserPayload(userId: string) {
     displayName: user.display_name || user.username,
     isAdmin: user.is_admin === 1,
     avatarUpdatedAt: user.avatar_updated_at,
-    maxBatchImages: normalizeBatchImageLimit(user.max_batch_images, DEFAULT_MAX_BATCH_IMAGES),
+    maxBatchImages: getDefaultMaxBatchImages(),
     maxConcurrent: MAX_CONCURRENT,
-    maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
+    maxQueue: PROXY_QUEUE_MAX,
     publicGalleryCount: user.public_gallery_count,
     publicStorageBytes,
     publicStorageQuotaBytes: PER_USER_PUBLIC_QUOTA_BYTES,
   }
 }
 
-function getPositiveIntegerValue(value: unknown): number | null {
-  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  if (!Number.isFinite(numeric)) return null
-  return Math.max(1, Math.min(1000, Math.trunc(numeric)))
-}
-
+// 注意：这是「尽力而为」的服务端兜底，只覆盖 /images/generations 的 JSON 请求。
+// 图像编辑(/images/edits)、Responses 模式、以及 fan-out（n 张拆成 n 个 n:1 请求）都会绕过它而被记为 1 张；
+// 真正在所有模式下一致生效的批量上限是客户端 clamp（见 src/lib/paramCompatibility.ts）。
 async function estimateRequestedImageCount(request: Request, targetPath: string): Promise<number> {
   if (!/\/images\/generations\/?$/i.test(targetPath)) return 1
   const contentLength = Number(request.headers.get('content-length') ?? 0)
@@ -726,8 +715,12 @@ app.get('/api/avatars/:user_id', (c) => {
 
 // ===== Authenticated API Proxy =====
 
-let teamInflight = 0
-const userInflight = new Map<string, number>()
+// 全局并发信号量 + FIFO 等待队列（实现见 concurrencyQueue.ts，handler 只用 acquire/release）。
+const proxyQueue = createConcurrencyQueue({
+  maxConcurrent: MAX_CONCURRENT,
+  maxQueue: PROXY_QUEUE_MAX,
+  maxWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
+})
 
 // SSE 静默期心跳间隔：上游分片之间的安静期超过此值就注入一行注释，保持 socket 活跃。
 const PROXY_SSE_HEARTBEAT_MS = Math.max(1000, Number(process.env.PROXY_SSE_HEARTBEAT_MS ?? 15_000))
@@ -824,34 +817,26 @@ app.all('/api-proxy/*', async (c) => {
     }
   }
 
-  // 并发控制
-  const userId = payload.sub
-  const userCount = userInflight.get(userId) ?? 0
-  if (userCount >= MAX_CONCURRENT_PER_USER) {
-    return c.json({
-      error: `你有 ${userCount} 个请求在处理中，请等待完成后再试。`,
-      inflight: userCount,
-      maxPerUser: MAX_CONCURRENT_PER_USER,
-    }, 429)
-  }
-  if (teamInflight >= MAX_CONCURRENT) {
-    return c.json({
-      error: `服务繁忙，当前 ${teamInflight} 个请求在处理中，请几秒后重试。`,
-      inflight: teamInflight,
-      maxConcurrent: MAX_CONCURRENT,
-    }, 429)
+  // 并发控制：全局上限 MAX_CONCURRENT，超出则进入 FIFO 队列排队等待。
+  try {
+    await proxyQueue.acquire(c.req.raw.signal)
+  } catch (err) {
+    if (err instanceof ClientAbortError) {
+      // 客户端在排队期间已断开，无需返回响应体。
+      return new Response(null, { status: 499 })
+    }
+    if (err instanceof QueueFullError) {
+      return c.json({ error: '服务繁忙，排队人数过多，请稍后重试。' }, 429)
+    }
+    // QueueWaitTimeoutError 或其他
+    return c.json({ error: '服务繁忙，排队等待超时，请稍后重试。' }, 429)
   }
 
-  teamInflight++
-  userInflight.set(userId, userCount + 1)
   let released = false
-  const releaseSlot = () => {
+  const release = () => {
     if (released) return
     released = true
-    teamInflight--
-    const next = (userInflight.get(userId) ?? 1) - 1
-    if (next <= 0) userInflight.delete(userId)
-    else userInflight.set(userId, next)
+    proxyQueue.release()
   }
 
   let upstream: Response
@@ -863,14 +848,14 @@ app.all('/api-proxy/*', async (c) => {
       signal: c.req.raw.signal,
     })
   } catch (err) {
-    releaseSlot()
+    release()
     return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试。' }, 502)
   }
 
   // 槽位必须保持到响应体完全传输（或客户端取消）为止；否则并发限制只覆盖到首字节，
   // 对流式上游而言整个传输周期都不受约束。
   if (!upstream.body) {
-    releaseSlot()
+    release()
     return new Response(null, {
       status: upstream.status,
       statusText: upstream.statusText,
@@ -879,13 +864,22 @@ app.all('/api-proxy/*', async (c) => {
   }
 
   const isSse = (upstream.headers.get('content-type') || '').toLowerCase().includes('text/event-stream')
-  const monitoredBody = createProxyBodyStream(upstream.body, isSse, releaseSlot)
+  const monitoredBody = createProxyBodyStream(upstream.body, isSse, release)
 
   return new Response(monitoredBody, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: createApiProxyResponseHeaders(upstream),
   })
+})
+
+// ===== Queue stats =====
+// 暴露全局队列深度，供前端展示「当前 N 个请求排队中」以降低排队焦虑。
+// 只读全局计数（O(1)、无 DB）；上限本就经 /api/auth/me 公开，仅做 JWT 校验防匿名探测容量。
+app.use('/api/queue/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
+app.get('/api/queue/stats', (c) => {
+  const { inflight, queued } = proxyQueue.stats()
+  return c.json({ inflight, queued, maxConcurrent: MAX_CONCURRENT, maxQueue: PROXY_QUEUE_MAX })
 })
 
 // ===== Telemetry =====
@@ -1010,12 +1004,6 @@ app.patch('/api/admin/users/:id', async (c) => {
   const updates: string[] = []
   const args: unknown[] = []
   if (typeof body.isAdmin === 'boolean') { updates.push('is_admin = ?'); args.push(body.isAdmin ? 1 : 0) }
-  if ('maxBatchImages' in body) {
-    const maxBatchImages = parseBatchImageLimitPatchValue(body.maxBatchImages)
-    if (maxBatchImages == null) return c.json({ error: '批量生成数量上限必须是 1 到 100 之间的数字。' }, 400)
-    updates.push('max_batch_images = ?')
-    args.push(maxBatchImages)
-  }
   if (typeof body.password === 'string' && body.password.length >= 6) {
     updates.push('password_hash = ?')
     args.push(await Bun.password.hash(body.password, { algorithm: 'bcrypt', cost: 10 }))
@@ -1372,47 +1360,62 @@ app.post('/api/gallery', async (c) => {
     return c.json({ error: '公开画廊空间已用完，请先删除一些公开图片后再上传。' }, 413)
   }
 
-  const body = await c.req.json().catch(() => null) as { image_base64?: string; prompt?: string } | null
+  const body = await c.req.json().catch(() => null) as { image_base64?: string; prompt?: string; originals?: unknown[] } | null
   if (!body || typeof body.image_base64 !== 'string' || typeof body.prompt !== 'string') {
     return c.json({ error: '请提供要公开的图片和提示词。' }, 400)
   }
 
-  const base64 = body.image_base64.replace(/^data:image\/[a-z]+;base64,/, '')
-  const inputBuffer = Buffer.from(base64, 'base64')
-  if (inputBuffer.length > 50 * 1024 * 1024) return c.json({ error: '图片过大，请上传 50MB 以内的图片。' }, 413)
+  const rawOriginals = Array.isArray(body.originals)
+    ? body.originals.filter((o): o is string => typeof o === 'string').slice(0, MAX_PUBLIC_ORIGINALS)
+    : []
 
-  const id = crypto.randomUUID()
-  let finalBuffer: Buffer
-  let finalMeta: { width?: number; height?: number }
-  let thumbBuffer: Buffer
+  // 主图必处理；处理失败直接报错。原图（@引用的输入图）尽量随主图一起公开，单张处理失败则跳过。
+  let main: ProcessedPublicImage
   try {
-    finalBuffer = await sharp(inputBuffer)
-      .resize({ width: MAX_IMAGE_LONG_EDGE, height: MAX_IMAGE_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 85 })
-      .toBuffer()
-    finalMeta = await sharp(finalBuffer).metadata()
-    thumbBuffer = await sharp(inputBuffer)
-      .resize({ width: THUMB_LONG_EDGE, height: THUMB_LONG_EDGE, fit: 'inside' })
-      .webp({ quality: 80 })
-      .toBuffer()
-  } catch {
+    main = await processPublicImage(body.image_base64)
+  } catch (e) {
+    if (e instanceof PublicImageTooLargeError) return c.json({ error: '图片过大，请上传 50MB 以内的图片。' }, 413)
     return c.json({ error: '无法处理这张图片，请换一张试试。' }, 400)
   }
 
+  const originals: ProcessedPublicImage[] = []
+  for (const raw of rawOriginals) {
+    try {
+      originals.push(await processPublicImage(raw))
+    } catch {
+      // 原图处理失败不影响主图公开，静默跳过
+    }
+  }
+
+  const id = crypto.randomUUID()
+  const now = Date.now()
+  // 主图 + 原图占用的总空间都计入用户配额（写入主图 file_size，删除/撤下时按此回收）
+  const totalBytes = main.finalBuffer.length + originals.reduce((sum, o) => sum + o.finalBuffer.length, 0)
+
   await Promise.all([
-    writeFile(path.join(PUBLIC_DIR, `${id}.webp`), finalBuffer),
-    writeFile(path.join(THUMBS_DIR, `${id}.webp`), thumbBuffer),
+    writeFile(path.join(PUBLIC_DIR, `${id}.webp`), main.finalBuffer),
+    writeFile(path.join(THUMBS_DIR, `${id}.webp`), main.thumbBuffer),
+    ...originals.flatMap((o) => [
+      writeFile(path.join(PUBLIC_DIR, `${o.id}.webp`), o.finalBuffer),
+      writeFile(path.join(THUMBS_DIR, `${o.id}.webp`), o.thumbBuffer),
+    ]),
   ])
 
   db.transaction(() => {
     db.query(`
       INSERT INTO public_images (id, user_id, prompt, width, height, file_size, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, payload.sub, body.prompt!.slice(0, 4000), finalMeta.width ?? null, finalMeta.height ?? null, finalBuffer.length, Date.now())
-    db.query('UPDATE users SET public_storage_bytes = public_storage_bytes + ? WHERE id = ?').run(finalBuffer.length, payload.sub)
+    `).run(id, payload.sub, body.prompt!.slice(0, 4000), main.width ?? null, main.height ?? null, totalBytes, now)
+    originals.forEach((o, i) => {
+      db.query(`
+        INSERT INTO public_image_originals (id, image_id, position, width, height, file_size, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(o.id, id, i, o.width ?? null, o.height ?? null, o.finalBuffer.length, now)
+    })
+    db.query('UPDATE users SET public_storage_bytes = public_storage_bytes + ? WHERE id = ?').run(totalBytes, payload.sub)
   })()
 
-  return c.json({ id, width: finalMeta.width, height: finalMeta.height, size: finalBuffer.length })
+  return c.json({ id, width: main.width, height: main.height, size: totalBytes, originals: originals.length })
 })
 
 app.get('/api/gallery', (c) => {
@@ -1434,7 +1437,30 @@ app.get('/api/gallery', (c) => {
     ORDER BY p.created_at DESC LIMIT ? OFFSET ?
   `).all(...(args as never[]), limit, offset)
   const total = (db.query(`SELECT COUNT(*) AS n FROM public_images p ${where}`).get(...(args as never[])) as { n: number }).n
-  return c.json({ images, total })
+
+  // 一次性查出本页所有公开图的原图，按 position 归到各自主图下
+  const imageIds = (images as Array<{ id: string }>).map((img) => img.id)
+  const originalsByImage = new Map<string, Array<{ id: string; width: number | null; height: number | null }>>()
+  if (imageIds.length > 0) {
+    const placeholders = imageIds.map(() => '?').join(',')
+    const rows = db.query(`
+      SELECT id, image_id, width, height
+      FROM public_image_originals
+      WHERE image_id IN (${placeholders})
+      ORDER BY position ASC
+    `).all(...(imageIds as never[])) as Array<{ id: string; image_id: string; width: number | null; height: number | null }>
+    for (const row of rows) {
+      const list = originalsByImage.get(row.image_id) ?? []
+      list.push({ id: row.id, width: row.width, height: row.height })
+      originalsByImage.set(row.image_id, list)
+    }
+  }
+  const withOriginals = (images as Array<{ id: string }>).map((img) => ({
+    ...img,
+    originals: originalsByImage.get(img.id) ?? [],
+  }))
+
+  return c.json({ images: withOriginals, total })
 })
 
 app.delete('/api/gallery/:id', async (c) => {
@@ -1459,7 +1485,7 @@ app.delete('/api/gallery/:id', async (c) => {
 app.get('/api/gallery/image/:id', (c) => {
   const id = c.req.param('id')
   const isThumb = c.req.query('thumb') === '1'
-  const exists = db.query('SELECT 1 FROM public_images WHERE id = ?').get(id)
+  const exists = db.query('SELECT 1 FROM public_images WHERE id = ? UNION ALL SELECT 1 FROM public_image_originals WHERE id = ? LIMIT 1').get(id, id)
   if (!exists) return c.json({ error: '图片不存在，可能已被删除。' }, 404)
 
   const file = path.join(isThumb ? THUMBS_DIR : PUBLIC_DIR, `${id}.webp`)
@@ -1502,6 +1528,7 @@ logger.info({
   dbPath: DB_PATH,
   apiProxy: Boolean(API_PROXY_URL),
   maxConcurrent: MAX_CONCURRENT,
-  maxConcurrentPerUser: MAX_CONCURRENT_PER_USER,
+  maxQueue: PROXY_QUEUE_MAX,
+  maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
   defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
 }, 'Runtime configuration')

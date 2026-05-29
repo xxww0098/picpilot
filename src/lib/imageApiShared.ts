@@ -20,6 +20,8 @@ export interface CallApiOptions {
   maskDataUrl?: string
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
+  /** 调用方取消信号；与各 provider 内部的超时 controller 合并，用于用户主动取消任务 */
+  signal?: AbortSignal
 }
 
 export interface CallApiResult {

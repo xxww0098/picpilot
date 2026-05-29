@@ -371,6 +371,9 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const requestHeaders = createRequestHeaders(profile, { includeAppAuth: useApiProxy })
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(createApiTimeoutError(profile.timeout)), profile.timeout * 1000)
+  const abortFromCaller = () => controller.abort()
+  if (opts.signal?.aborted) controller.abort()
+  opts.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
     if (opts.maskDataUrl) {
@@ -437,5 +440,6 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     }
   } finally {
     clearTimeout(timeoutId)
+    opts.signal?.removeEventListener('abort', abortFromCaller)
   }
 }

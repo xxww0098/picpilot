@@ -32,7 +32,7 @@ export interface AdminUserRow {
 export interface AdminTeamSettings {
   defaultMaxBatchImages: number
   maxConcurrent: number
-  maxConcurrentPerUser: number
+  maxQueue: number
 }
 
 export interface AdminInviteRedemption {
@@ -100,7 +100,7 @@ export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number })
   }, '保存失败')
 }
 
-export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string; maxBatchImages?: number }) {
+export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string }) {
   return authJson<{ ok: true }>(`/api/admin/users/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

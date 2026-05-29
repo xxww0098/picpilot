@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, cancelTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
@@ -78,6 +78,7 @@ function TaskCard({
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const queueStats = useStore((s) => s.queueStats)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -295,8 +296,27 @@ function TaskCard({
   const showSwipeAction = swipeActionActive
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const showRunningTimer = task.status === 'running' || isCustomReconnecting
-  // 运行超过一定时间仍无结果时，提示上游较慢但仍在等待（图像编辑经某些上游可能需数分钟）
-  const showSlowUpstreamHint = task.status === 'running' && Math.floor((now - task.createdAt) / 1000) >= 45
+  // 运行越久越明确地提示：是上游变慢、请求未丢失、大概还要等多久
+  // （图像编辑经某些上游高峰期可能需数分钟，见 cliproxy 日志）
+  const runningSeconds = task.status === 'running' ? Math.floor((now - task.createdAt) / 1000) : 0
+  const slowUpstreamHint =
+    runningSeconds >= 180
+      ? '上游仍在出图，高峰期可能需要 3–5 分钟。\n请求未丢失，完成后会自动显示。'
+      : runningSeconds >= 90
+        ? '上游响应较慢，仍在排队等待…\n（图像编辑高峰期通常需 1–3 分钟）'
+        : runningSeconds >= 30
+          ? '上游响应较慢，仍在等待…'
+          : null
+  // 全局队列有人等待、且本卡尚无预览时，提示"系统繁忙正在排队"——比单纯转圈更安心。
+  // 位置为近似值（无法精确知道本请求在队中第几位），故用"约"措辞。
+  const queueWaitingCount =
+    task.status === 'running' && !streamPreviewSrc && queueStats && queueStats.queued > 0
+      ? queueStats.queued
+      : 0
+  const waitingHint =
+    queueWaitingCount > 0
+      ? `服务繁忙，前方约 ${queueWaitingCount} 个请求排队中…${slowUpstreamHint ? `\n${slowUpstreamHint}` : ''}`
+      : slowUpstreamHint
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -395,6 +415,16 @@ function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+          {task.status === 'running' && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); cancelTask(task.id) }}
+              className="absolute top-1.5 left-1.5 z-10 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm transition-colors hover:bg-black/75 sm:text-xs"
+              title="停止生成"
+            >
+              取消
+            </button>
+          )}
           {task.status === 'running' && streamPreviewSrc && (
             <>
               <img
@@ -433,9 +463,9 @@ function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
-              {showSlowUpstreamHint && (
-                <span className="max-w-[12rem] px-2 text-center text-[10px] leading-tight text-gray-400/80 dark:text-gray-500/80">
-                  上游响应较慢，仍在等待…<br />（图像编辑可能需要数分钟）
+              {waitingHint && (
+                <span className="max-w-[12rem] whitespace-pre-line px-2 text-center text-[10px] leading-tight text-gray-400/80 dark:text-gray-500/80">
+                  {waitingHint}
                 </span>
               )}
             </div>

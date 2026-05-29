@@ -8,6 +8,7 @@ import { useAuth } from './contexts/AuthProvider'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
+import QueueBanner from './components/QueueBanner'
 import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
@@ -149,6 +150,7 @@ export default function App() {
       ) : (
         <main data-home-main data-drag-select-surface className="pb-48">
           <div className="safe-area-x max-w-7xl mx-auto">
+            <QueueBanner />
             <SearchBar />
             <TaskGrid />
           </div>

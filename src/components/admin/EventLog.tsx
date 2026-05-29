@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { downloadAdminEventsCsv, fetchAdminEvents, type AdminEventRow } from '../../lib/adminApi'
 import { formatBytes, formatTimestamp } from '../../lib/format'
 import {
@@ -54,6 +54,7 @@ export default function EventLog() {
   const [day, setDay] = useState<string>(todayString())
   const [detail, setDetail] = useState<AdminEventRow | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
+  const detailPanelRef = useRef<HTMLDivElement>(null)
 
   const range = dayToRange(day)
 
@@ -213,6 +214,8 @@ export default function EventLog() {
           zIndexClass="z-50"
           paddingClass="p-0"
           backdropClassName="bg-black/40"
+          panelRef={detailPanelRef}
+          scrollRef={detailPanelRef}
           panelClassName="m-4 max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[hsl(var(--border))] bg-white p-6 shadow-xl dark:bg-[hsl(240_10%_12%)]"
         >
             <h3 className="mb-3 text-base font-semibold">请求详情 #{detail.id}</h3>

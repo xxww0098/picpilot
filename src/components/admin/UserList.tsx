@@ -26,7 +26,7 @@ export default function UserList() {
     return users.filter((u) => u.username.toLowerCase().includes(q))
   }, [users, query])
 
-  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string; maxBatchImages?: number }) {
+  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string }) {
     setBusyId(id)
     try {
       await patchAdminUser(id, body)
@@ -68,21 +68,6 @@ export default function UserList() {
         await patchUser(id, { password: pwd })
         showAppToast('密码已更新。', 'success')
       },
-    })
-  }
-
-  function updateMaxBatchImages(id: string, username: string, currentLimit: number) {
-    openPromptDialog({
-      title: '批量生成上限',
-      message: `设置「${username}」单次最多可生成的图片数量。`,
-      defaultValue: String(currentLimit),
-      inputType: 'number',
-      validate: (raw) => {
-        const limit = Number(raw)
-        if (!Number.isFinite(limit) || limit < 1 || limit > 100) return '请输入 1 到 100 之间的数字。'
-        return null
-      },
-      onConfirm: (raw) => patchUser(id, { maxBatchImages: Math.trunc(Number(raw)) }),
     })
   }
 
@@ -131,7 +116,6 @@ export default function UserList() {
                 busy={busyId === user.id}
                 isSelf={user.id === currentUser?.userId}
                 onToggleAdmin={() => void patchUser(user.id, { isAdmin: user.is_admin !== 1 })}
-                onUpdateMaxBatchImages={() => updateMaxBatchImages(user.id, user.username, user.max_batch_images)}
                 onResetPassword={() => resetPassword(user.id, user.username)}
                 onDelete={() => deleteUser(user.id, user.username)}
               />
@@ -175,7 +159,6 @@ function UserCard({
   busy,
   isSelf,
   onToggleAdmin,
-  onUpdateMaxBatchImages,
   onResetPassword,
   onDelete,
 }: {
@@ -183,7 +166,6 @@ function UserCard({
   busy: boolean
   isSelf: boolean
   onToggleAdmin: () => void
-  onUpdateMaxBatchImages: () => void
   onResetPassword: () => void
   onDelete: () => void
 }) {
@@ -227,7 +209,6 @@ function UserCard({
           isAdmin={!!user.is_admin}
           isSelf={isSelf}
           onToggleAdmin={onToggleAdmin}
-          onUpdateMaxBatchImages={onUpdateMaxBatchImages}
           onResetPassword={onResetPassword}
           onDelete={onDelete}
         />
@@ -282,7 +263,6 @@ function UserActionsMenu({
   isAdmin,
   isSelf,
   onToggleAdmin,
-  onUpdateMaxBatchImages,
   onResetPassword,
   onDelete,
 }: {
@@ -290,7 +270,6 @@ function UserActionsMenu({
   isAdmin: boolean
   isSelf: boolean
   onToggleAdmin: () => void
-  onUpdateMaxBatchImages: () => void
   onResetPassword: () => void
   onDelete: () => void
 }) {
@@ -344,7 +323,6 @@ function UserActionsMenu({
           {!(isSelf && isAdmin) && (
             <MenuButton onClick={() => run(onToggleAdmin)}>{isAdmin ? '取消管理员' : '设为管理员'}</MenuButton>
           )}
-          <MenuButton onClick={() => run(onUpdateMaxBatchImages)}>批量上限</MenuButton>
           <MenuButton onClick={() => run(onResetPassword)}>重置密码</MenuButton>
           {!isSelf && (
             <>

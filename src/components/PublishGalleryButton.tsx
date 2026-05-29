@@ -8,12 +8,14 @@ import { useAuth } from '../contexts/AuthProvider'
 interface Props {
   imageId: string
   prompt: string
+  // 生成该图时 @ 引用的原图 id（输入图），会随主图一起公开到画廊
+  originalImageIds?: string[]
   onSuccess?: () => void
   className?: string
 }
 
-// 上传单张图到公开画廊；button 内置上传逻辑，调用方只需提供 imageId + prompt
-export default function PublishGalleryButton({ imageId, prompt, onSuccess, className }: Props) {
+// 上传单张图到公开画廊；button 内置上传逻辑，调用方只需提供 imageId + prompt（+ 可选原图）
+export default function PublishGalleryButton({ imageId, prompt, originalImageIds, onSuccess, className }: Props) {
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
   const { refresh } = useAuth()
@@ -24,7 +26,11 @@ export default function PublishGalleryButton({ imageId, prompt, onSuccess, class
     try {
       const dataUrl = await ensureImageCached(imageId)
       if (!dataUrl) throw new Error('找不到原图，可能已被清理。')
-      await publishGalleryImage(dataUrl, prompt)
+      // 取回 @ 引用的原图数据；个别取不到的（已清理）跳过，不阻断主图公开
+      const originals = (
+        await Promise.all((originalImageIds ?? []).map((id) => ensureImageCached(id).catch(() => null)))
+      ).filter((url): url is string => Boolean(url))
+      await publishGalleryImage(dataUrl, prompt, originals)
       await refresh()
       setDone(true)
       onSuccess?.()

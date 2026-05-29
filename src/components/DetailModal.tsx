@@ -407,7 +407,7 @@ export default function DetailModal() {
           {task.status === 'done' && outputLen > 0 && !isFailedSlot && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               {currentOutputImageId && (
-                <PublishGalleryButton imageId={currentOutputImageId} prompt={task.prompt ?? ''} />
+                <PublishGalleryButton imageId={currentOutputImageId} prompt={task.prompt ?? ''} originalImageIds={allInputImageIds} />
               )}
               <div className="relative group flex">
                 <button

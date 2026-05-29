@@ -1,6 +1,12 @@
 import { authFetch } from './auth'
 import { authJson } from './apiClient'
 
+export interface PublicGalleryOriginal {
+  id: string
+  width: number | null
+  height: number | null
+}
+
 export interface PublicGalleryImage {
   id: string
   user_id: string
@@ -12,6 +18,7 @@ export interface PublicGalleryImage {
   height: number | null
   file_size: number | null
   created_at: number
+  originals?: PublicGalleryOriginal[]
 }
 
 export function fetchGalleryPage(limit: number, offset: number, userId?: string) {
@@ -27,11 +34,11 @@ export function fetchGalleryPage(limit: number, offset: number, userId?: string)
   )
 }
 
-export function publishGalleryImage(imageBase64: string, prompt: string) {
+export function publishGalleryImage(imageBase64: string, prompt: string, originals?: string[]) {
   return authJson<{ id: string }>('/api/gallery', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image_base64: imageBase64, prompt }),
+    body: JSON.stringify({ image_base64: imageBase64, prompt, originals: originals ?? [] }),
   }, '发布到作品广场失败，请稍后重试')
 }
 
