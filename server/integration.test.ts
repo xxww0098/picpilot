@@ -117,3 +117,79 @@ test('并发发布达上限时严格原子：恰好一个 200、一个 413，配
   const fileCount = readdirSync(PUBLIC_DIR).filter((f) => f.endsWith('.webp')).length
   expect(fileCount).toBe(mainCount + origCount)
 })
+
+// ===== 认证流（register / login / me / 限速）=====
+
+function seedInvite(code: string, opts: { maxUses?: number; expiresAt?: number | null } = {}): void {
+  db.query(
+    'INSERT INTO invite_codes (code, created_by, created_at, expires_at, max_uses, used_count, note) VALUES (?, ?, ?, ?, ?, 0, ?)',
+  ).run(code, 'seed-admin', Date.now(), opts.expiresAt ?? null, opts.maxUses ?? 5, null)
+}
+
+// 每个用例传不同 ip（x-real-ip），隔离登录限速计数，避免相互干扰
+function authPost(path: string, body: unknown, ip: string) {
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-real-ip': ip },
+    body: JSON.stringify(body),
+  })
+}
+
+test('注册 → 登录 → 读取资料（happy path）', async () => {
+  seedInvite('INVITE-OK', { maxUses: 5 })
+  const reg = await authPost('/api/auth/register', { invite: 'INVITE-OK', username: 'newuser', password: 'secret123' }, '10.0.0.1')
+  expect(reg.status).toBe(200)
+  expect(typeof ((await reg.json()) as { token: string }).token).toBe('string')
+
+  const login = await authPost('/api/auth/login', { username: 'newuser', password: 'secret123' }, '10.0.0.1')
+  expect(login.status).toBe(200)
+  const loginBody = (await login.json()) as { token: string }
+  expect(typeof loginBody.token).toBe('string')
+
+  const me = await app.request('/api/auth/me', { headers: { Authorization: `Bearer ${loginBody.token}` } })
+  expect(me.status).toBe(200)
+  expect(((await me.json()) as { username: string }).username).toBe('newuser')
+})
+
+test('无效邀请码注册被拒（400）', async () => {
+  const res = await authPost('/api/auth/register', { invite: 'NOPE', username: 'bad1', password: 'secret123' }, '10.0.0.2')
+  expect(res.status).toBe(400)
+})
+
+test('密码过短注册被拒（400）', async () => {
+  seedInvite('INVITE-SHORT')
+  const res = await authPost('/api/auth/register', { invite: 'INVITE-SHORT', username: 'bad2', password: '123' }, '10.0.0.3')
+  expect(res.status).toBe(400)
+})
+
+test('用户名重复注册被拒（409）', async () => {
+  seedInvite('INVITE-DUP', { maxUses: 5 })
+  const a = await authPost('/api/auth/register', { invite: 'INVITE-DUP', username: 'dupuser', password: 'secret123' }, '10.0.0.4')
+  expect(a.status).toBe(200)
+  const b = await authPost('/api/auth/register', { invite: 'INVITE-DUP', username: 'dupuser', password: 'secret123' }, '10.0.0.4')
+  expect(b.status).toBe(409)
+})
+
+test('密码错误登录被拒（401）', async () => {
+  seedInvite('INVITE-PW', { maxUses: 5 })
+  await authPost('/api/auth/register', { invite: 'INVITE-PW', username: 'pwuser', password: 'secret123' }, '10.0.0.5')
+  const res = await authPost('/api/auth/login', { username: 'pwuser', password: 'wrongpass' }, '10.0.0.5')
+  expect(res.status).toBe(401)
+})
+
+test('邀请码用尽后第二次注册被拒（400）', async () => {
+  seedInvite('INVITE-ONCE', { maxUses: 1 })
+  const first = await authPost('/api/auth/register', { invite: 'INVITE-ONCE', username: 'once1', password: 'secret123' }, '10.0.0.6')
+  expect(first.status).toBe(200)
+  const second = await authPost('/api/auth/register', { invite: 'INVITE-ONCE', username: 'once2', password: 'secret123' }, '10.0.0.6')
+  expect(second.status).toBe(400)
+})
+
+test('登录限速：同一 IP 第 6 次返回 429', async () => {
+  const ip = '10.0.0.99'
+  let last = await authPost('/api/auth/login', { username: 'nobody', password: 'x' }, ip)
+  for (let i = 1; i < 6; i++) {
+    last = await authPost('/api/auth/login', { username: 'nobody', password: 'x' }, ip)
+  }
+  expect(last.status).toBe(429)
+})
