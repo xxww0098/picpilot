@@ -1,0 +1,15 @@
+{
+	email 970685525@qq.com
+}
+
+image.xxww.online {
+	reverse_proxy frontend:80
+}
+
+api.xxww.online {
+	reverse_proxy cliproxy:8317
+}
+
+dc.xxww.online {
+	reverse_proxy dockercopilot:12712
+}

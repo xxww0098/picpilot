@@ -1,0 +1,66 @@
+# 生产 VPS 主机栈（实盘位置 /opt/docker_file/compose.yml）的版本化备份。
+# 注意：本文件已脱敏——dockercopilot 的 secretKey 改为 ${DOCKERCOPILOT_SECRET}（实盘曾硬编码，勿提交真值）。
+# 恢复步骤：cp 本文件到 /opt/docker_file/compose.yml，并在 /opt/docker_file/.env 填好 DOCKERCOPILOT_SECRET 等变量（见 .env.example）。
+# 改动实盘 compose 后请同步回本文件并重新脱敏。镜像由 deploy.sh 从 /root/picpilot 本机构建（PICPILOT_VERSION 控制标签）。
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  cliproxy:
+    image: eceasy/cli-proxy-api:latest
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      DEPLOY: docker
+    volumes:
+      - ./data/cliproxy/config.yaml:/CLIProxyAPI/config.yaml
+      - ./data/cliproxy/auths:/root/.cli-proxy-api
+      - ./data/cliproxy/logs:/CLIProxyAPI/logs
+
+  dockercopilot:
+    image: 0nlylty/dockercopilot:latest
+    restart: unless-stopped
+    privileged: true
+    environment:
+      TZ: Asia/Tokyo
+      DOCKER_HOST: unix:///var/run/docker.sock
+      secretKey: ${DOCKERCOPILOT_SECRET:?set DOCKERCOPILOT_SECRET in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/dockercopilot:/data
+
+  frontend:
+    image: picpilot-frontend:${PICPILOT_VERSION:-latest}
+    build:
+      context: /root/picpilot
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+
+  auth:
+    image: picpilot-auth:${PICPILOT_VERSION:-latest}
+    build:
+      context: /root/picpilot/server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - ADMIN_USERS=${ADMIN_USERS}
+      - JWT_SECRET=${JWT_SECRET}
+      - API_PROXY_URL=${API_PROXY_URL:-http://cliproxy:8317/v1}
+      - API_PROXY_API_KEY=${API_PROXY_API_KEY}
+      - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cliproxy:8317}
+      - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY}
+      - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
+      - MAX_CONCURRENT_PER_USER=${MAX_CONCURRENT_PER_USER:-2}
+      - DATA_DIR=/data
+      - DB_PATH=/data/auth.db
+    volumes:
+      - ./data/picpilot:/data
+
+volumes:
+  caddy_data:
