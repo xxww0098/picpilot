@@ -131,6 +131,11 @@ export function formatImageRatio(width: number, height: number) {
 
   if (nearest && nearest.delta <= 0.01) return `≈${nearest.label}`
 
+  // 约分后本身已是简洁的精确比例（分子分母都不大），直接精确展示。
+  // 否则会被下面的近似搜索换成等值但未约分的丑陋写法（如 4:5 → 8:10）。
+  // 阈值 12 与近似搜索的取值范围一致：凡能被近似搜索精确表达的比例，都应优先精确展示。
+  if (simplifiedWidth <= 12 && simplifiedHeight <= 12) return simplified
+
   const friendlyNearest = Array.from({ length: 12 }, (_, widthIndex) => widthIndex + 1)
     .flatMap((friendlyWidth) =>
       Array.from({ length: 12 }, (_, heightIndex) => heightIndex + 1).map((friendlyHeight) => {

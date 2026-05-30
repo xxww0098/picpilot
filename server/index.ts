@@ -6,7 +6,7 @@ import path from 'path'
 import { existsSync, statSync } from 'fs'
 import { unlink, writeFile } from 'fs/promises'
 import { createConcurrencyQueue, QueueFullError, ClientAbortError } from './concurrencyQueue.ts'
-import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue } from './utils/validation.ts'
+import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue, normalizeConcurrencyLimit, parseConcurrencyPatchValue, normalizeQueueLimit, parseQueuePatchValue } from './utils/validation.ts'
 
 import {
   AVATAR_SIZE,
@@ -21,6 +21,7 @@ import {
   INVITE_MAX_USES,
   INVITE_NOTE_MAX_LEN,
   JWT_EXPIRES_IN_SECONDS,
+  JWT_SESSION_MAX_SECONDS,
   JWT_SECRET,
   logger,
   MAX_AVATAR_INPUT_BYTES,
@@ -53,7 +54,9 @@ db.exec(`
     created_at           INTEGER NOT NULL,
     last_login_at        INTEGER,
     avatar_updated_at    INTEGER,
-    public_storage_bytes INTEGER NOT NULL DEFAULT 0
+    public_storage_bytes INTEGER NOT NULL DEFAULT 0,
+    disabled             INTEGER NOT NULL DEFAULT 0,
+    token_version        INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS invite_codes (
@@ -177,6 +180,10 @@ ensureColumn('users', 'max_batch_images', `max_batch_images INTEGER NOT NULL DEF
 ensureColumn('users', 'last_login_at', 'last_login_at INTEGER')
 ensureColumn('users', 'avatar_updated_at', 'avatar_updated_at INTEGER')
 ensureColumn('users', 'public_storage_bytes', 'public_storage_bytes INTEGER NOT NULL DEFAULT 0')
+// 禁用账号：禁用后无法登录/出图，已登录会话也会被拒，可随时启用
+ensureColumn('users', 'disabled', 'disabled INTEGER NOT NULL DEFAULT 0')
+// 令牌版本：JWT 携带 tv 声明，自增即令该用户所有旧令牌失效（改密码 = 全设备登出）
+ensureColumn('users', 'token_version', 'token_version INTEGER NOT NULL DEFAULT 0')
 // 共享画廊「推荐」：管理员可标记，被标记的图缩略图右上角显示点赞图案并在画廊置顶
 ensureColumn('public_images', 'featured', 'featured INTEGER NOT NULL DEFAULT 0')
 
@@ -193,6 +200,8 @@ interface UserRow {
   last_login_at: number | null
   avatar_updated_at: number | null
   public_storage_bytes: number
+  disabled: number
+  token_version: number
 }
 
 async function seedAdmins(envValue: string | undefined, isAdmin: boolean) {
@@ -274,8 +283,9 @@ function getTeamSettingsPayload() {
   const settings = readTeamSettingsRecord()
   return {
     defaultMaxBatchImages: normalizeBatchImageLimit(settings.defaultMaxBatchImages, DEFAULT_MAX_BATCH_IMAGES),
-    maxConcurrent: MAX_CONCURRENT,
-    maxQueue: PROXY_QUEUE_MAX,
+    // 并发/排队上限优先采用管理端配置，未配置时回退到环境默认值（MAX_CONCURRENT / PROXY_QUEUE_MAX）。
+    maxConcurrent: normalizeConcurrencyLimit(settings.maxConcurrent, MAX_CONCURRENT),
+    maxQueue: normalizeQueueLimit(settings.maxQueue, PROXY_QUEUE_MAX),
   }
 }
 
@@ -414,22 +424,48 @@ function serveSpaFallback(): Response {
   return staticResponse(indexPath, 'no-cache')
 }
 
-function makeToken(user: { id: string; username: string; is_admin: number }): Promise<string> {
-  const exp = Math.floor(Date.now() / 1000) + JWT_EXPIRES_IN_SECONDS
-  return jwtSign({ sub: user.id, username: user.username, isAdmin: user.is_admin === 1, exp }, JWT_SECRET!)
+// 短时访问令牌：携带 tv（令牌版本，用于撤销）与 sst（会话起始秒，用于绝对上限）。
+// 刷新时传入原 sst 以保留同一会话的绝对寿命；登录/注册不传，从当前时刻起算新会话。
+function makeToken(user: { id: string; username: string; is_admin: number; token_version: number }, sessionStart?: number): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  const sst = sessionStart ?? now
+  const exp = now + JWT_EXPIRES_IN_SECONDS
+  return jwtSign({ sub: user.id, username: user.username, isAdmin: user.is_admin === 1, tv: user.token_version, sst, exp }, JWT_SECRET!)
+}
+
+// 禁用账号统一文案：登录、代理、/api/auth/me 共用，保证提示一致
+const ACCOUNT_DISABLED_MESSAGE = '账号已被禁用，请联系管理员。'
+
+interface SessionRow {
+  id: string
+  username: string
+  is_admin: number
+  disabled: number
+  token_version: number
+}
+
+// 校验 JWT 声明与数据库当前状态是否一致：用户仍存在、未禁用、令牌版本未被撤销。
+// 返回 401/403 响应表示拒绝，返回 null 表示通过。集中实现，供 requireUser/requireAdmin/me/refresh 复用。
+// tv 声明缺失（本次安全升级前签发的旧长效令牌、或测试令牌缺省）按已撤销处理 → 强制重新登录换取短令牌。
+function validateSession(c: Context): { row: SessionRow } | { reject: Response } {
+  const payload = c.get('jwtPayload') as { sub?: string; tv?: number }
+  const row = db.query('SELECT id, username, is_admin, disabled, token_version FROM users WHERE id = ?').get(payload?.sub ?? '') as SessionRow | null
+  if (!row) return { reject: c.json({ error: '登录状态已失效，请重新登录。' }, 401) }
+  if (row.disabled === 1) return { reject: c.json({ error: ACCOUNT_DISABLED_MESSAGE }, 403) }
+  if (payload.tv !== row.token_version) return { reject: c.json({ error: '登录状态已失效，请重新登录。' }, 401) }
+  return { row }
 }
 
 async function requireAdmin(c: Context, next: Next) {
-  const payload = c.get('jwtPayload') as { sub: string }
-  const user = db.query('SELECT is_admin FROM users WHERE id = ?').get(payload.sub) as { is_admin: number } | null
-  if (!user || user.is_admin !== 1) return c.json({ error: '需要管理员权限。请使用管理员账号登录后再操作。' }, 403)
+  const result = validateSession(c)
+  if ('reject' in result) return result.reject
+  if (result.row.is_admin !== 1) return c.json({ error: '需要管理员权限。请使用管理员账号登录后再操作。' }, 403)
   return next()
 }
 
 async function requireUser(c: Context, next: Next) {
-  const payload = c.get('jwtPayload') as { sub: string }
-  const user = db.query('SELECT id FROM users WHERE id = ?').get(payload.sub) as { id: string } | null
-  if (!user) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
+  const result = validateSession(c)
+  if ('reject' in result) return result.reject
   return next()
 }
 
@@ -451,12 +487,14 @@ function normalizeDisplayNameValue(value: unknown): { value: string } | { error:
 
 function getAuthUserPayload(userId: string) {
   const user = db.query(`
-    SELECT u.id, u.username, u.display_name, u.is_admin,
+    SELECT u.id, u.username, u.display_name, u.is_admin, u.disabled,
            u.avatar_updated_at, u.public_storage_bytes,
            (SELECT COUNT(*) FROM public_images pi WHERE pi.user_id = u.id) AS public_gallery_count
     FROM users u WHERE u.id = ?
-  `).get(userId) as (Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'avatar_updated_at' | 'public_storage_bytes'> & { public_gallery_count: number }) | null
+  `).get(userId) as (Pick<UserRow, 'id' | 'username' | 'display_name' | 'is_admin' | 'disabled' | 'avatar_updated_at' | 'public_storage_bytes'> & { public_gallery_count: number }) | null
   if (!user) return null
+  // 已禁用账号视同失效会话：/api/auth/me 返回 null → 前端自动登出
+  if (user.disabled === 1) return null
 
   const publicStorageBytes = Math.max(0, Number(user.public_storage_bytes ?? 0))
 
@@ -467,8 +505,8 @@ function getAuthUserPayload(userId: string) {
     isAdmin: user.is_admin === 1,
     avatarUpdatedAt: user.avatar_updated_at,
     maxBatchImages: getDefaultMaxBatchImages(),
-    maxConcurrent: MAX_CONCURRENT,
-    maxQueue: PROXY_QUEUE_MAX,
+    maxConcurrent: proxyQueue.limits().maxConcurrent,
+    maxQueue: proxyQueue.limits().maxQueue,
     publicGalleryCount: user.public_gallery_count,
     publicStorageBytes,
     publicStorageQuotaBytes: PER_USER_PUBLIC_QUOTA_BYTES,
@@ -582,6 +620,9 @@ app.post('/api/auth/login', async (c) => {
   if (!user || !(await Bun.password.verify(password, user.password_hash))) {
     return c.json({ error: '用户名或密码错误，请重新输入。' }, 401)
   }
+  if (user.disabled === 1) {
+    return c.json({ error: ACCOUNT_DISABLED_MESSAGE }, 403)
+  }
 
   db.query('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id)
 
@@ -647,7 +688,7 @@ app.post('/api/auth/register', async (c) => {
     throw err
   }
 
-  const token = await makeToken({ id: userId, username, is_admin: 0 })
+  const token = await makeToken({ id: userId, username, is_admin: 0, token_version: 0 })
   const profile = getAuthUserPayload(userId)
   if (!profile) return c.json({ error: '注册失败，请稍后重试。' }, 500)
   return c.json({ token, ...profile })
@@ -655,10 +696,27 @@ app.post('/api/auth/register', async (c) => {
 
 app.use('/api/auth/me', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
 app.get('/api/auth/me', (c) => {
-  const payload = c.get('jwtPayload') as { sub: string }
-  const profile = getAuthUserPayload(payload.sub)
+  const result = validateSession(c)
+  if ('reject' in result) return result.reject
+  const profile = getAuthUserPayload(result.row.id)
   if (!profile) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
   return c.json(profile)
+})
+
+// 滑动续期：在当前令牌仍有效（未过期、未禁用、tv 未撤销、未超会话绝对上限）时，
+// 换发一枚新的短时令牌，并保留原会话起始时间 sst。前端在过期前定时调用。
+app.use('/api/auth/refresh', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
+app.post('/api/auth/refresh', async (c) => {
+  const result = validateSession(c)
+  if ('reject' in result) return result.reject
+  const payload = c.get('jwtPayload') as { sst?: number }
+  const now = Math.floor(Date.now() / 1000)
+  const sst = typeof payload.sst === 'number' ? payload.sst : now
+  if (now - sst > JWT_SESSION_MAX_SECONDS) {
+    return c.json({ error: '登录会话已达上限，请重新登录。' }, 401)
+  }
+  const token = await makeToken(result.row, sst)
+  return c.json({ token })
 })
 
 app.use('/api/auth/profile', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
@@ -736,9 +794,11 @@ app.get('/api/avatars/:user_id', (c) => {
 // ===== Authenticated API Proxy =====
 
 // 全局并发信号量 + FIFO 等待队列（实现见 concurrencyQueue.ts，handler 只用 acquire/release）。
+// 初始上限取「团队服务配置」生效值（管理端配置优先，否则回退环境默认）；管理端改动经 setLimits 实时生效。
+const initialLimits = getTeamSettingsPayload()
 const proxyQueue = createConcurrencyQueue({
-  maxConcurrent: MAX_CONCURRENT,
-  maxQueue: PROXY_QUEUE_MAX,
+  maxConcurrent: initialLimits.maxConcurrent,
+  maxQueue: initialLimits.maxQueue,
   maxWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
 })
 
@@ -905,7 +965,8 @@ app.all('/api-proxy/*', async (c) => {
 app.use('/api/queue/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
 app.get('/api/queue/stats', (c) => {
   const { inflight, queued } = proxyQueue.stats()
-  return c.json({ inflight, queued, maxConcurrent: MAX_CONCURRENT, maxQueue: PROXY_QUEUE_MAX })
+  const { maxConcurrent, maxQueue } = proxyQueue.limits()
+  return c.json({ inflight, queued, maxConcurrent, maxQueue })
 })
 
 // ===== Telemetry =====
@@ -992,14 +1053,32 @@ app.patch('/api/admin/team-settings', async (c) => {
     hasUpdates = true
   }
 
+  if ('maxConcurrent' in record) {
+    const val = parseConcurrencyPatchValue(record.maxConcurrent)
+    if (val == null) return c.json({ error: '团队并发必须是 1 到 100 之间的数字。' }, 400)
+    settings.maxConcurrent = val
+    hasUpdates = true
+  }
+
+  if ('maxQueue' in record) {
+    const val = parseQueuePatchValue(record.maxQueue)
+    if (val == null) return c.json({ error: '排队上限必须是 0 到 1000 之间的数字。' }, 400)
+    settings.maxQueue = val
+    hasUpdates = true
+  }
+
   if (!hasUpdates) return c.json({ error: '没有可更新的字段。' }, 400)
   saveTeamSettingsRecord(settings, payload.sub)
-  return c.json(getTeamSettingsPayload())
+  // 立即把新上限应用到在跑的队列，无需重启 auth 容器。
+  const effective = getTeamSettingsPayload()
+  proxyQueue.setLimits({ maxConcurrent: effective.maxConcurrent, maxQueue: effective.maxQueue })
+  logger.info({ scope: 'admin', updatedBy: payload.sub, maxConcurrent: effective.maxConcurrent, maxQueue: effective.maxQueue }, 'Team service limits updated')
+  return c.json(effective)
 })
 
 app.get('/api/admin/users', (c) => {
   const rows = db.query(`
-    SELECT u.id, u.username, u.is_admin, u.max_batch_images, u.created_at, u.last_login_at,
+    SELECT u.id, u.username, u.is_admin, u.disabled, u.max_batch_images, u.created_at, u.last_login_at,
            u.avatar_updated_at,
            s.total_requests, s.success_count, s.failure_count,
            s.last_request_at,
@@ -1027,12 +1106,27 @@ app.patch('/api/admin/users/:id', async (c) => {
       }
     }
   }
+  if (body.disabled === true) {
+    if (id === payload.sub) {
+      return c.json({ error: '不能禁用当前登录的账号。' }, 400)
+    }
+    const target = db.query('SELECT is_admin FROM users WHERE id = ?').get(id) as { is_admin: number } | null
+    if (target?.is_admin === 1) {
+      const activeAdmins = (db.query('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND disabled = 0').get() as { n: number }).n
+      if (activeAdmins <= 1) {
+        return c.json({ error: '至少需要保留一个启用的管理员，无法禁用最后一个管理员。' }, 400)
+      }
+    }
+  }
   const updates: string[] = []
   const args: SQLQueryBindings[] = []
   if (typeof body.isAdmin === 'boolean') { updates.push('is_admin = ?'); args.push(body.isAdmin ? 1 : 0) }
+  if (typeof body.disabled === 'boolean') { updates.push('disabled = ?'); args.push(body.disabled ? 1 : 0) }
   if (typeof body.password === 'string' && body.password.length >= 6) {
     updates.push('password_hash = ?')
     args.push(await Bun.password.hash(body.password, { algorithm: 'bcrypt', cost: 10 }))
+    // 改密码即令该用户所有旧令牌失效（全设备登出）
+    updates.push('token_version = token_version + 1')
   }
   if (updates.length === 0) return c.json({ error: '没有可更新的字段。' }, 400)
   args.push(id)

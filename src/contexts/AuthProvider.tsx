@@ -1,5 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { fetchCurrentUser, type AuthUser } from '../lib/auth'
+import { fetchCurrentUser, logout, refreshAuthToken, type AuthUser } from '../lib/auth'
+
+// 访问令牌有效期较短（默认 2h），在过期前定时续期，确保活跃用户不被中途登出。
+// 远小于令牌寿命即可保证总在有效窗口内换发；同时在窗口重新获得焦点时立即续一次。
+const TOKEN_REFRESH_INTERVAL_MS = 25 * 60 * 1000
 
 export type AuthStatus = 'loading' | 'unauthenticated' | 'authenticated' | 'disabled'
 
@@ -43,6 +47,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // 已登录时：定时 + 重新聚焦时静默续期短时令牌。续期失败（会话失效/撤销/达上限）则登出。
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    let cancelled = false
+    const tick = async () => {
+      if (cancelled || document.visibilityState === 'hidden') return
+      const result = await refreshAuthToken()
+      if (cancelled) return
+      if (result === 'invalid') {
+        logout()
+        void refresh()
+      }
+    }
+    const interval = setInterval(() => void tick(), TOKEN_REFRESH_INTERVAL_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void tick()
+    }
+    window.addEventListener('focus', onVisible)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      window.removeEventListener('focus', onVisible)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [status, refresh])
 
   const value = useMemo(
     () => ({ status, user, authEnabled, refresh, patchUser }),

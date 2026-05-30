@@ -1,11 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useStore, getGalleryDisplayedImageIds } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HistoryModal from './HistoryModal'
-import { BellIcon, DownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
+import { BellIcon, DownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, MoreIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
 import { useAuth } from '../contexts/AuthProvider'
 import { useNotificationUnread } from '../hooks/useNotificationUnread'
 import { openConfirmDialog, showAppToast } from '../lib/dialog'
@@ -77,12 +77,7 @@ export default function Header() {
     }
   }, [appMode, agentMobileHeaderVisible])
 
-  const downloadTooltip = useTooltip()
-  const helpTooltip = useTooltip()
-  const logsTooltip = useTooltip()
   const settingsTooltip = useTooltip()
-  const galleryTooltip = useTooltip()
-  const adminTooltip = useTooltip()
   const notificationsTooltip = useTooltip()
   const { user } = useAuth()
   const [showGallery, setShowGallery] = useState(false)
@@ -218,82 +213,6 @@ export default function Header() {
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {user && (
-              <div
-                className="relative"
-                {...downloadTooltip.handlers}
-              >
-                <button
-                  onClick={() => {
-                    dismissAllTooltips()
-                    void handleDownloadGallery()
-                  }}
-                  disabled={downloadingGallery}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="下载画廊图片"
-                >
-                  {downloadingGallery ? (
-                    <svg className="h-5 w-5 animate-spin text-gray-600 dark:text-gray-400" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  ) : (
-                    <DownloadIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                  )}
-                </button>
-                <ViewportTooltip visible={downloadTooltip.visible} className="whitespace-nowrap">
-                  下载画廊图片
-                </ViewportTooltip>
-              </div>
-            )}
-            <div
-              className="relative"
-              {...helpTooltip.handlers}
-            >
-              <button
-                onClick={() => {
-                  dismissAllTooltips()
-                  setShowHelp(true)
-                }}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                aria-label="操作指南"
-              >
-                <HelpCircleIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              </button>
-              <ViewportTooltip visible={helpTooltip.visible} className="whitespace-nowrap">
-                操作指南
-              </ViewportTooltip>
-            </div>
-            <div
-              className="relative"
-              {...logsTooltip.handlers}
-            >
-              <button
-                onClick={() => {
-                  dismissAllTooltips()
-                  setShowLogPanel(true)
-                }}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                aria-label="运行日志"
-              >
-                <TerminalIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              </button>
-              <ViewportTooltip visible={logsTooltip.visible} className="whitespace-nowrap">
-                运行日志
-              </ViewportTooltip>
-            </div>
-            {user && (
-              <div className="relative" {...galleryTooltip.handlers}>
-                <button
-                  onClick={() => { dismissAllTooltips(); setGalleryUserId(null); setShowGallery(true) }}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                  aria-label="画廊"
-                >
-                  <PhotoIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                </button>
-                <ViewportTooltip visible={galleryTooltip.visible} className="whitespace-nowrap">画廊</ViewportTooltip>
-              </div>
-            )}
-            {user && (
               <div className="relative" {...notificationsTooltip.handlers}>
                 <button
                   onClick={() => { dismissAllTooltips(); setShowNotifications(true) }}
@@ -310,18 +229,16 @@ export default function Header() {
                 <ViewportTooltip visible={notificationsTooltip.visible} className="whitespace-nowrap">通知</ViewportTooltip>
               </div>
             )}
-            {user?.isAdmin && (
-              <div className="relative" {...adminTooltip.handlers}>
-                <button
-                  onClick={() => { dismissAllTooltips(); setShowAdmin(true) }}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                  aria-label="管理面板"
-                >
-                  <WrenchIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                </button>
-                <ViewportTooltip visible={adminTooltip.visible} className="whitespace-nowrap">管理面板</ViewportTooltip>
-              </div>
-            )}
+            <HeaderMoreMenu
+              hasUser={Boolean(user)}
+              isAdmin={Boolean(user?.isAdmin)}
+              downloadingGallery={downloadingGallery}
+              onOpenSharedGallery={() => { setGalleryUserId(null); setShowGallery(true) }}
+              onDownloadGallery={() => void handleDownloadGallery()}
+              onHelp={() => setShowHelp(true)}
+              onLogs={() => setShowLogPanel(true)}
+              onAdmin={() => setShowAdmin(true)}
+            />
             <div
               className="relative"
               {...settingsTooltip.handlers}
@@ -416,5 +333,134 @@ export default function Header() {
         </Suspense>
       )}
     </>
+  )
+}
+
+// 「更多」溢出菜单：把不常用的工具（共享画廊、下载、操作指南、运行日志、管理面板）收进下拉，
+// 让顶栏只保留通知 / 设置 / 账户，减少图标拥挤。
+function HeaderMoreMenu({
+  hasUser,
+  isAdmin,
+  downloadingGallery,
+  onOpenSharedGallery,
+  onDownloadGallery,
+  onHelp,
+  onLogs,
+  onAdmin,
+}: {
+  hasUser: boolean
+  isAdmin: boolean
+  downloadingGallery: boolean
+  onOpenSharedGallery: () => void
+  onDownloadGallery: () => void
+  onHelp: () => void
+  onLogs: () => void
+  onAdmin: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    function onEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onEscape)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onEscape)
+    }
+  }, [open])
+
+  function run(action: () => void) {
+    setOpen(false)
+    dismissAllTooltips()
+    action()
+  }
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => { dismissAllTooltips(); setOpen((v) => !v) }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="更多"
+        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+      >
+        <MoreIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-50 mt-1 min-w-[11rem] overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-lg shadow-black/10 ring-1 ring-black/5 dark:border-white/10 dark:bg-gray-900 dark:shadow-black/40 dark:ring-white/10"
+        >
+          {hasUser && (
+            <HeaderMenuItem icon={<PhotoIcon className="h-4 w-4" />} onClick={() => run(onOpenSharedGallery)}>
+              共享画廊
+            </HeaderMenuItem>
+          )}
+          {hasUser && (
+            <HeaderMenuItem
+              icon={
+                downloadingGallery ? (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <DownloadIcon className="h-4 w-4" />
+                )
+              }
+              disabled={downloadingGallery}
+              onClick={() => run(onDownloadGallery)}
+            >
+              下载画廊图片
+            </HeaderMenuItem>
+          )}
+          <HeaderMenuItem icon={<HelpCircleIcon className="h-4 w-4" />} onClick={() => run(onHelp)}>
+            操作指南
+          </HeaderMenuItem>
+          <HeaderMenuItem icon={<TerminalIcon className="h-4 w-4" />} onClick={() => run(onLogs)}>
+            运行日志
+          </HeaderMenuItem>
+          {isAdmin && (
+            <HeaderMenuItem icon={<WrenchIcon className="h-4 w-4" />} onClick={() => run(onAdmin)}>
+              管理面板
+            </HeaderMenuItem>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HeaderMenuItem({
+  children,
+  icon,
+  onClick,
+  disabled = false,
+}: {
+  children: ReactNode
+  icon: ReactNode
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"
+    >
+      <span className="shrink-0 text-gray-500 dark:text-gray-400">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+    </button>
   )
 }

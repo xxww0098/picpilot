@@ -17,6 +17,7 @@ export interface AdminUserRow {
   id: string
   username: string
   is_admin: number
+  disabled: number
   max_batch_images: number
   created_at: number
   last_login_at: number | null
@@ -92,7 +93,7 @@ export function fetchAdminTeamSettings() {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', undefined, '加载失败')
 }
 
-export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number }) {
+export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number; maxConcurrent?: number; maxQueue?: number }) {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -100,7 +101,7 @@ export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number })
   }, '保存失败')
 }
 
-export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string }) {
+export function patchAdminUser(id: string, body: { isAdmin?: boolean; password?: string; disabled?: boolean }) {
   return authJson<{ ok: true }>(`/api/admin/users/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

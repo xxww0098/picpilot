@@ -257,7 +257,9 @@ export default function EventLog() {
                 <pre className="whitespace-pre-wrap rounded bg-[hsl(var(--muted))] p-3 text-xs">{detail.error_stack}</pre>
               </div>
             )}
-            <button onClick={() => setDetail(null)} className="mt-4 rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))]">关闭</button>
+            <div className="mt-4 flex justify-end">
+              <button onClick={() => setDetail(null)} className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))]">关闭</button>
+            </div>
         </ModalShell>
       )}
     </div>

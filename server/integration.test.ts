@@ -22,8 +22,12 @@ const SECRET = process.env.JWT_SECRET!
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 
-async function tokenFor(userId: string, username: string, isAdmin = false): Promise<string> {
-  return sign({ sub: userId, username, isAdmin, exp: Math.floor(Date.now() / 1000) + 3600 }, SECRET)
+async function tokenFor(userId: string, username: string, isAdmin = false, opts: { tv?: number; sst?: number; exp?: number } = {}): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  return sign(
+    { sub: userId, username, isAdmin, tv: opts.tv ?? 0, sst: opts.sst ?? now, exp: opts.exp ?? now + 3600 },
+    SECRET,
+  )
 }
 
 function seedUser(id: string, username: string, bytes = 0): void {
@@ -192,4 +196,55 @@ test('登录限速：同一 IP 第 6 次返回 429', async () => {
     last = await authPost('/api/auth/login', { username: 'nobody', password: 'x' }, ip)
   }
   expect(last.status).toBe(429)
+})
+
+function authGet(pathname: string, token: string) {
+  return app.request(pathname, { headers: { Authorization: `Bearer ${token}` } })
+}
+
+test('refresh：有效令牌可换发新的短时令牌', async () => {
+  seedUser('u-refresh', 'refresher')
+  const token = await tokenFor('u-refresh', 'refresher')
+  const res = await app.request('/api/auth/refresh', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+  expect(res.status).toBe(200)
+  const data = (await res.json()) as { token?: string }
+  expect(typeof data.token).toBe('string')
+  // 换发的令牌能正常访问
+  expect((await authGet('/api/auth/me', data.token!)).status).toBe(200)
+})
+
+test('refresh：超过会话绝对上限（sst 过旧）被拒 401', async () => {
+  seedUser('u-cap', 'capuser')
+  // sst 设为 8 天前，超过默认 7 天上限
+  const stale = await tokenFor('u-cap', 'capuser', false, { sst: Math.floor(Date.now() / 1000) - 8 * 24 * 60 * 60 })
+  const res = await app.request('/api/auth/refresh', { method: 'POST', headers: { Authorization: `Bearer ${stale}` } })
+  expect(res.status).toBe(401)
+})
+
+test('token_version 撤销：tv 与库不一致的令牌被 /api/auth/me 拒', async () => {
+  seedUser('u-tv', 'tvuser')
+  db.query('UPDATE users SET token_version = 3 WHERE id = ?').run('u-tv')
+  const staleTv = await tokenFor('u-tv', 'tvuser', false, { tv: 2 })
+  expect((await authGet('/api/auth/me', staleTv)).status).toBe(401)
+  const freshTv = await tokenFor('u-tv', 'tvuser', false, { tv: 3 })
+  expect((await authGet('/api/auth/me', freshTv)).status).toBe(200)
+})
+
+test('改密码自增 token_version，令旧令牌失效', async () => {
+  seedUser('u-admin-pw', 'adminpw')
+  db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-pw')
+  seedUser('u-victim', 'victim')
+  const adminToken = await tokenFor('u-admin-pw', 'adminpw', true)
+  const victimToken = await tokenFor('u-victim', 'victim', false, { tv: 0 })
+  expect((await authGet('/api/auth/me', victimToken)).status).toBe(200)
+
+  const patch = await app.request('/api/admin/users/u-victim', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ password: 'brand-new-pass' }),
+  })
+  expect(patch.status).toBe(200)
+  expect((db.query('SELECT token_version AS v FROM users WHERE id = ?').get('u-victim') as { v: number }).v).toBe(1)
+  // 旧令牌（tv=0）现在失效
+  expect((await authGet('/api/auth/me', victimToken)).status).toBe(401)
 })

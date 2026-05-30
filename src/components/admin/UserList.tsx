@@ -5,7 +5,7 @@ import {
   patchAdminUser,
   type AdminUserRow,
 } from '../../lib/adminApi'
-import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
+import { openConfirmDialog, openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
 import { formatRelative } from '../../lib/format'
 import { getUserFacingErrorMessage } from '../../lib/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
@@ -26,7 +26,7 @@ export default function UserList() {
     return users.filter((u) => u.username.toLowerCase().includes(q))
   }, [users, query])
 
-  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string }) {
+  async function patchUser(id: string, body: { isAdmin?: boolean; password?: string; disabled?: boolean }) {
     setBusyId(id)
     try {
       await patchAdminUser(id, body)
@@ -53,6 +53,23 @@ export default function UserList() {
         } finally {
           setBusyId(null)
         }
+      },
+    })
+  }
+
+  function toggleDisabled(id: string, username: string, currentlyDisabled: boolean) {
+    if (currentlyDisabled) {
+      void patchUser(id, { disabled: false }).then(() => showAppToast(`已启用「${username}」。`, 'success'))
+      return
+    }
+    openConfirmDialog({
+      title: '禁用账号',
+      message: `禁用后「${username}」将无法登录和出图，已登录的会话也会立即失效。可随时重新启用。`,
+      tone: 'warning',
+      confirmText: '禁用',
+      onConfirm: async () => {
+        await patchUser(id, { disabled: true })
+        showAppToast(`已禁用「${username}」。`, 'success')
       },
     })
   }
@@ -108,7 +125,7 @@ export default function UserList() {
             {query.trim() ? '没有匹配的用户' : '暂无用户'}
           </p>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y divide-[hsl(var(--border))] rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-sm shadow-black/[0.03] dark:shadow-black/20">
             {filteredUsers.map((user) => (
               <UserCard
                 key={user.id}
@@ -116,6 +133,7 @@ export default function UserList() {
                 busy={busyId === user.id}
                 isSelf={user.id === currentUser?.userId}
                 onToggleAdmin={() => void patchUser(user.id, { isAdmin: user.is_admin !== 1 })}
+                onToggleDisabled={() => toggleDisabled(user.id, user.username, user.disabled === 1)}
                 onResetPassword={() => resetPassword(user.id, user.username)}
                 onDelete={() => deleteUser(user.id, user.username)}
               />
@@ -129,27 +147,37 @@ export default function UserList() {
 
 function UserListSkeleton() {
   return (
-    <div className="space-y-3" aria-busy aria-label="加载用户列表">
-      {Array.from({ length: 3 }, (_, i) => (
-        <div
-          key={i}
-          className="animate-pulse rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.25)] p-4"
-        >
-          <div className="flex gap-3">
-            <div className="h-10 w-10 rounded-full bg-[hsl(var(--muted))]" />
-            <div className="flex-1 space-y-2">
-              <div className="h-4 w-28 rounded bg-[hsl(var(--muted))]" />
-              <div className="h-3 w-40 rounded bg-[hsl(var(--muted))]" />
-            </div>
+    <div className="divide-y divide-[hsl(var(--border))] overflow-hidden rounded-xl border border-[hsl(var(--border))]" aria-busy aria-label="加载用户列表">
+      {Array.from({ length: 5 }, (_, i) => (
+        <div key={i} className="animate-pulse flex items-center gap-3 px-3 py-2.5">
+          <div className="h-9 w-9 shrink-0 rounded-full bg-[hsl(var(--muted))]" />
+          <div className="flex-1 space-y-1.5">
+            <div className="h-3.5 w-28 rounded bg-[hsl(var(--muted))]" />
+            <div className="h-2.5 w-40 rounded bg-[hsl(var(--muted))]" />
           </div>
-          <div className="mt-4 h-2 rounded-full bg-[hsl(var(--muted))]" />
-          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {Array.from({ length: 4 }, (_, j) => (
-              <div key={j} className="h-14 rounded-lg bg-[hsl(var(--muted))]" />
+          <div className="hidden gap-5 sm:flex">
+            {Array.from({ length: 3 }, (_, j) => (
+              <div key={j} className="h-7 w-8 rounded bg-[hsl(var(--muted))]" />
             ))}
           </div>
+          <div className="h-7 w-7 rounded-lg bg-[hsl(var(--muted))]" />
         </div>
       ))}
+    </div>
+  )
+}
+
+function UserStat({ value, label, tone }: { value: number; label: string; tone?: 'success' | 'danger' }) {
+  const color =
+    tone === 'success'
+      ? 'text-green-600 dark:text-green-400'
+      : tone === 'danger'
+        ? value > 0 ? 'text-red-600 dark:text-red-400' : 'text-[hsl(var(--muted-foreground))]'
+        : 'text-[hsl(var(--foreground))]'
+  return (
+    <div className="w-10 text-center leading-tight">
+      <div className={`text-sm font-semibold tabular-nums ${color}`}>{value}</div>
+      <div className="text-[0.65rem] text-[hsl(var(--muted-foreground))]">{label}</div>
     </div>
   )
 }
@@ -159,6 +187,7 @@ function UserCard({
   busy,
   isSelf,
   onToggleAdmin,
+  onToggleDisabled,
   onResetPassword,
   onDelete,
 }: {
@@ -166,68 +195,78 @@ function UserCard({
   busy: boolean
   isSelf: boolean
   onToggleAdmin: () => void
+  onToggleDisabled: () => void
   onResetPassword: () => void
   onDelete: () => void
 }) {
   const successCount = user.success_count ?? 0
   const failureCount = user.failure_count ?? 0
   const totalRequests = user.total_requests ?? 0
+  const isDisabled = user.disabled === 1
+
+  const stats = (
+    <>
+      <UserStat value={totalRequests} label="总请求" />
+      <UserStat value={successCount} label="成功" tone="success" />
+      <UserStat value={failureCount} label="失败" tone="danger" />
+    </>
+  )
+
+  const menu = (
+    <UserActionsMenu
+      busy={busy}
+      isAdmin={!!user.is_admin}
+      isSelf={isSelf}
+      isDisabled={isDisabled}
+      onToggleAdmin={onToggleAdmin}
+      onToggleDisabled={onToggleDisabled}
+      onResetPassword={onResetPassword}
+      onDelete={onDelete}
+    />
+  )
 
   return (
-    <article className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4 shadow-sm shadow-black/[0.03] transition-shadow hover:shadow-md hover:shadow-black/[0.05] dark:shadow-black/20 dark:hover:shadow-black/30">
-      <div className="flex items-start gap-3">
+    <article className="group flex flex-col gap-2 px-3 py-2.5 transition-colors first:rounded-t-xl last:rounded-b-xl hover:bg-[hsl(var(--muted)/0.35)] sm:flex-row sm:items-center sm:gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         <Avatar
           userId={user.id}
           username={user.username}
           avatarUpdatedAt={user.avatar_updated_at}
-          size={40}
-          className={`shrink-0 ${user.is_admin ? 'ring-2 ring-[hsl(var(--primary)/0.4)]' : ''}`}
+          size={36}
+          className={`shrink-0 ${user.is_admin ? 'ring-2 ring-[hsl(var(--primary)/0.4)]' : ''} ${isDisabled ? 'opacity-40 grayscale' : ''}`}
         />
-
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-semibold text-[hsl(var(--foreground))]">{user.username}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className={`truncate text-sm font-semibold ${isDisabled ? 'text-[hsl(var(--muted-foreground))] line-through' : 'text-[hsl(var(--foreground))]'}`}>{user.username}</h3>
             {user.is_admin ? (
-              <span className="rounded-full bg-[hsl(var(--primary)/0.12)] px-2 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--primary))]">
+              <span className="shrink-0 rounded-full bg-[hsl(var(--primary)/0.12)] px-1.5 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--primary))]">
                 管理员
               </span>
             ) : (
-              <span className="rounded-full bg-[hsl(var(--muted))] px-2 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--muted-foreground))]">
+              <span className="shrink-0 rounded-full bg-[hsl(var(--muted))] px-1.5 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--muted-foreground))]">
                 成员
               </span>
             )}
+            {isDisabled && (
+              <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[0.65rem] font-medium text-red-600 dark:text-red-400">
+                已禁用
+              </span>
+            )}
           </div>
-          <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
-            上次登录 {formatRelative(user.last_login_at)}
+          <p className="mt-0.5 truncate text-xs text-[hsl(var(--muted-foreground))]">
+            登录 {formatRelative(user.last_login_at)}
             <span className="mx-1.5 text-[hsl(var(--border))]">·</span>
-            最后请求 {formatRelative(user.last_request_at)}
+            请求 {formatRelative(user.last_request_at)}
           </p>
         </div>
-
-        <UserActionsMenu
-          busy={busy}
-          isAdmin={!!user.is_admin}
-          isSelf={isSelf}
-          onToggleAdmin={onToggleAdmin}
-          onResetPassword={onResetPassword}
-          onDelete={onDelete}
-        />
+        {/* 移动端：操作菜单贴右，统计另起一行 */}
+        <div className="shrink-0 sm:hidden">{menu}</div>
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-3 text-center text-xs">
-        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
-          <div className="font-medium text-[hsl(var(--foreground))]">{totalRequests}</div>
-          <div className="text-[hsl(var(--muted-foreground))]">总请求</div>
-        </div>
-        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
-          <div className="font-medium text-green-600 dark:text-green-400">{successCount}</div>
-          <div className="text-[hsl(var(--muted-foreground))]">成功</div>
-        </div>
-        <div className="rounded-lg bg-[hsl(var(--muted)/0.3)] px-2 py-2">
-          <div className="font-medium text-red-600 dark:text-red-400">{failureCount}</div>
-          <div className="text-[hsl(var(--muted-foreground))]">失败</div>
-        </div>
-      </div>
+      {/* 统计：移动端整行靠左，桌面端贴右内联 */}
+      <div className="flex shrink-0 items-center gap-5 pl-12 sm:pl-0">{stats}</div>
+
+      <div className="hidden shrink-0 sm:block">{menu}</div>
     </article>
   )
 }
@@ -236,14 +275,18 @@ function UserActionsMenu({
   busy,
   isAdmin,
   isSelf,
+  isDisabled,
   onToggleAdmin,
+  onToggleDisabled,
   onResetPassword,
   onDelete,
 }: {
   busy: boolean
   isAdmin: boolean
   isSelf: boolean
+  isDisabled: boolean
   onToggleAdmin: () => void
+  onToggleDisabled: () => void
   onResetPassword: () => void
   onDelete: () => void
 }) {
@@ -298,6 +341,9 @@ function UserActionsMenu({
             <MenuButton onClick={() => run(onToggleAdmin)}>{isAdmin ? '取消管理员' : '设为管理员'}</MenuButton>
           )}
           <MenuButton onClick={() => run(onResetPassword)}>重置密码</MenuButton>
+          {!isSelf && (
+            <MenuButton onClick={() => run(onToggleDisabled)}>{isDisabled ? '启用账号' : '禁用账号'}</MenuButton>
+          )}
           {!isSelf && (
             <>
               <div className="my-1 h-px bg-[hsl(var(--border))]" role="separator" />

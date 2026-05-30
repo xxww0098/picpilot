@@ -44,6 +44,15 @@ export interface ConcurrencyQueue {
   release(): void
   /** 当前在途数与排队数，用于日志/调试。 */
   stats(): { inflight: number; queued: number }
+  /**
+   * 运行时调整上限（管理端「团队服务配置」用）。只更新提供的字段。
+   * 提高 maxConcurrent 会立即唤醒可放行的队首等待者；
+   * 降低只影响后续放行判断，不会中断已在途的请求。
+   * 调小 maxQueue 不会踢出已在队列里的等待者，只对后续 acquire 生效。
+   */
+  setLimits(limits: { maxConcurrent?: number; maxQueue?: number }): void
+  /** 当前生效上限。 */
+  limits(): { maxConcurrent: number; maxQueue: number }
 }
 
 interface SlotWaiter {
@@ -52,8 +61,8 @@ interface SlotWaiter {
 }
 
 export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): ConcurrencyQueue {
-  const maxConcurrent = Math.max(1, opts.maxConcurrent)
-  const maxQueue = Math.max(0, opts.maxQueue)
+  let maxConcurrent = Math.max(1, opts.maxConcurrent)
+  let maxQueue = Math.max(0, opts.maxQueue)
   const defaultWaitMs = Math.max(0, opts.maxWaitMs)
 
   let inflight = 0
@@ -96,20 +105,37 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
     })
   }
 
+  // 在有空位时按 FIFO 唤醒队首等待者；resolve 内部会 inflight++。
+  function pump(): void {
+    while (waiters.length > 0 && inflight < maxConcurrent) {
+      waiters.shift()!.resolve()
+    }
+  }
+
   function release(): void {
     // 防御：每个成功的 acquire 只应 release 一次（handler 侧有 released 守卫保证），
     // 正常路径不会越界；这里兜底，绝不让 inflight 变负而破坏后续放行判断。
     if (inflight <= 0) return
     inflight--
-    // 唤醒队首等待者；resolve 内部会 inflight++。
-    while (waiters.length > 0 && inflight < maxConcurrent) {
-      waiters.shift()!.resolve()
+    pump()
+  }
+
+  function setLimits(limits: { maxConcurrent?: number; maxQueue?: number }): void {
+    if (typeof limits.maxConcurrent === 'number' && Number.isFinite(limits.maxConcurrent)) {
+      maxConcurrent = Math.max(1, Math.trunc(limits.maxConcurrent))
     }
+    if (typeof limits.maxQueue === 'number' && Number.isFinite(limits.maxQueue)) {
+      maxQueue = Math.max(0, Math.trunc(limits.maxQueue))
+    }
+    // 提高并发上限后可能腾出空位，立即唤醒等待者。
+    pump()
   }
 
   return {
     acquire,
     release,
     stats: () => ({ inflight, queued: waiters.length }),
+    setLimits,
+    limits: () => ({ maxConcurrent, maxQueue }),
   }
 }

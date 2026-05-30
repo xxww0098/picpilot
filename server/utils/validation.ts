@@ -12,6 +12,32 @@ export function parseBatchImageLimitPatchValue(value: unknown): number | null {
   return Math.trunc(numeric)
 }
 
+// 团队并发上限：全局同时在途请求数。范围 1-100。
+export function normalizeConcurrencyLimit(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(1, Math.min(100, Math.trunc(numeric)))
+}
+
+export function parseConcurrencyPatchValue(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < 1 || numeric > 100) return null
+  return Math.trunc(numeric)
+}
+
+// 排队上限：等待队列长度。范围 0-1000（0 表示不排队，满载即 429）。
+export function normalizeQueueLimit(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(0, Math.min(1000, Math.trunc(numeric)))
+}
+
+export function parseQueuePatchValue(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1000) return null
+  return Math.trunc(numeric)
+}
+
 export function generateInviteCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   let code = ''

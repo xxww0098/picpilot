@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateImageSize } from './size'
+import { calculateImageSize, formatImageRatio } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
@@ -16,5 +16,24 @@ describe('calculateImageSize', () => {
 
   it('falls back to budget-based sizing for custom ratios', () => {
     expect(calculateImageSize('2K', '5:4')).toBe('2288x1824')
+  })
+})
+
+describe('formatImageRatio', () => {
+  it('displays clean simplified ratios exactly, not as an unreduced equivalent', () => {
+    // 回归：1600x2000 应约分为 4:5 精确展示，而非 ≈8:10
+    expect(formatImageRatio(1600, 2000)).toBe('4:5')
+    expect(formatImageRatio(2000, 1600)).toBe('5:4')
+    expect(formatImageRatio(1200, 1000)).toBe('6:5')
+    expect(formatImageRatio(800, 1000)).toBe('4:5')
+  })
+
+  it('keeps exact common ratios', () => {
+    expect(formatImageRatio(1920, 1080)).toBe('16:9')
+    expect(formatImageRatio(1024, 1024)).toBe('1:1')
+  })
+
+  it('approximates near-square and odd ratios with a ≈ prefix', () => {
+    expect(formatImageRatio(1040, 1024)).toBe('≈1:1')
   })
 })

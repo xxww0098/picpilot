@@ -173,6 +173,28 @@ export async function fetchAvatarBlob(userId: string): Promise<Blob | null> {
   return res.blob()
 }
 
+// 滑动续期：用当前（仍有效的）令牌换一枚新的短时令牌。
+// 'refreshed' 已更新 localStorage；'invalid' 表示会话已失效（过期/撤销/达上限）应登出；
+// 'skip' 表示无令牌或网络抖动，保持现状下次再试。
+export async function refreshAuthToken(): Promise<'refreshed' | 'invalid' | 'skip'> {
+  const token = getStoredToken()
+  if (!token) return 'skip'
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 401 || res.status === 403) return 'invalid'
+    if (!res.ok) return 'skip'
+    const data = (await res.json()) as { token?: string }
+    if (!data.token) return 'skip'
+    localStorage.setItem(TOKEN_KEY, data.token)
+    return 'refreshed'
+  } catch {
+    return 'skip'
+  }
+}
+
 export function logout(): void {
   cachedAuthUser = null
   if (typeof localStorage?.removeItem !== 'function') return

@@ -112,3 +112,43 @@ test('过量 release 不会让 inflight 变负，且不破坏后续放行', asyn
   expect(third).toBe(false)
   expect(q.stats()).toEqual({ inflight: 2, queued: 1 })
 })
+
+test('setLimits 提高 maxConcurrent 立即唤醒等待者', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 1, maxQueue: 10, maxWaitMs: 0 })
+  await q.acquire(neverAbort())
+  let woken = false
+  const p = q.acquire(neverAbort()).then(() => { woken = true })
+  await tick()
+  expect(woken).toBe(false)
+  expect(q.stats()).toEqual({ inflight: 1, queued: 1 })
+
+  q.setLimits({ maxConcurrent: 2 }) // 腾出空位 → 队首立即放行
+  await p
+  expect(woken).toBe(true)
+  expect(q.limits()).toEqual({ maxConcurrent: 2, maxQueue: 10 })
+  expect(q.stats()).toEqual({ inflight: 2, queued: 0 })
+})
+
+test('setLimits 降低 maxConcurrent 不中断在途，只影响后续放行', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 3, maxQueue: 10, maxWaitMs: 0 })
+  await q.acquire(neverAbort())
+  await q.acquire(neverAbort())
+  await q.acquire(neverAbort())
+  q.setLimits({ maxConcurrent: 1 }) // 已在途的 3 个不受影响
+  expect(q.stats()).toEqual({ inflight: 3, queued: 0 })
+
+  let next = false
+  void q.acquire(neverAbort()).then(() => { next = true })
+  await tick()
+  expect(next).toBe(false) // inflight(3) 仍 >= 新上限(1)，必须排队
+  expect(q.stats()).toEqual({ inflight: 3, queued: 1 })
+})
+
+test('setLimits 调小 maxQueue 后新请求按新上限拒绝', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 1, maxQueue: 10, maxWaitMs: 0 })
+  await q.acquire(neverAbort())
+  q.setLimits({ maxQueue: 1 })
+  void q.acquire(neverAbort()).catch(() => {}) // 占满新队列（长度 1）
+  await tick()
+  await expect(q.acquire(neverAbort())).rejects.toBeInstanceOf(QueueFullError)
+})

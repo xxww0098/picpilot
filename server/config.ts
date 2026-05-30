@@ -25,7 +25,12 @@ export const logger = pino({
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const PORT = Number(process.env.AUTH_PORT ?? '3001')
 export const STATIC_DIR = process.env.STATIC_DIR ? path.resolve(process.env.STATIC_DIR) : path.resolve(__dirname, '../dist')
-export const JWT_EXPIRES_IN_SECONDS = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 30 * 24 * 60 * 60)
+// 访问令牌有效期：短时（默认 2h）。前端在过期前静默刷新（/api/auth/refresh），
+// 因此泄露但未刷新的令牌最多 2h 后失效，大幅缩小被盗窗口。
+export const JWT_EXPIRES_IN_SECONDS = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 2 * 60 * 60)
+// 会话绝对上限（默认 7d）：从登录那一刻起算，超过即使一直刷新也必须重新登录。
+// 给被持续刷新的被盗令牌设一个硬上限。
+export const JWT_SESSION_MAX_SECONDS = Number(process.env.JWT_SESSION_MAX_SECONDS ?? 7 * 24 * 60 * 60)
 export const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data')
 export const DB_PATH = process.env.DB_PATH ?? path.join(DATA_DIR, 'auth.db')
 export const PUBLIC_DIR = path.join(DATA_DIR, 'public')
