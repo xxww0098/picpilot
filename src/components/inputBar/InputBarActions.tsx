@@ -21,7 +21,8 @@ export type InputBarActionsProps = {
   perImageOutputCount?: number
   /** 「合成一张」模式将产出的图片数（= 数量） */
   mergeOutputCount?: number
-  onSubmitWithMode?: (mode: MultiImageMode) => void
+  /** 仅切换发送模式（改变主按钮功能），不触发发送 */
+  onSelectMode?: (mode: MultiImageMode) => void
   onSubmit: () => void
   onStopAgent: () => void
   onOpenSettings: () => void
@@ -83,7 +84,7 @@ export default function InputBarActions({
   activeMultiImageMode = 'each',
   perImageOutputCount = 0,
   mergeOutputCount = 0,
-  onSubmitWithMode,
+  onSelectMode,
   onSubmit,
   onStopAgent,
   onOpenSettings,
@@ -246,7 +247,7 @@ export default function InputBarActions({
         ]).map((item) => (
           <button
             key={item.mode}
-            onClick={() => { setShowModeMenu(false); onSubmitWithMode?.(item.mode) }}
+            onClick={() => { setShowModeMenu(false); onSelectMode?.(item.mode) }}
             className="w-full px-3 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between gap-3 transition-colors"
           >
             <span className="flex items-center gap-1.5">

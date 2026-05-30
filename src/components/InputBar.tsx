@@ -202,9 +202,9 @@ export default function InputBar() {
   const perImageOutputCount = referenceImages.length * effectiveSubmitN
   const mergeOutputCount = effectiveSubmitN
   const activeMultiImageMode = settings.multiImageMode
-  const submitWithMultiImageMode = useCallback((mode: MultiImageMode) => {
+  // 仅切换发送模式（改变主按钮功能），由用户点击主按钮再发送
+  const selectMultiImageMode = useCallback((mode: MultiImageMode) => {
     if (useStore.getState().settings.multiImageMode !== mode) setSettings({ multiImageMode: mode })
-    void submitTask({ multiImageMode: mode })
   }, [setSettings])
 
   useEffect(() => {
@@ -554,7 +554,7 @@ export default function InputBar() {
     activeMultiImageMode,
     perImageOutputCount,
     mergeOutputCount,
-    onSubmitWithMode: submitWithMultiImageMode,
+    onSelectMode: selectMultiImageMode,
     onSubmit: submitCurrentMode,
     onStopAgent: stopActiveAgentResponse,
     onOpenSettings: () => setShowSettings(true),
