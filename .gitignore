@@ -21,7 +21,8 @@ data/
 *.local
 
 # Editor / IDE / agent settings
-.claude/
+.claude/*
+!.claude/skills/
 .vscode/
 .idea/
 .DS_Store
