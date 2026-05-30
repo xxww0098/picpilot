@@ -41,6 +41,9 @@ import {
   newId,
   type CustomProviderForm,
 } from './settingsModal/constants'
+import SettingsGeneralSection from './settingsModal/SettingsGeneralSection'
+import SettingsAgentSection from './settingsModal/SettingsAgentSection'
+import SettingsAboutSection from './settingsModal/SettingsAboutSection'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -859,181 +862,17 @@ export default function SettingsModal() {
           <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative overflow-hidden">
             <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 sm:p-6">
             {activeTab === 'general' && (
-              <div className="space-y-4">
-                <div className="hidden sm:block">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">任务提交方式</span>
-                    <div className="w-32">
-                      <Select
-                        value={draft.enterSubmit ? 'enter' : 'ctrl-enter'}
-                        onChange={(val) => commitSettings({ ...draft, enterSubmit: val === 'enter' })}
-                        options={[
-                          { label: 'Enter', value: 'enter' },
-                          { label: navigator.userAgent.includes('Mac') ? 'Cmd + Enter' : 'Ctrl + Enter', value: 'ctrl-enter' }
-                        ]}
-                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    选择 Enter 提交时，使用 Shift + Enter 换行；否则直接 Enter 换行。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">提交任务后清空输入框</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, clearInputAfterSubmit: !draft.clearInputAfterSubmit })}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.clearInputAfterSubmit ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.clearInputAfterSubmit}
-                      aria-label="提交任务后清空输入框"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.clearInputAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后，提交成功创建任务时会清空提示词和参考图。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">参考图编辑按钮</span>
-                    <div className="w-32">
-                      <Select
-                        value={draft.referenceImageEditAction}
-                        onChange={(val) => commitSettings({ ...draft, referenceImageEditAction: val as AppSettings['referenceImageEditAction'] })}
-                        options={[
-                          { label: '询问', value: 'ask' },
-                          { label: '替换参考图', value: 'replace-reference' },
-                          { label: '添加遮罩', value: 'add-mask' },
-                        ]}
-                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    控制未添加遮罩的参考图点击编辑按钮时，是每次询问、直接替换参考图，还是直接添加遮罩。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">重启后加载上次的输入框</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, persistInputOnRestart: !draft.persistInputOnRestart })}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.persistInputOnRestart ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.persistInputOnRestart}
-                      aria-label="重启后加载上次的输入框"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.persistInputOnRestart ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    关闭后，不再持久化提示词和参考图，下次启动会使用空输入框。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between">
-                  <span className="block text-sm text-gray-600 dark:text-gray-300">复用历史任务时使用原 API 与模型配置</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, reuseTaskApiProfileTemporarily: !draft.reuseTaskApiProfileTemporarily })}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.reuseTaskApiProfileTemporarily ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.reuseTaskApiProfileTemporarily}
-                      aria-label="复用历史任务时使用原 API 与模型配置"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.reuseTaskApiProfileTemporarily ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后，复用历史任务时会先尝试使用当时的 API 与模型配置；如果配置已删除，提交前会询问是否改用当前配置。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">成功任务也显示重试按钮</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, alwaysShowRetryButton: !draft.alwaysShowRetryButton })}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.alwaysShowRetryButton ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.alwaysShowRetryButton}
-                      aria-label="成功任务也显示重试按钮"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.alwaysShowRetryButton ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后，已成功的任务卡片和详情页也会显示重试按钮，方便用相同参数再生成一次。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">发送消息后自动滚动到底部</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, agentScrollToBottomAfterSubmit: !draft.agentScrollToBottomAfterSubmit })}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.agentScrollToBottomAfterSubmit ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.agentScrollToBottomAfterSubmit}
-                      aria-label="发送消息后自动滚动到底部"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentScrollToBottomAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后，在 Agent 模式发送消息成功后会自动滚动到对话底部。
-                  </div>
-                </div>
-              </div>
+              <SettingsGeneralSection draft={draft} commitSettings={commitSettings} />
             )}
 
             {activeTab === 'agent' && (
-              <div className="space-y-4">
-                <label className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 最大连续工具轮数</span>
-                  <input
-                    value={agentMaxToolRoundsInput}
-                    onChange={(e) => setAgentMaxToolRoundsInput(e.target.value)}
-                    onBlur={commitAgentMaxToolRounds}
-                    type="number"
-                    min={1}
-                    max={50}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                    默认 15。用于限制 Agent 连续调用工具的轮数，避免长时间循环消耗额度。
-                  </div>
-                </label>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">允许 Agent 网络搜索</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
-                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
-                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
-                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
-                        commitSettings({ ...draft, agentMaxToolRounds, agentWebSearch: !draft.agentWebSearch })
-                      }}
-                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentWebSearch ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.agentWebSearch}
-                      aria-label="允许 Agent 网络搜索"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentWebSearch ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    启用 Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/[0.06]">web_search</code> 工具。模型每次调用该工具都会产生额外计费。
-                  </div>
-                </div>
-              </div>
+              <SettingsAgentSection
+                draft={draft}
+                commitSettings={commitSettings}
+                agentMaxToolRoundsInput={agentMaxToolRoundsInput}
+                setAgentMaxToolRoundsInput={setAgentMaxToolRoundsInput}
+                commitAgentMaxToolRounds={commitAgentMaxToolRounds}
+              />
             )}
             
             {activeTab === 'api' && (
@@ -1547,17 +1386,7 @@ export default function SettingsModal() {
             )}
 
             {activeTab === 'about' && (
-              <div className="flex h-full min-h-[300px] flex-col items-center justify-center pb-8 px-6">
-                <div className="flex flex-col items-center">
-                  <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-gray-200/80 bg-gray-50/50 text-gray-800 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-100">
-                    <svg className="h-11 w-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                    </svg>
-                  </div>
-                  <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">picpilot</h4>
-                  <p className="mt-1.5 text-[13px] text-gray-500 dark:text-gray-400">v{__APP_VERSION__}</p>
-                </div>
-              </div>
+              <SettingsAboutSection />
             )}
           </div>
           </div>
