@@ -866,7 +866,12 @@ app.all('/api-proxy/*', async (c) => {
       headers: createApiProxyRequestHeaders(c),
       body: c.req.method === 'POST' ? c.req.raw.body : undefined,
       signal: c.req.raw.signal,
-    })
+      // Bun fetch 默认 300s 超时，到 5 分钟整即抛 TimeoutError；而出图（尤其
+      // /images/edits）单次可达 5m40s+，会被这条默认计时器误杀（实测默认 300s、
+      // timeout:false 可放行至 310s+）。关闭它，取消完全交给 signal——客户端断开/
+      // 取消 → 499，前端 profile.timeout(900s) 兜底；前端 Caddyfile 已配 600s 转发超时。
+      timeout: false,
+    } as RequestInit)
   } catch (err) {
     release()
     logger.error({ scope: 'proxy', target: target.href, err: String(err) }, 'Upstream API request failed')
