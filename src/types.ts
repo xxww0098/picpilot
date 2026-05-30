@@ -176,6 +176,11 @@ export interface TaskRecord {
   failedImageCount?: number
   /** 批量生成中失败槽位的错误信息（用于展示/重试提示） */
   partialImageErrors?: string[]
+  /**
+   * 多图「每张」模式合并卡：一次提交按 inputImageIds 中每张输入图各发一次请求，
+   * 所有结果汇总到本卡的 outputImages（N 张输入 → 1 张卡）。执行见 store 的按输入图扇出逻辑。
+   */
+  perInputImage?: boolean
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
   streamPartialImageIds?: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */

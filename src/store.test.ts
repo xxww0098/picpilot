@@ -209,6 +209,35 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
   })
 
+  it('merges multi-image "each" mode into a single per-input task instead of N tasks', async () => {
+    useStore.setState({
+      inputImages: [imageA, imageB],
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', multiImageMode: 'each' },
+    })
+
+    await submitTask()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0].perInputImage).toBe(true)
+    expect(state.tasks[0].inputImageIds).toEqual([imageA.id, imageB.id])
+    expect(state.showToast).toHaveBeenCalledWith('已提交：将为 2 张参考图各生成一组', 'success')
+  })
+
+  it('keeps multi-image "merge" mode as a single combined task', async () => {
+    useStore.setState({
+      inputImages: [imageA, imageB],
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', multiImageMode: 'merge' },
+    })
+
+    await submitTask()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0].perInputImage).toBeUndefined()
+    expect(state.tasks[0].inputImageIds).toEqual([imageA.id, imageB.id])
+  })
+
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {
     const replacement = { id: 'image-a-replacement', dataUrl: imageA.dataUrl }
     const prompt = `参考 ${getSelectedImageMentionLabel(0)} 生成`

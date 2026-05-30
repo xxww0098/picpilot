@@ -35,7 +35,7 @@ import {
   clearImages,
   storeImage,
 } from './lib/db'
-import { callImageApi } from './lib/api'
+import { callImageApi, type CallApiOptions, type CallApiResult } from './lib/api'
 import { logger, serializeError } from './lib/logger'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
@@ -1584,7 +1584,13 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   const trimmedPrompt = prompt.trim()
   const createdAt = Date.now()
-  const makeTask = (inputImageIds: string[], taskCreatedAt: number, taskMaskImageId: string | null, taskMaskTargetImageId: string | null): TaskRecord => ({
+  // 多图模式：each=每张参考图各生成一组（N 张输入 → N 组结果）；merge=合成为一次请求（N→1）。
+  // 有遮罩时只能合成（遮罩针对单张目标图）；单张/无图时两种模式等价。
+  // each 模式现在不再拆成 N 张卡，而是建 1 张「合并卡」（perInputImage），执行时按每张输入图扇出、结果汇总到本卡。
+  const effectiveMode = options.multiImageMode ?? normalizedSettings.multiImageMode
+  const perInputImage = effectiveMode === 'each' && !maskDraft && orderedInputImages.length >= 2
+
+  const makeTask = (inputImageIds: string[], taskMaskImageId: string | null, taskMaskTargetImageId: string | null, isPerInputImage: boolean): TaskRecord => ({
     id: genId(),
     prompt: trimmedPrompt,
     params: normalizedParams,
@@ -1599,25 +1605,24 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     outputImages: [],
     status: 'running',
     error: null,
-    createdAt: taskCreatedAt,
+    createdAt,
     finishedAt: null,
     elapsed: null,
+    ...(isPerInputImage ? { perInputImage: true } : {}),
   })
 
-  // 多图模式：each=每张参考图各建一个独立任务（N→N）；merge=合成为一次请求（N→1）。
-  // 有遮罩时只能合成（遮罩针对单张目标图）；单张/无图时两种模式等价。
-  const effectiveMode = options.multiImageMode ?? normalizedSettings.multiImageMode
-  const perImage = effectiveMode === 'each' && !maskDraft && orderedInputImages.length >= 2
-
-  const newTasks: TaskRecord[] = perImage
-    // createdAt 递减偏移，让靠前的参考图在画廊（按 createdAt 倒序）中排在更前，保持输入顺序
-    ? orderedInputImages.map((img, index) => makeTask([img.id], createdAt + (orderedInputImages.length - 1 - index), null, null))
-    : [makeTask(orderedInputImages.map((i) => i.id), createdAt, maskImageId, maskTargetImageId)]
+  // perInputImage 时无遮罩（!maskDraft 守卫），故 maskImageId/maskTargetImageId 此时本就为 null。
+  const newTasks: TaskRecord[] = [
+    makeTask(orderedInputImages.map((i) => i.id), maskImageId, maskTargetImageId, perInputImage),
+  ]
 
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([...newTasks, ...latestTasks])
   await Promise.all(newTasks.map((t) => putTask(t)))
-  useStore.getState().showToast(newTasks.length > 1 ? `已提交 ${newTasks.length} 个任务` : '任务已提交', 'success')
+  useStore.getState().showToast(
+    perInputImage ? `已提交：将为 ${orderedInputImages.length} 张参考图各生成一组` : '任务已提交',
+    'success',
+  )
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1696,6 +1701,48 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
 // 每个执行中任务的取消控制器；cancelTask 通过它中止底层 fetch（服务端收到 abort 返回 499 释放槽位）。
 const taskAbortControllers = new Map<string, AbortController>()
 
+// 多图「每张」合并卡的执行：按每张输入图各发一次请求，汇总成一个 CallApiResult。
+// 输出顺序 = 输入图顺序；图片/实际参数/改写提示词按输出顺序对齐；任一输入失败计入 failedCount（每输入占 perInputCount 张）。
+// 流式预览槽位按 inputIndex * perInputCount 偏移，避免不同输入的中间帧互相覆盖。
+async function callImageApiPerInput(
+  baseOpts: Omit<CallApiOptions, 'inputImageDataUrls' | 'onPartialImage' | 'maskDataUrl' | 'onCustomTaskEnqueued'>,
+  inputDataUrls: string[],
+  perInputCount: number,
+  onPartialImage?: CallApiOptions['onPartialImage'],
+): Promise<CallApiResult> {
+  const results = await Promise.allSettled(
+    inputDataUrls.map((dataUrl, inputIndex) =>
+      callImageApi({
+        ...baseOpts,
+        inputImageDataUrls: [dataUrl],
+        onPartialImage: onPartialImage
+          ? (partial) => onPartialImage({ ...partial, requestIndex: inputIndex * perInputCount + (partial.requestIndex ?? 0) })
+          : undefined,
+      }),
+    ),
+  )
+  const fulfilled = results.filter((r): r is PromiseFulfilledResult<CallApiResult> => r.status === 'fulfilled').map((r) => r.value)
+  if (fulfilled.length === 0) {
+    const firstError = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    throw firstError ? firstError.reason : new Error('所有参考图请求均失败')
+  }
+  const images = fulfilled.flatMap((r) => r.images)
+  const actualParamsList = fulfilled.flatMap((r) => (r.actualParamsList?.length ? r.actualParamsList : r.images.map(() => r.actualParams)))
+  const revisedPrompts = fulfilled.flatMap((r) => (r.revisedPrompts?.length ? r.revisedPrompts : r.images.map(() => undefined)))
+  const rawImageUrls = fulfilled.flatMap((r) => r.rawImageUrls ?? [])
+  const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+  const failedCount = rejected.length * perInputCount
+  const failedErrors = rejected.map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+  return {
+    images,
+    actualParams: fulfilled[0]?.actualParams,
+    actualParamsList,
+    revisedPrompts,
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
+    ...(failedCount ? { failedCount, failedErrors } : {}),
+  }
+}
+
 async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1753,25 +1800,41 @@ async function executeTask(taskId: string) {
       sourceMode: task.sourceMode,
     })
 
-    const result = await callImageApi({
-      settings: requestSettings,
-      prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
-      params: task.params,
-      inputImageDataUrls: inputDataUrls,
-      maskDataUrl,
-      onCustomTaskEnqueued: (request) => {
-        customTaskInfo = request
-        updateTaskInStore(taskId, {
-          customTaskId: request.taskId,
-          customRecoverable: false,
+    const onPartialImage = (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => {
+      useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
+      void persistTaskStreamPartialImage(taskId, partial.image)
+    }
+    // 「每张」合并卡：按每张输入图各发一次请求，结果汇总到本卡（≥2 张输入才扇出；异步自定义服务商不走此路）。
+    const usePerInput = Boolean(task.perInputImage) && inputDataUrls.length > 1
+    const result = usePerInput
+      ? await callImageApiPerInput(
+          {
+            settings: requestSettings,
+            // 每次请求只带 1 张输入图，提示词 @图N 按单图解析，与旧的「每张一卡」行为一致
+            prompt: replaceImageMentionsForApi(task.prompt, 1),
+            params: task.params,
+            signal: abortController.signal,
+          },
+          inputDataUrls,
+          task.params.n > 0 ? task.params.n : 1,
+          onPartialImage,
+        )
+      : await callImageApi({
+          settings: requestSettings,
+          prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
+          params: task.params,
+          inputImageDataUrls: inputDataUrls,
+          maskDataUrl,
+          onCustomTaskEnqueued: (request) => {
+            customTaskInfo = request
+            updateTaskInStore(taskId, {
+              customTaskId: request.taskId,
+              customRecoverable: false,
+            })
+          },
+          onPartialImage,
+          signal: abortController.signal,
         })
-      },
-      onPartialImage: (partial) => {
-        useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
-        void persistTaskStreamPartialImage(taskId, partial.image)
-      },
-      signal: abortController.signal,
-    })
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') {
@@ -1982,6 +2045,7 @@ export async function retryTask(task: TaskRecord) {
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
+    ...(task.perInputImage ? { perInputImage: true } : {}),
   }
 
   const latestTasks = useStore.getState().tasks
@@ -2053,6 +2117,12 @@ export async function retryFailedImages(taskId: string): Promise<void> {
   if (!task) return
   const failedCount = task.failedImageCount ?? 0
   if (failedCount <= 0) return
+
+  // 「每张」合并卡不追踪具体哪张输入图失败，无法只补失败槽位（按 n=失败数 重发会变成合成语义），整卡重跑。
+  if (task.perInputImage) {
+    await retryTaskInPlace(taskId)
+    return
+  }
 
   const { settings } = state
   const profile = getTaskApiProfile(settings, task) ?? getActiveApiProfile(settings)
