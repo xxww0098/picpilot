@@ -26,9 +26,8 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import ModalShell from './ModalShell'
 import Select from './Select'
-import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, DragHandleIcon, LinkIcon } from './icons'
 import {
   ADD_CUSTOM_PROVIDER_VALUE,
   CUSTOM_PROVIDER_LLM_PROMPT,
@@ -44,6 +43,8 @@ import {
 import SettingsGeneralSection from './settingsModal/SettingsGeneralSection'
 import SettingsAgentSection from './settingsModal/SettingsAgentSection'
 import SettingsAboutSection from './settingsModal/SettingsAboutSection'
+import SettingsDataSection from './settingsModal/SettingsDataSection'
+import SettingsCustomProviderModal from './settingsModal/SettingsCustomProviderModal'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -1270,119 +1271,25 @@ export default function SettingsModal() {
             )}
             
             {activeTab === 'data' && (
-              <div className="space-y-4">
-                <div className="rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05] flex items-start gap-3">
-                  <svg className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                  </svg>
-                  <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    所有的配置、任务记录和生成的图片均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如果您需要清理浏览器站点数据、重置浏览器或使用其他设备，请先导出备份。
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
-                  <div className="flex items-center gap-2 mb-1">
-                    <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
-                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={exportConfig}
-                      onChange={setExportConfig}
-                      label="包含配置"
-                    />
-                    <Checkbox
-                      checked={exportTasks}
-                      onChange={setExportTasks}
-                      label="包含任务和图片"
-                    />
-                  </div>
-                  <button
-                    onClick={() => exportData({ exportConfig, exportTasks })}
-                    disabled={!exportConfig && !exportTasks}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
-                  >
-                    导出所选数据
-                  </button>
-                </div>
-
-                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
-                  <div className="flex items-center gap-2 mb-1">
-                    <ImportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
-                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导入数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={importConfig}
-                      onChange={setImportConfig}
-                      label="包含配置"
-                    />
-                    <Checkbox
-                      checked={importTasks}
-                      onChange={setImportTasks}
-                      label="包含任务和图片"
-                    />
-                  </div>
-                  <button
-                    onClick={() => importInputRef.current?.click()}
-                    disabled={(!importConfig && !importTasks) || isImportingData}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
-                  >
-                    {isImportingData ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        导入中...
-                      </>
-                    ) : (
-                      '从 ZIP 导入所选数据'
-                    )}
-                  </button>
-                  <input
-                    ref={importInputRef}
-                    type="file"
-                    accept=".zip"
-                    className="hidden"
-                    onChange={handleImport}
-                  />
-                </div>
-
-                <div className="rounded-2xl border border-red-100/50 bg-red-50/30 p-4 dark:border-red-500/10 dark:bg-red-500/5 space-y-4 shadow-sm">
-                  <div className="flex items-center gap-2 mb-1">
-                    <TrashIcon className="w-4 h-4 text-red-500/90 dark:text-red-400" />
-                    <h4 className="text-sm font-bold text-red-500/90 dark:text-red-400">清除数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={clearConfig}
-                      onChange={setClearConfig}
-                      label="包含配置"
-                      tone="danger"
-                    />
-                    <Checkbox
-                      checked={clearTasks}
-                      onChange={setClearTasks}
-                      label="包含任务和图片"
-                      tone="danger"
-                    />
-                  </div>
-                  <button
-                    onClick={() =>
-                      setConfirmDialog({
-                        title: '清空所选数据',
-                        message: `确定要清空所选的数据吗？此操作不可恢复。`,
-                        action: () => handleClearAllData(),
-                      })
-                    }
-                    disabled={!clearConfig && !clearTasks}
-                    className="w-full rounded-xl border border-red-200/60 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-500 transition-all hover:bg-red-50 hover:border-red-200 hover:text-red-600 disabled:opacity-50 disabled:hover:bg-red-50/50 disabled:hover:border-red-200/60 disabled:hover:text-red-500 dark:border-red-500/15 dark:bg-red-500/5 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/30 dark:hover:text-red-300 dark:disabled:hover:bg-red-500/5 dark:disabled:hover:border-red-500/15 dark:disabled:hover:text-red-400"
-                  >
-                    清空所选数据
-                  </button>
-                </div>
-              </div>
+              <SettingsDataSection
+                exportConfig={exportConfig}
+                setExportConfig={setExportConfig}
+                exportTasks={exportTasks}
+                setExportTasks={setExportTasks}
+                importConfig={importConfig}
+                setImportConfig={setImportConfig}
+                importTasks={importTasks}
+                setImportTasks={setImportTasks}
+                clearConfig={clearConfig}
+                setClearConfig={setClearConfig}
+                clearTasks={clearTasks}
+                setClearTasks={setClearTasks}
+                isImportingData={isImportingData}
+                importInputRef={importInputRef}
+                handleImport={handleImport}
+                handleClearAllData={handleClearAllData}
+                setConfirmDialog={setConfirmDialog}
+              />
             )}
 
             {activeTab === 'about' && (
@@ -1394,125 +1301,22 @@ export default function SettingsModal() {
       </ModalShell>
 
       {showCustomProviderImport && (
-        <ModalShell
-          portal
-          onClose={closeCustomProviderImport}
-          scrollRef={customProviderScrollBoundaryRef}
-          panelRef={customProviderScrollBoundaryRef}
-          zIndexClass="z-[100]"
-          panelClassName="w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col h-[85vh] sm:h-[680px] max-h-[90vh] overflow-hidden"
-        >
-              <div className="mb-5 flex items-center justify-between gap-4 shrink-0">
-                <h3 className="text-base font-bold text-gray-800 dark:text-gray-100">
-                  {editingCustomProviderId ? '编辑自定义服务商' : '创建自定义服务商'}
-                </h3>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={closeCustomProviderImport}
-                    className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
-                    aria-label="关闭"
-                  >
-                    <CloseIcon className="h-5 w-5" />
-                  </button>
-                </div>
-              </div>
-
-              <div ref={customProviderScrollBoundaryRef} className="flex-1 flex flex-col min-h-0 px-1 -mx-1 pb-2">
-                <div className="mb-6 shrink-0 rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05]">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-200">
-                    <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    AI 一键生成与导入
-                  </div>
-                  <div data-selectable-text className="mb-4 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                    复制提示词发给 LLM，可根据 API 文档自动生成完整的配置（包含服务商、模型、URL 等）。复制 LLM 输出的 JSON 后，点击“从剪贴板粘贴并导入”即可一键生效。
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="relative inline-flex">
-                      <button
-                        type="button"
-                        onClick={copyCustomProviderLlmPrompt}
-                        aria-label="复制用于生成完整导入 JSON 的 LLM 提示词"
-                        onMouseEnter={() => setLlmPromptTooltipVisible(true)}
-                        onMouseLeave={() => setLlmPromptTooltipVisible(false)}
-                        onFocus={() => setLlmPromptTooltipVisible(true)}
-                        onBlur={() => setLlmPromptTooltipVisible(false)}
-                        onTouchStart={() => {
-                          clearLlmPromptTooltipTimer()
-                          llmPromptTooltipTimerRef.current = window.setTimeout(() => {
-                            setLlmPromptTooltipVisible(true)
-                            llmPromptTooltipTimerRef.current = null
-                          }, 450)
-                        }}
-                        onTouchEnd={clearLlmPromptTooltipTimer}
-                        onTouchCancel={clearLlmPromptTooltipTimer}
-                        className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/80 transition hover:bg-gray-50 hover:text-gray-900 dark:bg-white/[0.05] dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
-                      >
-                        <LinkIcon className="h-3.5 w-3.5" />
-                        复制生成提示词
-                      </button>
-                      <ViewportTooltip visible={llmPromptTooltipVisible} className="w-56 whitespace-normal text-center">
-                        生成完整的服务商和配置信息，包含模型和接口路径，导入后由团队 API 代理转发。
-                      </ViewportTooltip>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCustomProviderJsonPaste}
-                      disabled={isImportingJson}
-                      className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/80 transition hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-white/[0.05] dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
-                    >
-                    {isImportingJson ? (
-                      <>
-                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        导入中...
-                      </>
-                    ) : (
-                      '从剪贴板粘贴并导入'
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 flex flex-col min-h-0">
-                <label className="flex-1 flex flex-col min-h-0">
-                  <span className="mb-1 shrink-0 block text-xs text-gray-500 dark:text-gray-400">手动编辑 (仅接口映射 Manifest)</span>
-                  <textarea
-                    value={customProviderForm.json}
-                    onChange={(e) => updateCustomProviderForm({ json: e.target.value })}
-                    spellCheck={false}
-                    className="flex-1 min-h-[150px] w-full resize-none rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 custom-scrollbar"
-                  />
-                </label>
-              </div>
-
-                {customProviderImportError && (
-                  <div data-selectable-text className="shrink-0 mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500 dark:bg-red-500/10 dark:text-red-300">
-                    {customProviderImportError}
-                  </div>
-                )}
-              </div>
-              <div className="mt-4 flex justify-end gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={closeCustomProviderImport}
-                  className="rounded-xl bg-gray-100 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={saveCustomProvider}
-                  className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
-                >
-                  {editingCustomProviderId ? '保存修改' : '创建并使用'}
-                </button>
-              </div>
-        </ModalShell>
+        <SettingsCustomProviderModal
+          closeCustomProviderImport={closeCustomProviderImport}
+          customProviderScrollBoundaryRef={customProviderScrollBoundaryRef}
+          editingCustomProviderId={editingCustomProviderId}
+          copyCustomProviderLlmPrompt={copyCustomProviderLlmPrompt}
+          llmPromptTooltipVisible={llmPromptTooltipVisible}
+          setLlmPromptTooltipVisible={setLlmPromptTooltipVisible}
+          clearLlmPromptTooltipTimer={clearLlmPromptTooltipTimer}
+          llmPromptTooltipTimerRef={llmPromptTooltipTimerRef}
+          handleCustomProviderJsonPaste={handleCustomProviderJsonPaste}
+          isImportingJson={isImportingJson}
+          customProviderForm={customProviderForm}
+          updateCustomProviderForm={updateCustomProviderForm}
+          customProviderImportError={customProviderImportError}
+          saveCustomProvider={saveCustomProvider}
+        />
       )}
       {profileTouchDragPreview && createPortal(
           <div
