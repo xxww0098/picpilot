@@ -15,7 +15,6 @@ import Lightbox from './components/Lightbox'
 import ConfirmDialog from './components/ConfirmDialog'
 import PromptDialog from './components/PromptDialog'
 import Toast from './components/Toast'
-import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import SupportPromptModal from './components/SupportPromptModal'
 import LoginModal from './components/LoginModal'
@@ -25,6 +24,8 @@ import { useGlobalClickSuppression } from './lib/clickSuppression'
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
 const LogPanel = lazy(() => import('./components/LogPanel'))
+// 遮罩编辑器较重（canvas + 图像处理），首屏不需要：首次打开时再加载，加载后保持挂载（行为同此前的常驻挂载）。
+const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
 
 let customProviderConfigUrlImportStarted = false
 
@@ -54,6 +55,9 @@ export default function App() {
   const appMode = useStore((s) => s.appMode)
   const showSettings = useStore((s) => s.showSettings)
   const showLogPanel = useStore((s) => s.showLogPanel)
+  const maskEditorImageId = useStore((s) => s.maskEditorImageId)
+  // 一旦打开过遮罩编辑器就保持挂载（与原先常驻挂载行为一致），仅把首次加载推迟到首次打开。
+  const [maskEditorMounted, setMaskEditorMounted] = useState(false)
   const { status } = useAuth()
   const [authView, setAuthView] = useState<AuthView>(() => (readInviteFromUrl() !== null ? 'register' : 'login'))
   useGlobalClickSuppression()
@@ -98,6 +102,10 @@ export default function App() {
 
     initStore()
   }, [status, setSettings])
+
+  useEffect(() => {
+    if (maskEditorImageId && !maskEditorMounted) setMaskEditorMounted(true)
+  }, [maskEditorImageId, maskEditorMounted])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -173,7 +181,11 @@ export default function App() {
         </Suspense>
       )}
       <Toast />
-      <MaskEditorModal />
+      {maskEditorMounted && (
+        <Suspense fallback={null}>
+          <MaskEditorModal />
+        </Suspense>
+      )}
       <ImageContextMenu />
     </>
   )
