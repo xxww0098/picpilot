@@ -114,7 +114,7 @@ export function useDragSelect({
       }, 16)
     }
 
-    const endSelection = (clearEmptySurfaceClick = false, suppressClick = false) => {
+    const endSelection = (clearEmptySurfaceClick = false, _suppressClick = false) => {
       if (isDragging.current) {
         document.body.classList.remove('select-none')
         document.body.classList.remove('drag-selecting')

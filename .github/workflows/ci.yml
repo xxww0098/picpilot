@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # 根依赖提供 tsc / eslint，server 依赖提供 hono/sharp/pino + 类型
+      - run: bun install --frozen-lockfile
+      - name: Install server deps
+        working-directory: server
+        run: bun install --frozen-lockfile
+      - run: bun run typecheck:server
+      - name: Server tests
+        working-directory: server
+        run: bun test

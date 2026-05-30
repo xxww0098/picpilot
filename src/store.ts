@@ -3,7 +3,6 @@ import { persist } from 'zustand/middleware'
 import { getCachedAuthUser, namespacedStorageKey } from './lib/auth'
 import type {
   AgentConversation,
-  ApiMode,
   ApiProfile,
   AppSettings,
   AppMode,
@@ -20,7 +19,6 @@ import { dismissAllTooltips } from './lib/tooltipDismiss'
 import type { QueueStats } from './lib/queueApi'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
-  CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
   deleteTask as dbDeleteTask,
   clearTasks as dbClearTasks,
@@ -29,7 +27,6 @@ import {
   clearAgentConversations as dbClearAgentConversations,
   getImage,
   getImageThumbnail,
-  getStoredFreshImageThumbnail,
   getAllImageIds,
   getAllImages,
   putImage,
@@ -40,7 +37,7 @@ import {
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { logger, serializeError } from './lib/logger'
-import { IMAGE_FETCH_CORS_HINT, isApiTimeoutError } from './lib/imageApiShared'
+import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
@@ -68,10 +65,7 @@ import {
 import { fileToDataUrl, readBlobAsDataUrl } from './lib/dataUrl'
 import {
   bindAgentOrchestrator,
-  regenerateAgentAssistantMessage,
   scrubAgentOutputPayloadsForDeletedTasks,
-  stopAgentResponse,
-  submitAgentMessage,
 } from './lib/agentOrchestrator'
 import {
   firstActualParams,
@@ -87,12 +81,9 @@ import {
   cacheThumbnail,
   clearImageCaches,
   ensureImageCached,
-  ensureImageThumbnailCached,
   evictCachedImage,
-  getCachedImage,
   resetImageCacheEntry,
   scheduleThumbnailBackfill,
-  subscribeImageThumbnail,
 } from './store/imageCache'
 
 export { getErrorToastMessage } from './lib/errorToast'
@@ -124,7 +115,6 @@ const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
-const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -2211,7 +2201,7 @@ export async function editOutputs(task: TaskRecord) {
 
 /** 删除多条任务 */
 export async function removeMultipleTasks(taskIds: string[]) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, clearSelection, selectedTaskIds } = useStore.getState()
+  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, selectedTaskIds } = useStore.getState()
   
   if (!taskIds.length) return
 

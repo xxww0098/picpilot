@@ -25,7 +25,7 @@ export function appendQuery(path: string, query?: Record<string, string>): strin
   return `${path}${path.includes('?') ? '&' : '?'}${params.toString()}`
 }
 
-export function createOpenAICompatiblePaths(customProvider?: CustomProviderDefinition | null) {
+export function createOpenAICompatiblePaths(_customProvider?: CustomProviderDefinition | null) {
   return {
     generationPath: 'images/generations',
     editPath: 'images/edits',

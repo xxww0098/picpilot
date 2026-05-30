@@ -9,7 +9,6 @@ import {
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
   normalizeSettings,
-  switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'
 

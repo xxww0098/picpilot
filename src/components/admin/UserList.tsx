@@ -6,7 +6,7 @@ import {
   type AdminUserRow,
 } from '../../lib/adminApi'
 import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
-import { formatBytes, formatDurationLong, formatRelative } from '../../lib/format'
+import { formatRelative } from '../../lib/format'
 import { getUserFacingErrorMessage } from '../../lib/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
@@ -229,32 +229,6 @@ function UserCard({
         </div>
       </div>
     </article>
-  )
-}
-
-function Metric({
-  label,
-  value,
-  tone = 'default',
-  className = '',
-}: {
-  label: string
-  value: string
-  tone?: 'default' | 'success' | 'danger'
-  className?: string
-}) {
-  const valueClass =
-    tone === 'success'
-      ? 'text-green-600 dark:text-green-400'
-      : tone === 'danger'
-        ? 'text-red-600 dark:text-red-400'
-        : 'text-[hsl(var(--foreground))]'
-
-  return (
-    <div className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] px-3 py-2.5 ${className}`}>
-      <dt className="text-[0.65rem] font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{label}</dt>
-      <dd className={`mt-0.5 text-sm font-semibold tabular-nums ${valueClass}`}>{value}</dd>
-    </div>
   )
 }
 

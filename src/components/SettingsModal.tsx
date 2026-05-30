@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
+import { useStore, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
-  findEquivalentApiProfile,
   getApiProviderLabel,
   getActiveApiProfile,
   importCustomProviderSettingsFromJson,
@@ -35,7 +34,6 @@ import {
   customProviderFormToInput,
   customProviderToForm,
   getImportedProfileFromMergedSettings,
-  isAsyncCustomProvider,
   isPristineNewOpenAIProfile,
   newId,
   type CustomProviderForm,

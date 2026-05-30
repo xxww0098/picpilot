@@ -209,7 +209,7 @@ export default function AgentWorkspace() {
   const showToast = useStore((s) => s.showToast)
   const agentGeneratingTitleIds = useStore((s) => s.agentGeneratingTitleIds)
   const conversation = conversations.find((item) => item.id === activeConversationId) ?? null
-  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null)
+  const [_selectedRoundId, setSelectedRoundId] = useState<string | null>(null)
   const [editingConversationTitle, setEditingConversationTitle] = useState('')
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)

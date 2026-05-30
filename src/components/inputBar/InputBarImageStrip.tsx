@@ -6,7 +6,6 @@ import {
   getContentEditableCursor,
   getMentionTagHtml,
   setContentEditableCursor,
-  syncMentionTagSelection,
 } from '../../lib/contentEditableMentions'
 import type { InputImage, MaskDraft } from '../../types'
 import type { AppState } from '../../store'

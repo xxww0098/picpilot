@@ -542,10 +542,6 @@ function countResponseToolCalls(output: ResponsesOutputItem[]) {
   return output.filter((item) => item.type === 'image_generation_call').length
 }
 
-function countResponseImageCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
-}
-
 function createAgentContinuationInputItem(newImageRefs: string[], toolCallsUsed: number, maxToolCalls: number) {
   const lines = [
     '[System] The app has saved your generated outputs and is continuing the same Agent turn.',

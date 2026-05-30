@@ -286,14 +286,17 @@ export function setContentEditableSelection(el: HTMLElement, start: number, end:
 
   const applyBoundary = (range: Range, boundary: Boundary, target: 'start' | 'end') => {
     if (boundary.type === 'before') {
-      target === 'start' ? range.setStartBefore(boundary.element) : range.setEndBefore(boundary.element)
+      if (target === 'start') range.setStartBefore(boundary.element)
+      else range.setEndBefore(boundary.element)
       return
     }
     if (boundary.type === 'after') {
-      target === 'start' ? range.setStartAfter(boundary.element) : range.setEndAfter(boundary.element)
+      if (target === 'start') range.setStartAfter(boundary.element)
+      else range.setEndAfter(boundary.element)
       return
     }
-    target === 'start' ? range.setStart(boundary.node, boundary.offset) : range.setEnd(boundary.node, boundary.offset)
+    if (target === 'start') range.setStart(boundary.node, boundary.offset)
+    else range.setEnd(boundary.node, boundary.offset)
   }
 
   const startBoundary = findBoundary(start, 'start')
