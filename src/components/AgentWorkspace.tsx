@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
 import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
@@ -7,51 +7,10 @@ import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForC
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageIds } from '../lib/downloadImages'
 import TaskCard from './TaskCard'
-import ViewportTooltip from './ViewportTooltip'
 import MarkdownRenderer from './MarkdownRenderer'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
-
-function AgentActionButton({
-  tooltip,
-  className,
-  disabled = false,
-  onClick,
-  onMouseDown,
-  children,
-}: {
-  tooltip: string
-  className: string
-  disabled?: boolean
-  onClick?: (e: ReactMouseEvent<HTMLButtonElement>) => void
-  onMouseDown?: (e: ReactMouseEvent<HTMLButtonElement>) => void
-  children: ReactNode
-}) {
-  const [tooltipVisible, setTooltipVisible] = useState(false)
-
-  return (
-    <span
-      className="relative inline-flex"
-      onMouseEnter={() => setTooltipVisible(true)}
-      onMouseLeave={() => setTooltipVisible(false)}
-      onFocus={() => setTooltipVisible(true)}
-      onBlur={() => setTooltipVisible(false)}
-    >
-      <button
-        type="button"
-        className={className}
-        disabled={disabled}
-        aria-label={tooltip}
-        onClick={onClick}
-        onMouseDown={onMouseDown}
-      >
-        {children}
-      </button>
-      <ViewportTooltip visible={tooltipVisible} className="whitespace-nowrap">
-        {tooltip}
-      </ViewportTooltip>
-    </span>
-  )
-}
+import AgentActionButton from './agentWorkspace/AgentActionButton'
+import ConversationListItem from './agentWorkspace/ConversationListItem'
 
 function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string; imageIndex: number; maskImageId?: string | null }) {
   const [src, setSrc] = useState<string>(() => getCachedImage(imageId) || '')
@@ -866,65 +825,25 @@ export default function AgentWorkspace() {
           {filteredConversations.length === 0 && (
             <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
           )}
-          {filteredConversations.map((item) => {
-            const isGeneratingTitle = Boolean(agentGeneratingTitleIds[item.id])
-            return (
-              <div
-                key={item.id}
-                data-agent-conversation-item
-                className="group flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-100 dark:hover:bg-white/[0.04]"
-                onPointerDown={(e) => handleConversationPointerDown(item.id, e)}
-                onPointerUp={clearConversationLongPressTimer}
-                onPointerCancel={clearConversationLongPressTimer}
-                onPointerLeave={clearConversationLongPressTimer}
-                onContextMenu={(e) => {
-                  if (conversationActionsId === item.id) e.preventDefault()
-                }}
-              >
-                {agentEditingConversationId === item.id ? (
-                  <div className="min-w-0 flex-1 flex flex-col justify-center h-[38px]">
-                    <input
-                      type="text"
-                      className="flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0.5 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
-                      value={editingConversationTitle}
-                      onChange={(e) => setEditingConversationTitle(e.target.value)}
-                      onKeyDown={handleRenameKeyDown}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                      onBlur={confirmRenameConversation}
-                    />
-                  </div>
-                ) : (
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => handleConversationSelect(item.id)}>
-                    <div className={`truncate ${item.id === activeConversationId ? 'font-semibold text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title}</div>
-                    <div className="text-xs text-gray-400">{formatTime(item.updatedAt)}</div>
-                  </button>
-                )}
-                <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${agentEditingConversationId === item.id ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${conversationActionsId === item.id ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>
-                  {agentEditingConversationId === item.id ? (
-                    <AgentActionButton
-                      tooltip="确认"
-                      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); confirmRenameConversation() }}
-                      className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-green-500 hover:text-green-600 transition-colors"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </AgentActionButton>
-                  ) : (
-                    <>
-                      <AgentActionButton tooltip="编辑标题" className="p-1.5 text-gray-400 hover:text-gray-700 disabled:text-gray-300 disabled:hover:text-gray-300 disabled:cursor-not-allowed dark:hover:text-gray-200 dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600" onClick={(e) => startRenameConversation(e, item.id, item.title)} disabled={isGeneratingTitle}>
-                        <EditIcon className="w-4 h-4" />
-                      </AgentActionButton>
-                      <AgentActionButton tooltip="删除" className="p-1.5 text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); handleDeleteConversation(item.id) }}>
-                        <TrashIcon className="w-4 h-4" />
-                      </AgentActionButton>
-                    </>
-                  )}
-                </div>
-              </div>
-            )
-          })}
+          {filteredConversations.map((item) => (
+            <ConversationListItem
+              key={item.id}
+              item={item}
+              isGeneratingTitle={Boolean(agentGeneratingTitleIds[item.id])}
+              isEditing={agentEditingConversationId === item.id}
+              isActive={item.id === activeConversationId}
+              showActions={conversationActionsId === item.id}
+              editingTitle={editingConversationTitle}
+              onPointerDown={handleConversationPointerDown}
+              onLongPressClear={clearConversationLongPressTimer}
+              onSelect={handleConversationSelect}
+              onEditingTitleChange={setEditingConversationTitle}
+              onRenameKeyDown={handleRenameKeyDown}
+              onConfirmRename={confirmRenameConversation}
+              onStartRename={startRenameConversation}
+              onDelete={handleDeleteConversation}
+            />
+          ))}
         </div>
         </div>
       </aside>
