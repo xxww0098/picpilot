@@ -17,7 +17,7 @@ interface Option {
 
 interface SelectProps {
   value: string | number
-  onChange: (value: any) => void
+  onChange: (value: string | number) => void
   onReorder?: (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => void
   options: Option[]
   disabled?: boolean

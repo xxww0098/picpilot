@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, retryFailedImages } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTaskInPlace, retryFailedImages } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
+import { runWithConcurrency } from '../lib/runWithConcurrency'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -14,6 +15,9 @@ import PublishGalleryButton from './PublishGalleryButton'
 import ModalShell from './ModalShell'
 
 import ViewportTooltip from './ViewportTooltip'
+
+// 详情弹窗一次可能要解码多张输入/输出图：限制并发，避免 10+ 张同时解码造成卡顿。
+const IMAGE_DECODE_CONCURRENCY = 4
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -94,6 +98,8 @@ export default function DetailModal() {
   // Reset index when task changes
   useEffect(() => {
     setImageIndex(0)
+    // 切换到另一条记录时重置"重试中"状态，避免上一条的转圈状态串到当前这条
+    setRetryingFailed(false)
   }, [detailTaskId])
 
   useEffect(() => {
@@ -124,12 +130,11 @@ export default function DetailModal() {
       if (cached) initial[id] = cached
     }
     setImageSrcs(initial)
-    for (const id of ids) {
-      if (initial[id]) continue
-      ensureImageCached(id).then((url) => {
-        if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
-      })
-    }
+    const pending = ids.filter((id) => !initial[id])
+    void runWithConcurrency(pending, IMAGE_DECODE_CONCURRENCY, async (id) => {
+      const url = await ensureImageCached(id)
+      if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
+    })
 
     return () => {
       cancelled = true
@@ -155,18 +160,16 @@ export default function DetailModal() {
       if (!cancelled) setOutputPreviewSrcs((prev) => ({ ...prev, [imageId]: dataUrl }))
     }
 
+    const pending: string[] = []
     for (const imageId of outputImageIds) {
       const cached = getCachedImage(imageId)
-      if (cached) {
-        setOutputImage(imageId, cached)
-      } else {
-        ensureImageCached(imageId)
-          .then((dataUrl) => {
-            if (dataUrl) setOutputImage(imageId, dataUrl)
-          })
-          .catch(() => {})
-      }
+      if (cached) setOutputImage(imageId, cached)
+      else pending.push(imageId)
     }
+    void runWithConcurrency(pending, IMAGE_DECODE_CONCURRENCY, async (imageId) => {
+      const dataUrl = await ensureImageCached(imageId)
+      if (dataUrl) setOutputImage(imageId, dataUrl)
+    })
 
     return () => {
       cancelled = true
@@ -368,8 +371,8 @@ export default function DetailModal() {
   }
 
   const handleRetry = () => {
-    retryTask(task)
-    setDetailTaskId(null)
+    // 就地重试：原卡片直接转入运行中，弹窗保持打开以便观察进度
+    void retryTaskInPlace(task.id)
   }
 
   const handleRetryFailed = async () => {

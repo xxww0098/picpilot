@@ -12,6 +12,7 @@ import type {
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
   ReferenceImageEditAction,
+  MultiImageMode,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
 
@@ -65,6 +66,10 @@ export function normalizeAgentMaxToolRounds(value: unknown, fallback: number | u
 
 function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAction {
   return value === 'replace-reference' || value === 'add-mask' ? value : 'ask'
+}
+
+function normalizeMultiImageMode(value: unknown): MultiImageMode {
+  return value === 'merge' ? 'merge' : 'each'
 }
 
 function isCustomProviderTemplate(value: unknown): value is CustomProviderTemplate {
@@ -449,6 +454,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     alwaysShowRetryButton: typeof record.alwaysShowRetryButton === 'boolean' ? record.alwaysShowRetryButton : false,
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
+    multiImageMode: normalizeMultiImageMode(record.multiImageMode),
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
@@ -722,6 +728,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   alwaysShowRetryButton: false,
   enterSubmit: false,
   referenceImageEditAction: 'ask',
+  multiImageMode: 'each',
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,

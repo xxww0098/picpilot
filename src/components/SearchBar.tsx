@@ -1,7 +1,9 @@
+import { memo } from 'react'
 import { useStore } from '../store'
 import Select from './Select'
 
-export default function SearchBar() {
+// 无 props，只订阅自身用到的过滤状态：memo 隔离父级（画廊容器）的无关重渲。
+function SearchBar() {
   const searchQuery = useStore((s) => s.searchQuery)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
@@ -64,3 +66,5 @@ export default function SearchBar() {
     </div>
   )
 }
+
+export default memo(SearchBar)

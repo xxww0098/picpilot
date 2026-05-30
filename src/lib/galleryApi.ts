@@ -18,6 +18,7 @@ export interface PublicGalleryImage {
   height: number | null
   file_size: number | null
   created_at: number
+  featured?: number
   originals?: PublicGalleryOriginal[]
 }
 
@@ -43,7 +44,11 @@ export function publishGalleryImage(imageBase64: string, prompt: string, origina
 }
 
 export function deleteGalleryImage(id: string) {
-  return authJson<{ ok: true }>(`/api/gallery/${id}`, { method: 'DELETE' }, '删除作品失败，请稍后重试')
+  return authJson<{ ok: true; storageBytes: number; galleryCount: number }>(
+    `/api/gallery/${id}`,
+    { method: 'DELETE' },
+    '删除作品失败，请稍后重试',
+  )
 }
 
 export async function fetchGalleryBlob(url: string): Promise<Blob> {

@@ -1,5 +1,5 @@
 import { useState, type RefObject } from 'react'
-import type { MaskDraft } from '../../types'
+import type { MaskDraft, MultiImageMode } from '../../types'
 import ButtonTooltip from './ButtonTooltip'
 
 export type InputBarActionsProps = {
@@ -14,6 +14,14 @@ export type InputBarActionsProps = {
   maskDraft: MaskDraft | null
   fileInputRef: RefObject<HTMLInputElement | null>
   cameraInputRef: RefObject<HTMLInputElement | null>
+  /** 多图发送模式（拆分按钮）：参考图 ≥2 张、无遮罩、非 Agent 模式时为 true */
+  canPerImageSplit?: boolean
+  activeMultiImageMode?: MultiImageMode
+  /** 「每张各生成」模式将产出的图片数（= 参考图数 × 数量） */
+  perImageOutputCount?: number
+  /** 「合成一张」模式将产出的图片数（= 数量） */
+  mergeOutputCount?: number
+  onSubmitWithMode?: (mode: MultiImageMode) => void
   onSubmit: () => void
   onStopAgent: () => void
   onOpenSettings: () => void
@@ -43,6 +51,22 @@ function AttachIcon({ className }: { className?: string }) {
   )
 }
 
+function CaretIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+    </svg>
+  )
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  )
+}
+
 export default function InputBarActions({
   variant,
   atImageLimit,
@@ -55,6 +79,11 @@ export default function InputBarActions({
   maskDraft,
   fileInputRef,
   cameraInputRef,
+  canPerImageSplit = false,
+  activeMultiImageMode = 'each',
+  perImageOutputCount = 0,
+  mergeOutputCount = 0,
+  onSubmitWithMode,
   onSubmit,
   onStopAgent,
   onOpenSettings,
@@ -62,6 +91,7 @@ export default function InputBarActions({
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
+  const [showModeMenu, setShowModeMenu] = useState(false)
 
   const handleSubmitClick = () => {
     if (activeAgentIsRunning) {
@@ -200,11 +230,66 @@ export default function InputBarActions({
     </div>
   )
 
+  const useSplit = canPerImageSplit && hasSubmitApiConfig && !activeAgentIsRunning
+  const splitDisabled = !canSubmit
+  const splitPrimaryLabel = activeMultiImageMode === 'merge'
+    ? `合成 ${mergeOutputCount} 张`
+    : `生成 ${perImageOutputCount} 张`
+
+  const modeMenu = showModeMenu && (
+    <>
+      <div className="fixed inset-0 z-40" onClick={() => setShowModeMenu(false)} />
+      <div className="absolute bottom-full right-0 mb-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+        {([
+          { mode: 'each' as const, label: '每张各生成', count: perImageOutputCount },
+          { mode: 'merge' as const, label: '合成一张', count: mergeOutputCount },
+        ]).map((item) => (
+          <button
+            key={item.mode}
+            onClick={() => { setShowModeMenu(false); onSubmitWithMode?.(item.mode) }}
+            className="w-full px-3 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between gap-3 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <CheckIcon className={`w-3.5 h-3.5 shrink-0 ${activeMultiImageMode === item.mode ? 'opacity-100 text-blue-500' : 'opacity-0'}`} />
+              {item.label}
+            </span>
+            <span className="text-xs text-gray-400 dark:text-gray-500">{item.count} 张</span>
+          </button>
+        ))}
+      </div>
+    </>
+  )
+
+  const splitSubmitButton = (
+    <div className={`relative flex ${variant === 'mobile' ? 'flex-1' : ''}`}>
+      <button
+        onClick={handleSubmitClick}
+        disabled={splitDisabled}
+        aria-label={splitPrimaryLabel}
+        className={`${variant === 'mobile' ? 'flex-1 justify-center' : ''} flex items-center gap-1.5 pl-3 pr-2.5 py-2.5 rounded-l-xl text-sm font-medium transition-all shadow-sm bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed`}
+      >
+        <SubmitIcon className="w-4 h-4" />
+        {splitPrimaryLabel}
+      </button>
+      <button
+        onClick={() => { if (!splitDisabled) setShowModeMenu((v) => !v) }}
+        disabled={splitDisabled}
+        aria-label="选择发送模式"
+        className="px-1.5 py-2.5 rounded-r-xl transition-all shadow-sm bg-blue-500 text-white hover:bg-blue-600 border-l border-white/25 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <CaretIcon className={`w-4 h-4 transition-transform duration-200 ${showModeMenu ? 'rotate-180' : ''}`} />
+      </button>
+      {modeMenu}
+    </div>
+  )
+
+  const activeSubmitButton = useSplit ? splitSubmitButton : submitButton
+
   if (variant === 'desktop') {
     return (
       <div className="flex gap-2 flex-shrink-0 mb-0.5">
         {attachButton}
-        {submitButton}
+        {activeSubmitButton}
       </div>
     )
   }
@@ -212,7 +297,7 @@ export default function InputBarActions({
   return (
     <div className="flex items-center gap-2">
       {attachButton}
-      {submitButton}
+      {activeSubmitButton}
     </div>
   )
 }

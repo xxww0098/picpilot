@@ -3,6 +3,8 @@
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
+/** 多张参考图的提交模式：each=每张各生成（N→N）；merge=合成为一次请求（N→1） */
+export type MultiImageMode = 'each' | 'merge'
 export type BuiltInApiProvider = 'openai'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
@@ -92,6 +94,8 @@ export interface AppSettings {
   alwaysShowRetryButton: boolean
   enterSubmit: boolean
   referenceImageEditAction: ReferenceImageEditAction
+  /** 多图提交默认模式：each=每张各生成（N→N，默认）；merge=合成为一次请求（N→1） */
+  multiImageMode: MultiImageMode
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean

@@ -1,3 +1,5 @@
+import { clamp } from './clamp'
+
 export interface Point {
   x: number
   y: number
@@ -23,10 +25,6 @@ export interface ClientRectLike {
 
 const MIN_SCALE = 1
 const MAX_SCALE = 6
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
 
 export function clampViewTransform(transform: ViewTransform, viewportSize: Size): ViewTransform {
   const scale = clamp(transform.scale, MIN_SCALE, MAX_SCALE)

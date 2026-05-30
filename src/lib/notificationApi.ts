@@ -50,3 +50,11 @@ export function adminRevokeGalleryImage(id: string, reason?: string) {
     body: JSON.stringify({ reason: reason ?? '' }),
   }, '撤下公开图失败，请稍后重试')
 }
+
+export function adminSetGalleryFeatured(id: string, featured: boolean) {
+  return authJson<{ ok: true; featured: boolean }>(`/api/admin/gallery/${encodeURIComponent(id)}/feature`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ featured }),
+  }, '设置推荐失败，请稍后重试')
+}

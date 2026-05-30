@@ -94,3 +94,21 @@ test('超时被唤醒竞态：超时拒绝后释放不会错配槽位', async ()
   expect(cResolved).toBe(true)
   expect(q.stats()).toEqual({ inflight: 1, queued: 0 })
 })
+
+test('过量 release 不会让 inflight 变负，且不破坏后续放行', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 2, maxQueue: 10, maxWaitMs: 0 })
+  await q.acquire(neverAbort())
+  q.release()
+  q.release() // 越界释放：被下限守卫忽略，inflight 不应变负
+  expect(q.stats()).toEqual({ inflight: 0, queued: 0 })
+
+  // 越界释放后并发上限依然准确：能再放行 2 个，第 3 个进队列
+  await q.acquire(neverAbort())
+  await q.acquire(neverAbort())
+  expect(q.stats().inflight).toBe(2)
+  let third = false
+  void q.acquire(neverAbort()).then(() => { third = true })
+  await tick()
+  expect(third).toBe(false)
+  expect(q.stats()).toEqual({ inflight: 2, queued: 1 })
+})

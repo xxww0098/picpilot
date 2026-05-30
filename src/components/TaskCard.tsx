@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, cancelTask } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, retryTaskInPlace, cancelTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
@@ -415,16 +415,6 @@ function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
-          {task.status === 'running' && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); cancelTask(task.id) }}
-              className="absolute top-1.5 left-1.5 z-10 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm transition-colors hover:bg-black/75 sm:text-xs"
-              title="停止生成"
-            >
-              取消
-            </button>
-          )}
           {task.status === 'running' && streamPreviewSrc && (
             <>
               <img
@@ -542,8 +532,18 @@ function TaskCard({
               />
             </svg>
           )}
-          {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
-          <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+          {/* 左上角操作 / 信息条：取消按钮、耗时、尺寸、失败重试统一排在一行，避免相互重叠 */}
+          <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1">
+            {task.status === 'running' && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); cancelTask(task.id) }}
+                className="rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm transition-colors hover:bg-black/75 sm:text-xs"
+                title="停止生成"
+              >
+                取消
+              </button>
+            )}
             {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -560,6 +560,20 @@ function TaskCard({
                   {coverSize}
                 </span>
               </>
+            )}
+            {/* 失败重试：就在原卡片上重试（不新建卡片），点击后卡片直接转入运行中转圈 */}
+            {task.status === 'error' && !isCustomReconnecting && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); void retryTaskInPlace(task.id) }}
+                className="flex items-center justify-center rounded bg-blue-500/90 p-0.5 text-white backdrop-blur-sm transition-colors hover:bg-blue-500"
+                title="失败重试（在原卡片重试）"
+                aria-label="失败重试"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
             )}
           </div>
         </div>
@@ -659,9 +673,11 @@ function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              {((task.status === 'error' && !isCustomReconnecting) || settings.alwaysShowRetryButton) && (
+              {/* 失败任务的重试已移到左上角（就地重试）；这里仅在"始终显示重试"开启且非失败态时，
+                  提供"重新生成（新建卡片）"入口，避免与失败重试重复。 */}
+              {settings.alwaysShowRetryButton && task.status !== 'error' && (
                 <TaskActionButton
-                  tooltip="重试任务"
+                  tooltip="重新生成"
                   onClick={() => retryTask(task)}
                   className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
                 >

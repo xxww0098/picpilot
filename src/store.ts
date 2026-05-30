@@ -7,6 +7,7 @@ import type {
   ApiProfile,
   AppSettings,
   AppMode,
+  MultiImageMode,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -350,7 +351,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
 
 // ===== Store 类型 =====
 
-interface AppState {
+export interface AppState {
   // 模式
   appMode: AppMode
   setAppMode: (mode: AppMode) => void
@@ -1505,7 +1506,7 @@ export async function initStore() {
 }
 
 /** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
+export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; multiImageMode?: MultiImageMode } = {}) {
   const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
@@ -1562,7 +1563,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
           confirmText: '继续提交',
           tone: 'warning',
           action: () => {
-            void submitTask({ allowFullMask: true })
+            void submitTask({ ...options, allowFullMask: true })
           },
         })
         return
@@ -1591,31 +1592,42 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
-    prompt: prompt.trim(),
+  const trimmedPrompt = prompt.trim()
+  const createdAt = Date.now()
+  const makeTask = (inputImageIds: string[], taskCreatedAt: number, taskMaskImageId: string | null, taskMaskTargetImageId: string | null): TaskRecord => ({
+    id: genId(),
+    prompt: trimmedPrompt,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiMode: activeProfile.apiMode,
     apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
-    maskTargetImageId,
-    maskImageId,
+    inputImageIds,
+    maskTargetImageId: taskMaskTargetImageId,
+    maskImageId: taskMaskImageId,
     outputImages: [],
     status: 'running',
     error: null,
-    createdAt: Date.now(),
+    createdAt: taskCreatedAt,
     finishedAt: null,
     elapsed: null,
-  }
+  })
+
+  // 多图模式：each=每张参考图各建一个独立任务（N→N）；merge=合成为一次请求（N→1）。
+  // 有遮罩时只能合成（遮罩针对单张目标图）；单张/无图时两种模式等价。
+  const effectiveMode = options.multiImageMode ?? normalizedSettings.multiImageMode
+  const perImage = effectiveMode === 'each' && !maskDraft && orderedInputImages.length >= 2
+
+  const newTasks: TaskRecord[] = perImage
+    // createdAt 递减偏移，让靠前的参考图在画廊（按 createdAt 倒序）中排在更前，保持输入顺序
+    ? orderedInputImages.map((img, index) => makeTask([img.id], createdAt + (orderedInputImages.length - 1 - index), null, null))
+    : [makeTask(orderedInputImages.map((i) => i.id), createdAt, maskImageId, maskTargetImageId)]
 
   const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
-  useStore.getState().showToast('任务已提交', 'success')
+  useStore.getState().setTasks([...newTasks, ...latestTasks])
+  await Promise.all(newTasks.map((t) => putTask(t)))
+  useStore.getState().showToast(newTasks.length > 1 ? `已提交 ${newTasks.length} 个任务` : '任务已提交', 'success')
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1623,8 +1635,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
   useStore.getState().setReusedTaskApiProfile(null)
 
-  // 异步调用 API
-  executeTask(taskId)
+  // 异步调用 API（逐个任务独立执行，由全局并发队列节流）
+  for (const t of newTasks) executeTask(t.id)
 }
 
 function addAgentReferencedImageIds(target: Set<string>, conversations = useStore.getState().agentConversations, inputDrafts = useStore.getState().agentInputDrafts) {
@@ -1985,6 +1997,58 @@ export async function retryTask(task: TaskRecord) {
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([newTask, ...latestTasks])
   await putTask(newTask)
+
+  executeTask(taskId)
+}
+
+/**
+ * 就地重试：在原失败卡片上直接重跑，复用同一个 task id，不新建卡片。
+ * 把卡片从 error 切回 running，清掉上一次的输出/报错/中间态，再重新执行。
+ * 状态完全由该 task 自身的 status 驱动，因此天然按卡片隔离，不会牵连其他卡片。
+ */
+export async function retryTaskInPlace(taskId: string) {
+  const state = useStore.getState()
+  const task = state.tasks.find((t) => t.id === taskId)
+  if (!task || task.status === 'running') return
+
+  // 中止可能残留的旧请求 / 计时器，避免就地重试后状态被旧回调污染
+  taskAbortControllers.get(taskId)?.abort()
+  taskAbortControllers.delete(taskId)
+  clearOpenAIWatchdogTimer(taskId)
+  clearCustomRecoveryTimer(taskId)
+  state.setTaskStreamPreview(taskId)
+
+  const { settings } = state
+  const activeProfile = getActiveApiProfile(settings)
+  const normalizedParams = normalizeParamsForSettings(task.params, settings, {
+    hasInputImages: task.inputImageIds.length > 0,
+    maxOutputImages: getCachedAuthUser()?.maxBatchImages,
+  })
+
+  updateTaskInStore(taskId, {
+    params: normalizedParams,
+    apiProvider: activeProfile.provider,
+    apiProfileId: activeProfile.id,
+    apiProfileName: activeProfile.name,
+    apiMode: activeProfile.apiMode,
+    apiModel: activeProfile.model,
+    outputImages: [],
+    streamPartialImageIds: undefined,
+    rawImageUrls: undefined,
+    rawResponsePayload: undefined,
+    actualParams: undefined,
+    actualParamsByImage: undefined,
+    revisedPromptByImage: undefined,
+    failedImageCount: undefined,
+    partialImageErrors: undefined,
+    customTaskId: undefined,
+    customRecoverable: false,
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+  })
 
   executeTask(taskId)
 }

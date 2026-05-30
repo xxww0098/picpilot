@@ -5,6 +5,14 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  /* 视口外的网格卡片跳过渲染/布局，降低长列表滚动开销；首次渲染后浏览器记住真实尺寸，避免跳动 */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 220px;
+  }
+}
+
 :root {
   --background: 0 0% 100%;
   --foreground: 240 10% 10%;

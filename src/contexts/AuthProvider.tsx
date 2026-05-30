@@ -8,6 +8,8 @@ interface AuthContextValue {
   user: AuthUser | null
   authEnabled: boolean
   refresh: () => Promise<void>
+  /** 本地合并更新当前用户的部分字段（如配额 / 张数），免去一次 /api/me 往返 */
+  patchUser: (patch: Partial<AuthUser>) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -34,13 +36,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthEnabled(next.authEnabled)
   }, [])
 
+  const patchUser = useCallback((patch: Partial<AuthUser>) => {
+    setUser((prev) => (prev ? { ...prev, ...patch } : prev))
+  }, [])
+
   useEffect(() => {
     void refresh()
   }, [refresh])
 
   const value = useMemo(
-    () => ({ status, user, authEnabled, refresh }),
-    [status, user, authEnabled, refresh],
+    () => ({ status, user, authEnabled, refresh, patchUser }),
+    [status, user, authEnabled, refresh, patchUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

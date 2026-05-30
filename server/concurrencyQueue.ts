@@ -97,6 +97,9 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
   }
 
   function release(): void {
+    // 防御：每个成功的 acquire 只应 release 一次（handler 侧有 released 守卫保证），
+    // 正常路径不会越界；这里兜底，绝不让 inflight 变负而破坏后续放行判断。
+    if (inflight <= 0) return
     inflight--
     // 唤醒队首等待者；resolve 内部会 inflight++。
     while (waiters.length > 0 && inflight < maxConcurrent) {

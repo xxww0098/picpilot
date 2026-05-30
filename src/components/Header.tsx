@@ -397,7 +397,7 @@ export default function Header() {
             open={showGallery}
             onClose={() => setShowGallery(false)}
             userId={galleryUserId ?? undefined}
-            title={galleryUserId ? '我的共享画廊' : '公开画廊'}
+            title={galleryUserId ? '我的共享画廊' : '共享画廊'}
           />
         </Suspense>
       )}

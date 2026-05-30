@@ -9,6 +9,7 @@ import {
   syncMentionTagSelection,
 } from '../../lib/contentEditableMentions'
 import type { InputImage, MaskDraft } from '../../types'
+import type { AppState } from '../../store'
 import ButtonTooltip from './ButtonTooltip'
 
 export type InputBarImageStripProps = {
@@ -30,7 +31,7 @@ export type InputBarImageStripProps = {
   setMaskEditorImageId: (id: string) => void
   setLightboxImageId: (id: string, ids: string[]) => void
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void
-  setConfirmDialog: (dialog: any) => void
+  setConfirmDialog: AppState['setConfirmDialog']
   onEditReferenceImage: (img: InputImage, idx: number, isMaskTarget: boolean) => void
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthProvider";
 import {
@@ -7,7 +7,7 @@ import {
     fetchGalleryPage,
     type PublicGalleryImage,
 } from "../lib/galleryApi";
-import { adminRevokeGalleryImage } from "../lib/notificationApi";
+import { adminRevokeGalleryImage, adminSetGalleryFeatured } from "../lib/notificationApi";
 import { downloadGalleryImage } from "../lib/downloadGallery";
 import { formatTimestamp } from "../lib/format";
 import {
@@ -20,7 +20,7 @@ import { useCloseOnEscape } from "../hooks/useCloseOnEscape";
 import PanelShell from "./PanelShell";
 import ModalShell from "./ModalShell";
 import Avatar from "./Avatar";
-import { CloseIcon, DownloadIcon, TrashIcon } from "./icons";
+import { CloseIcon, DownloadIcon, ThumbUpIcon, TrashIcon } from "./icons";
 
 const PAGE_SIZE = 24;
 
@@ -179,21 +179,28 @@ export default function GalleryView({
     open,
     onClose,
     userId,
-    title = "公开画廊",
+    title = "共享画廊",
 }: Props) {
     const [images, setImages] = useState<PublicGalleryImage[]>([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<unknown>(null);
     const [loadedOnce, setLoadedOnce] = useState(false);
-    const [detail, setDetail] = useState<PublicGalleryImage | null>(null);
+    // 详情弹窗只持有 id，详情对象从 images 派生，使 images 成为唯一数据源：
+    // 推荐 / 删除 / 撤下只改 images 一处，弹窗自动跟随；被移除时 detail 变 null 自动关闭。
+    const [detailId, setDetailId] = useState<string | null>(null);
     // 详情大图当前展示的图片 id：默认结果图，点参考图缩略图可切到对应原图
     const [activeImageId, setActiveImageId] = useState<string | null>(null);
     // 卡片右键菜单
     const [menu, setMenu] = useState<{ img: PublicGalleryImage; x: number; y: number } | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const detailScrollRef = useRef<HTMLDivElement>(null);
-    const { user, refresh } = useAuth();
+    const { user, patchUser } = useAuth();
+
+    const detail = useMemo(
+        () => images.find((it) => it.id === detailId) ?? null,
+        [images, detailId],
+    );
 
     // Esc 关闭右键菜单（注册在全局 ESC 栈顶，先于画廊面板，避免误关整个画廊）
     useCloseOnEscape(Boolean(menu), () => setMenu(null));
@@ -317,10 +324,25 @@ export default function GalleryView({
         setTotal((t) => Math.max(0, t - 1));
     }
 
+    async function toggleFeatured(img: PublicGalleryImage) {
+        const next = !(img.featured);
+        try {
+            await adminSetGalleryFeatured(img.id, next);
+            setImages((prev) =>
+                prev.map((it) =>
+                    it.id === img.id ? { ...it, featured: next ? 1 : 0 } : it,
+                ),
+            );
+            showAppToast(next ? "已设为推荐" : "已取消推荐", "success");
+        } catch (e) {
+            showAppToast(getUserFacingErrorMessage(e, "设置推荐失败"), "error");
+        }
+    }
+
     // 切换/关闭详情时，大图回到结果图
     useEffect(() => {
         setActiveImageId(null);
-    }, [detail?.id]);
+    }, [detailId]);
 
     function deleteImage(id: string) {
         openDestructiveConfirm({
@@ -329,10 +351,14 @@ export default function GalleryView({
                 "确定删除这张公开图吗？删除后其他成员将无法在画廊中看到它。",
             onConfirm: async () => {
                 try {
-                    await deleteGalleryImage(id);
-                    if (detail?.id === id) setDetail(null);
+                    const res = await deleteGalleryImage(id);
+                    if (detailId === id) setDetailId(null);
                     removeImage(id);
-                    await refresh();
+                    // 用删除接口回传的占用 / 张数本地更新，省去整轮 /api/me 刷新
+                    patchUser({
+                        publicStorageBytes: res.storageBytes,
+                        publicGalleryCount: res.galleryCount,
+                    });
                 } catch (e) {
                     showAppToast(
                         getUserFacingErrorMessage(e, "删除公开图失败"),
@@ -359,7 +385,7 @@ export default function GalleryView({
                         img.id,
                         reason.trim() || undefined,
                     );
-                    if (detail?.id === img.id) setDetail(null);
+                    if (detailId === img.id) setDetailId(null);
                     removeImage(img.id);
                     showAppToast("已撤下并通知作者。", "success");
                 } catch (e) {
@@ -386,7 +412,7 @@ export default function GalleryView({
                             <p className="text-sm text-red-500">
                                 {getUserFacingErrorMessage(
                                     error,
-                                    "加载公开画廊失败",
+                                    "加载共享画廊失败",
                                 )}
                             </p>
                             <button
@@ -414,7 +440,7 @@ export default function GalleryView({
                                 <button
                                     key={img.id}
                                     type="button"
-                                    onClick={() => setDetail(img)}
+                                    onClick={() => setDetailId(img.id)}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -424,13 +450,22 @@ export default function GalleryView({
                                             y: e.clientY,
                                         });
                                     }}
-                                    className="group relative overflow-hidden rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] aspect-square"
+                                    className="group relative overflow-hidden rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] aspect-square cv-auto"
                                 >
                                     <AuthImage
                                         lazy
                                         src={`/api/gallery/image/${img.id}?thumb=1`}
                                         className="h-full w-full object-cover transition-transform group-hover:scale-105"
                                     />
+                                    {Boolean(img.featured) && (
+                                        <span
+                                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/90 text-white shadow-sm ring-1 ring-white/40 backdrop-blur-sm"
+                                            title="管理员推荐"
+                                            aria-label="管理员推荐"
+                                        >
+                                            <ThumbUpIcon className="h-3.5 w-3.5" />
+                                        </span>
+                                    )}
                                     <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent p-2">
                                         <Avatar
                                             userId={img.user_id}
@@ -499,7 +534,7 @@ export default function GalleryView({
             {detail && (
                 <ModalShell
                     portal
-                    onClose={() => setDetail(null)}
+                    onClose={() => setDetailId(null)}
                     scrollRef={detailScrollRef}
                     zIndexClass="z-50"
                     backdropClassName="bg-black/60"
@@ -536,7 +571,7 @@ export default function GalleryView({
                                 </p>
                             </div>
                             <button
-                                onClick={() => setDetail(null)}
+                                onClick={() => setDetailId(null)}
                                 className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
                             >
                                 <CloseIcon className="h-4 w-4" />
@@ -585,25 +620,44 @@ export default function GalleryView({
                                 </div>
                             </div>
                         )}
-                        {user && detail.user_id === user.userId && (
-                            <button
-                                onClick={() => void deleteImage(detail.id)}
-                                className="mt-auto rounded bg-red-500 px-4 py-2 text-sm text-white hover:bg-red-600"
-                            >
-                                删除
-                            </button>
+                        {(Boolean(user?.isAdmin) ||
+                            (user && detail.user_id === user.userId)) && (
+                            <div className="mt-auto flex flex-col gap-2 pt-2">
+                                {user?.isAdmin && (
+                                    <button
+                                        onClick={() => void toggleFeatured(detail)}
+                                        className={`flex items-center justify-center gap-1.5 rounded px-4 py-2 text-sm transition ${
+                                            detail.featured
+                                                ? "border border-rose-500/50 bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 dark:text-rose-400"
+                                                : "border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                                        }`}
+                                        title="管理员推荐：置顶并在缩略图上显示点赞图案"
+                                    >
+                                        <ThumbUpIcon className="h-4 w-4" />
+                                        {detail.featured ? "取消推荐" : "设为推荐"}
+                                    </button>
+                                )}
+                                {user && detail.user_id === user.userId && (
+                                    <button
+                                        onClick={() => void deleteImage(detail.id)}
+                                        className="rounded bg-red-500 px-4 py-2 text-sm text-white hover:bg-red-600"
+                                    >
+                                        删除
+                                    </button>
+                                )}
+                                {user &&
+                                    user.isAdmin &&
+                                    detail.user_id !== user.userId && (
+                                        <button
+                                            onClick={() => revokeImage(detail)}
+                                            className="rounded border border-red-500/50 bg-red-500/10 px-4 py-2 text-sm text-red-600 hover:bg-red-500/20 dark:text-red-400"
+                                            title="以管理员身份撤下，并向作者发送通知"
+                                        >
+                                            撤下（管理员）
+                                        </button>
+                                    )}
+                            </div>
                         )}
-                        {user &&
-                            user.isAdmin &&
-                            detail.user_id !== user.userId && (
-                                <button
-                                    onClick={() => revokeImage(detail)}
-                                    className="mt-auto rounded border border-red-500/50 bg-red-500/10 px-4 py-2 text-sm text-red-600 hover:bg-red-500/20 dark:text-red-400"
-                                    title="以管理员身份撤下，并向作者发送通知"
-                                >
-                                    撤下（管理员）
-                                </button>
-                            )}
                     </div>
                 </ModalShell>
             )}
@@ -619,8 +673,11 @@ export default function GalleryView({
                                 user.isAdmin &&
                                 menu.img.user_id !== user.userId,
                         );
+                        const isAdmin = Boolean(user?.isAdmin);
                         const MENU_W = 160;
-                        const MENU_H = 8 + (isOwner || isAdminOther ? 2 : 1) * 38;
+                        const itemCount =
+                            1 + (isOwner || isAdminOther ? 1 : 0) + (isAdmin ? 1 : 0);
+                        const MENU_H = 8 + itemCount * 38;
                         const left = Math.max(
                             8,
                             Math.min(menu.x, window.innerWidth - MENU_W - 8),
@@ -648,6 +705,20 @@ export default function GalleryView({
                                     <DownloadIcon className="h-4 w-4 shrink-0" />
                                     下载
                                 </button>
+                                {isAdmin && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const img = menu.img;
+                                            setMenu(null);
+                                            void toggleFeatured(img);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/50"
+                                    >
+                                        <ThumbUpIcon className="h-4 w-4 shrink-0" />
+                                        {menu.img.featured ? "取消推荐" : "设为推荐"}
+                                    </button>
+                                )}
                                 {isOwner && (
                                     <button
                                         type="button"

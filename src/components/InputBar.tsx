@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { useStore, submitTask, submitAgentMessage, stopAgentResponse, createInputImageFromFile, deleteImageIfUnreferenced, ensureImageCached } from '../store'
 import { DEFAULT_PARAMS } from '../types'
+import type { MultiImageMode, TaskRecord } from '../types'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
 import { getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { normalizeImageSize } from '../lib/size'
@@ -22,6 +23,10 @@ import { useAuth } from '../contexts/AuthProvider'
 
 
 
+// 画廊模式下 InputBar 不需要 tasks（仅 agent 模式的 @图选项用到）。返回稳定的空引用，
+// 让出图过程中高频的 task 更新不再重渲整个 InputBar。
+const EMPTY_TASKS: TaskRecord[] = []
+
 export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const appMode = useStore((s) => s.appMode)
@@ -40,9 +45,14 @@ export default function InputBar() {
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
-  const tasks = useStore((s) => s.tasks)
-  const agentConversations = useStore((s) => s.agentConversations)
+  const tasks = useStore((s) => (s.appMode === 'agent' ? s.tasks : EMPTY_TASKS))
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
+  // 直接订阅当前会话对象（引用稳定）：画廊模式恒为 null，agent 模式仅在该会话变化时重渲。
+  const activeAgentConversation = useStore((s) =>
+    s.appMode === 'agent'
+      ? s.agentConversations.find((conversation) => conversation.id === s.activeAgentConversationId) ?? null
+      : null,
+  )
   const { user } = useAuth()
 
   const maskDraft = useStore((s) => s.maskDraft)
@@ -110,9 +120,6 @@ export default function InputBar() {
       ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
       : currentActiveProfile
   ), [currentActiveProfile, reusedTaskApiProfileId, settings])
-  const activeAgentConversation = appMode === 'agent'
-    ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
-    : null
   const activeAgentIsRunning = Boolean(activeAgentConversation?.rounds.some((round) => round.status === 'running'))
   const effectiveSettings = useMemo(() => (
     activeProfile.id === currentActiveProfile.id
@@ -189,6 +196,17 @@ export default function InputBar() {
   const referenceImages = maskTargetImage
     ? inputImages.filter((img) => img.id !== maskTargetImage.id)
     : inputImages
+
+  // 多图发送模式（拆分按钮）：仅画廊模式、无遮罩、参考图 ≥2 张时可用
+  const canPerImageSplit = appMode !== 'agent' && !maskDraft && referenceImages.length >= 2
+  const effectiveSubmitN = Math.min(outputImageLimit, Math.max(1, effectiveNValue || 1))
+  const perImageOutputCount = referenceImages.length * effectiveSubmitN
+  const mergeOutputCount = effectiveSubmitN
+  const activeMultiImageMode = settings.multiImageMode
+  const submitWithMultiImageMode = useCallback((mode: MultiImageMode) => {
+    if (useStore.getState().settings.multiImageMode !== mode) setSettings({ multiImageMode: mode })
+    void submitTask({ multiImageMode: mode })
+  }, [setSettings])
 
   useEffect(() => {
     setOutputCompressionInput(
@@ -533,6 +551,11 @@ export default function InputBar() {
     maskDraft,
     fileInputRef,
     cameraInputRef,
+    canPerImageSplit,
+    activeMultiImageMode,
+    perImageOutputCount,
+    mergeOutputCount,
+    onSubmitWithMode: submitWithMultiImageMode,
     onSubmit: submitCurrentMode,
     onStopAgent: stopActiveAgentResponse,
     onOpenSettings: () => setShowSettings(true),

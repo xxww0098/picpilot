@@ -1,6 +1,6 @@
 import { Hono, type Context, type Next } from 'hono'
 import { jwt as jwtMiddleware, sign as jwtSign } from 'hono/jwt'
-import { Database } from 'bun:sqlite'
+import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import sharp from 'sharp'
 import path from 'path'
 import { existsSync, statSync } from 'fs'
@@ -17,6 +17,9 @@ import {
   DB_PATH,
   DEFAULT_MAX_BATCH_IMAGES,
   EVENT_RETENTION_DAYS,
+  INVITE_MAX_BATCH_COUNT,
+  INVITE_MAX_USES,
+  INVITE_NOTE_MAX_LEN,
   JWT_EXPIRES_IN_SECONDS,
   JWT_SECRET,
   logger,
@@ -158,6 +161,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_notifications_user_time ON notifications(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
+  CREATE INDEX IF NOT EXISTS idx_invite_codes_created_by ON invite_codes(created_by);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {
@@ -173,6 +177,8 @@ ensureColumn('users', 'max_batch_images', `max_batch_images INTEGER NOT NULL DEF
 ensureColumn('users', 'last_login_at', 'last_login_at INTEGER')
 ensureColumn('users', 'avatar_updated_at', 'avatar_updated_at INTEGER')
 ensureColumn('users', 'public_storage_bytes', 'public_storage_bytes INTEGER NOT NULL DEFAULT 0')
+// 共享画廊「推荐」：管理员可标记，被标记的图缩略图右上角显示点赞图案并在画廊置顶
+ensureColumn('public_images', 'featured', 'featured INTEGER NOT NULL DEFAULT 0')
 
 // ===== seeding =====
 
@@ -229,15 +235,18 @@ function purgeOldEvents() {
   if (result.changes > 0) logger.info({ scope: 'telemetry', deleted: result.changes, retentionDays: EVENT_RETENTION_DAYS }, 'Purged old events')
 }
 purgeOldEvents()
-setInterval(purgeOldEvents, 24 * 60 * 60 * 1000)
+// 后台定时任务只在作为主进程运行时启动；测试经 app.request 驱动时不挂这些计时器，避免事件循环常驻。
+if (import.meta.main) {
+  setInterval(purgeOldEvents, 24 * 60 * 60 * 1000)
 
-// 定期清理过期的登录限速记录，防止内存泄漏
-setInterval(() => {
-  const now = Date.now()
-  for (const [ip, entry] of loginAttempts) {
-    if (entry.resetAt < now) loginAttempts.delete(ip)
-  }
-}, 5 * 60 * 1000)
+  // 定期清理过期的登录限速记录，防止内存泄漏
+  setInterval(() => {
+    const now = Date.now()
+    for (const [ip, entry] of loginAttempts) {
+      if (entry.resetAt < now) loginAttempts.delete(ip)
+    }
+  }, 5 * 60 * 1000)
+}
 
 // ===== 工具 =====
 
@@ -310,15 +319,21 @@ async function processPublicImage(imageBase64: string): Promise<ProcessedPublicI
 
 // 删除一张公开图（含其原图）对应的图片与缩略图文件，忽略文件不存在等错误。
 // 需在删除 public_images 行之前调用，否则 originals 行已被级联删除、无法取回 id。
-function deletePublicImageFiles(id: string): Promise<unknown> {
-  const originals = db.query('SELECT id FROM public_image_originals WHERE image_id = ?').all(id) as Array<{ id: string }>
-  const ids = [id, ...originals.map((o) => o.id)]
+// 按已知文件 id 删除主图 + 缩略图（不查 DB）。用于发布事务回滚后清理已落盘的孤儿文件。
+function cleanupPublicImageFiles(mainId: string, originalIds: string[]): Promise<unknown> {
+  const ids = [mainId, ...originalIds]
   return Promise.allSettled(
     ids.flatMap((fileId) => [
       unlink(path.join(PUBLIC_DIR, `${fileId}.webp`)).catch(() => {}),
       unlink(path.join(THUMBS_DIR, `${fileId}.webp`)).catch(() => {}),
     ]),
   )
+}
+
+// 删除某张公开图及其原图的全部文件：先查 DB 拿原图 id，故必须在 DELETE 级联前调用。
+function deletePublicImageFiles(id: string): Promise<unknown> {
+  const originals = db.query('SELECT id FROM public_image_originals WHERE image_id = ?').all(id) as Array<{ id: string }>
+  return cleanupPublicImageFiles(id, originals.map((o) => o.id))
 }
 
 function saveTeamSettingsRecord(settings: Record<string, unknown>, updatedBy: string | null) {
@@ -684,7 +699,12 @@ app.post('/api/auth/avatar', async (c) => {
     return c.json({ error: '无法解析这张图片，请换一张试试。' }, 400)
   }
 
-  await writeFile(path.join(AVATARS_DIR, `${payload.sub}.webp`), finalBuffer)
+  try {
+    await writeFile(path.join(AVATARS_DIR, `${payload.sub}.webp`), finalBuffer)
+  } catch (err) {
+    logger.error({ scope: 'avatar', userId: payload.sub, err: String(err) }, 'Failed to write avatar file')
+    return c.json({ error: '保存头像失败，请稍后重试。' }, 500)
+  }
   const now = Date.now()
   db.query('UPDATE users SET avatar_updated_at = ? WHERE id = ?').run(now, payload.sub)
   return c.json({ avatarUpdatedAt: now })
@@ -849,6 +869,7 @@ app.all('/api-proxy/*', async (c) => {
     })
   } catch (err) {
     release()
+    logger.error({ scope: 'proxy', target: target.href, err: String(err) }, 'Upstream API request failed')
     return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试。' }, 502)
   }
 
@@ -1002,7 +1023,7 @@ app.patch('/api/admin/users/:id', async (c) => {
     }
   }
   const updates: string[] = []
-  const args: unknown[] = []
+  const args: SQLQueryBindings[] = []
   if (typeof body.isAdmin === 'boolean') { updates.push('is_admin = ?'); args.push(body.isAdmin ? 1 : 0) }
   if (typeof body.password === 'string' && body.password.length >= 6) {
     updates.push('password_hash = ?')
@@ -1010,7 +1031,7 @@ app.patch('/api/admin/users/:id', async (c) => {
   }
   if (updates.length === 0) return c.json({ error: '没有可更新的字段。' }, 400)
   args.push(id)
-  const result = db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...(args as never[]))
+  const result = db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...(args))
   if (result.changes === 0) return c.json({ error: '用户不存在，可能已被删除。' }, 404)
   return c.json({ ok: true })
 })
@@ -1058,9 +1079,9 @@ app.get('/api/admin/invites', (c) => {
 app.post('/api/admin/invites', async (c) => {
   const payload = c.get('jwtPayload') as { sub: string }
   const body = await c.req.json().catch(() => ({}))
-  const maxUses = Math.max(1, Math.min(1000, Number(body.maxUses ?? 1)))
-  const count = Math.max(1, Math.min(50, Number(body.count ?? 1)))
-  const note = typeof body.note === 'string' ? body.note.slice(0, 200) : null
+  const maxUses = Math.max(1, Math.min(INVITE_MAX_USES, Number(body.maxUses ?? 1)))
+  const count = Math.max(1, Math.min(INVITE_MAX_BATCH_COUNT, Number(body.count ?? 1)))
+  const note = typeof body.note === 'string' ? body.note.slice(0, INVITE_NOTE_MAX_LEN) : null
   const expiresAt = body.expiresAt ? Number(body.expiresAt) : null
 
   const insert = db.query(`
@@ -1097,7 +1118,7 @@ app.get('/api/admin/events', (c) => {
   const until = c.req.query('until') ? Number(c.req.query('until')) : null
 
   const where: string[] = []
-  const args: unknown[] = []
+  const args: SQLQueryBindings[] = []
   if (userId) { where.push('user_id = ?'); args.push(userId) }
   if (eventType) { where.push('event_type = ?'); args.push(eventType) }
   if (errorType) { where.push('error_type = ?'); args.push(errorType) }
@@ -1108,8 +1129,8 @@ app.get('/api/admin/events', (c) => {
   const events = db.query(`
     SELECT * FROM request_events ${whereSql}
     ORDER BY created_at DESC LIMIT ? OFFSET ?
-  `).all(...(args as never[]), limit, offset)
-  const total = (db.query(`SELECT COUNT(*) AS n FROM request_events ${whereSql}`).get(...(args as never[])) as { n: number }).n
+  `).all(...(args), limit, offset)
+  const total = (db.query(`SELECT COUNT(*) AS n FROM request_events ${whereSql}`).get(...(args)) as { n: number }).n
 
   return c.json({ events, total })
 })
@@ -1167,7 +1188,7 @@ app.get('/api/admin/events/export', (c) => {
   }
 
   const where: string[] = ['created_at >= ?', 'created_at <= ?']
-  const args: unknown[] = [since, until]
+  const args: SQLQueryBindings[] = [since, until]
   if (userId) { where.push('user_id = ?'); args.push(userId) }
   if (eventType) { where.push('event_type = ?'); args.push(eventType) }
   if (errorType) { where.push('error_type = ?'); args.push(errorType) }
@@ -1175,7 +1196,7 @@ app.get('/api/admin/events/export', (c) => {
 
   const rows = db.query(`
     SELECT * FROM request_events ${whereSql} ORDER BY created_at ASC
-  `).all(...(args as never[])) as Array<Record<string, unknown>>
+  `).all(...(args)) as Array<Record<string, unknown>>
 
   const headerLine = EVENT_EXPORT_COLUMNS.map((c) => csvEscape(c.label)).join(',')
   const dataLines = rows.map((row) =>
@@ -1279,6 +1300,21 @@ app.post('/api/admin/gallery/:id/revoke', async (c) => {
   return c.json({ ok: true })
 })
 
+// 管理员设置 / 取消共享画廊「推荐」
+app.post('/api/admin/gallery/:id/feature', async (c) => {
+  const payload = c.get('jwtPayload') as { sub: string; username: string }
+  const id = c.req.param('id')
+  const exists = db.query('SELECT 1 FROM public_images WHERE id = ?').get(id)
+  if (!exists) return c.json({ error: '图片不存在，可能已被删除。' }, 404)
+
+  const body = await c.req.json().catch(() => ({})) as { featured?: unknown }
+  const featured = body.featured === true || body.featured === 1 ? 1 : 0
+  db.query('UPDATE public_images SET featured = ? WHERE id = ?').run(featured, id)
+
+  logger.info({ scope: 'admin', actor: payload.username, imageId: id, featured: featured === 1 }, 'Gallery image featured toggled')
+  return c.json({ ok: true, featured: featured === 1 })
+})
+
 // ===== Notifications =====
 
 app.use('/api/notifications/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
@@ -1355,6 +1391,7 @@ app.use('/api/gallery/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
 app.post('/api/gallery', async (c) => {
   const payload = c.get('jwtPayload') as { sub: string; username: string }
 
+  // 预检：已超额则快速失败，省去白做 sharp 处理。真正的并发安全由下方事务内的二次校验保证（见提交处注释）。
   const used = (db.query('SELECT public_storage_bytes AS bytes FROM users WHERE id = ?').get(payload.sub) as { bytes: number } | null)?.bytes ?? 0
   if (used >= PER_USER_PUBLIC_QUOTA_BYTES) {
     return c.json({ error: '公开画廊空间已用完，请先删除一些公开图片后再上传。' }, 413)
@@ -1392,28 +1429,56 @@ app.post('/api/gallery', async (c) => {
   // 主图 + 原图占用的总空间都计入用户配额（写入主图 file_size，删除/撤下时按此回收）
   const totalBytes = main.finalBuffer.length + originals.reduce((sum, o) => sum + o.finalBuffer.length, 0)
 
-  await Promise.all([
-    writeFile(path.join(PUBLIC_DIR, `${id}.webp`), main.finalBuffer),
-    writeFile(path.join(THUMBS_DIR, `${id}.webp`), main.thumbBuffer),
-    ...originals.flatMap((o) => [
-      writeFile(path.join(PUBLIC_DIR, `${o.id}.webp`), o.finalBuffer),
-      writeFile(path.join(THUMBS_DIR, `${o.id}.webp`), o.thumbBuffer),
-    ]),
-  ])
+  try {
+    await Promise.all([
+      writeFile(path.join(PUBLIC_DIR, `${id}.webp`), main.finalBuffer),
+      writeFile(path.join(THUMBS_DIR, `${id}.webp`), main.thumbBuffer),
+      ...originals.flatMap((o) => [
+        writeFile(path.join(PUBLIC_DIR, `${o.id}.webp`), o.finalBuffer),
+        writeFile(path.join(THUMBS_DIR, `${o.id}.webp`), o.thumbBuffer),
+      ]),
+    ])
+  } catch (err) {
+    logger.error({ scope: 'gallery', userId: payload.sub, imageId: id, err: String(err) }, 'Gallery publish failed writing files')
+    await cleanupPublicImageFiles(id, originals.map((o) => o.id))
+    return c.json({ error: '公开图片失败，请稍后重试。' }, 500)
+  }
 
-  db.transaction(() => {
-    db.query(`
-      INSERT INTO public_images (id, user_id, prompt, width, height, file_size, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, payload.sub, body.prompt!.slice(0, 4000), main.width ?? null, main.height ?? null, totalBytes, now)
-    originals.forEach((o, i) => {
+  // body.prompt 已在上面的类型守卫里证明是 string，但该窄化无法带进事务闭包，先在此处提取。
+  const promptText = body.prompt.slice(0, 4000)
+  // 配额二次校验 + 三条写库放进同一个同步事务：bun:sqlite 事务同步执行、SQLite 写事务串行化，
+  // 事务内重读 public_storage_bytes 即为序列化点，杜绝「两请求都通过预检后双双提交」的超额竞态。
+  let quotaExceeded = false
+  try {
+    db.transaction(() => {
+      const cur = db.query('SELECT public_storage_bytes AS bytes FROM users WHERE id = ?').get(payload.sub) as { bytes: number } | null
+      if (!cur) throw new Error('user not found')
+      if (cur.bytes + totalBytes > PER_USER_PUBLIC_QUOTA_BYTES) {
+        quotaExceeded = true
+        throw new Error('quota exceeded')
+      }
       db.query(`
-        INSERT INTO public_image_originals (id, image_id, position, width, height, file_size, created_at)
+        INSERT INTO public_images (id, user_id, prompt, width, height, file_size, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(o.id, id, i, o.width ?? null, o.height ?? null, o.finalBuffer.length, now)
-    })
-    db.query('UPDATE users SET public_storage_bytes = public_storage_bytes + ? WHERE id = ?').run(totalBytes, payload.sub)
-  })()
+      `).run(id, payload.sub, promptText, main.width ?? null, main.height ?? null, totalBytes, now)
+      originals.forEach((o, i) => {
+        db.query(`
+          INSERT INTO public_image_originals (id, image_id, position, width, height, file_size, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(o.id, id, i, o.width ?? null, o.height ?? null, o.finalBuffer.length, now)
+      })
+      db.query('UPDATE users SET public_storage_bytes = public_storage_bytes + ? WHERE id = ?').run(totalBytes, payload.sub)
+    })()
+  } catch (err) {
+    // 事务已回滚（DB 无记录），但文件已落盘 → 用内存里的 id 清理，避免孤儿文件。
+    // 不能复用 deletePublicImageFiles：它查 DB 找原图，而此时事务已回滚、查不到。
+    await cleanupPublicImageFiles(id, originals.map((o) => o.id))
+    if (quotaExceeded) {
+      return c.json({ error: '公开画廊空间已用完，请先删除一些公开图片后再上传。' }, 413)
+    }
+    logger.error({ scope: 'gallery', userId: payload.sub, imageId: id, err: String(err) }, 'Gallery publish transaction failed; rolled back and cleaned files')
+    return c.json({ error: '公开图片失败，请稍后重试。' }, 500)
+  }
 
   return c.json({ id, width: main.width, height: main.height, size: totalBytes, originals: originals.length })
 })
@@ -1424,19 +1489,19 @@ app.get('/api/gallery', (c) => {
   const userId = c.req.query('user_id')
 
   const where = userId ? 'WHERE p.user_id = ?' : ''
-  const args = userId ? [userId] : []
+  const args: SQLQueryBindings[] = userId ? [userId] : []
   const images = db.query(`
     SELECT p.id, p.user_id,
            u.username,
            COALESCE(NULLIF(u.display_name, ''), u.username) AS display_name,
            u.avatar_updated_at,
-           p.prompt, p.width, p.height, p.file_size, p.created_at
+           p.prompt, p.width, p.height, p.file_size, p.created_at, p.featured
     FROM public_images p
     JOIN users u ON u.id = p.user_id
     ${where}
-    ORDER BY p.created_at DESC LIMIT ? OFFSET ?
-  `).all(...(args as never[]), limit, offset)
-  const total = (db.query(`SELECT COUNT(*) AS n FROM public_images p ${where}`).get(...(args as never[])) as { n: number }).n
+    ORDER BY p.featured DESC, p.created_at DESC LIMIT ? OFFSET ?
+  `).all(...(args), limit, offset)
+  const total = (db.query(`SELECT COUNT(*) AS n FROM public_images p ${where}`).get(...(args)) as { n: number }).n
 
   // 一次性查出本页所有公开图的原图，按 position 归到各自主图下
   const imageIds = (images as Array<{ id: string }>).map((img) => img.id)
@@ -1448,7 +1513,7 @@ app.get('/api/gallery', (c) => {
       FROM public_image_originals
       WHERE image_id IN (${placeholders})
       ORDER BY position ASC
-    `).all(...(imageIds as never[])) as Array<{ id: string; image_id: string; width: number | null; height: number | null }>
+    `).all(...(imageIds)) as Array<{ id: string; image_id: string; width: number | null; height: number | null }>
     for (const row of rows) {
       const list = originalsByImage.get(row.image_id) ?? []
       list.push({ id: row.id, width: row.width, height: row.height })
@@ -1478,7 +1543,10 @@ app.delete('/api/gallery/:id', async (c) => {
       db.query('UPDATE users SET public_storage_bytes = MAX(0, public_storage_bytes - ?) WHERE id = ?').run(img.file_size, img.user_id)
     }
   })()
-  return c.json({ ok: true })
+  // 返回删除后的占用 / 张数，前端据此本地更新，避免再发一轮 /api/me 全量刷新
+  const storageBytes = (db.query('SELECT public_storage_bytes AS bytes FROM users WHERE id = ?').get(img.user_id) as { bytes: number } | null)?.bytes ?? 0
+  const galleryCount = (db.query('SELECT COUNT(*) AS n FROM public_images WHERE user_id = ?').get(img.user_id) as { n: number }).n
+  return c.json({ ok: true, storageBytes, galleryCount })
 })
 
 // 鉴权后流式返回公开图（原图或缩略图）
@@ -1510,25 +1578,32 @@ app.notFound((c) => {
 
 // ===== boot =====
 
-const server = Bun.serve({
-  fetch: app.fetch,
-  port: PORT,
-  // 图像生成 / Agent 的流式响应在分片之间可能出现较长静默（上游 cliproxyapi 代理的 CLI 后端
-  // 在生成大图时会安静一段时间）。Bun 默认 10s 空闲超时会在静默期直接断开 socket，导致前端
-  // fetch 抛出 "network error"。上调到 Bun 允许的最大值 255s，由 Caddy 的 600s 读写超时兜底。
-  idleTimeout: 255,
-})
+// 仅作为主进程（bun run index.ts）启动时才监听端口；测试 import 本模块拿到 { app, db }
+// 用 app.request(...) 在进程内驱动，不会占用端口。
+if (import.meta.main) {
+  const server = Bun.serve({
+    fetch: app.fetch,
+    port: PORT,
+    // 图像生成 / Agent 的流式响应在分片之间可能出现较长静默（上游 cliproxyapi 代理的 CLI 后端
+    // 在生成大图时会安静一段时间）。Bun 默认 10s 空闲超时会在静默期直接断开 socket，导致前端
+    // fetch 抛出 "network error"。上调到 Bun 允许的最大值 255s，由 Caddy 的 600s 读写超时兜底。
+    idleTimeout: 255,
+  })
 
-logger.info({ scope: 'server', url: server.url.href.replace(/\/$/, '') }, 'picpilot ready')
-logger.info({
-  scope: 'server',
-  port: PORT,
-  staticDir: STATIC_DIR,
-  dataDir: DATA_DIR,
-  dbPath: DB_PATH,
-  apiProxy: Boolean(API_PROXY_URL),
-  maxConcurrent: MAX_CONCURRENT,
-  maxQueue: PROXY_QUEUE_MAX,
-  maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
-  defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
-}, 'Runtime configuration')
+  logger.info({ scope: 'server', url: server.url.href.replace(/\/$/, '') }, 'picpilot ready')
+  logger.info({
+    scope: 'server',
+    port: PORT,
+    staticDir: STATIC_DIR,
+    dataDir: DATA_DIR,
+    dbPath: DB_PATH,
+    apiProxy: Boolean(API_PROXY_URL),
+    maxConcurrent: MAX_CONCURRENT,
+    maxQueue: PROXY_QUEUE_MAX,
+    maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
+    defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
+  }, 'Runtime configuration')
+}
+
+// 供集成测试用 app.request 在进程内驱动，并直接读/写 db 做断言与种子数据。
+export { app, db }

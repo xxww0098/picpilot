@@ -46,6 +46,10 @@ export const MAX_IMAGE_LONG_EDGE = 2048
 export const THUMB_LONG_EDGE = 256
 export const AVATAR_SIZE = 256
 export const MAX_AVATAR_INPUT_BYTES = 5 * 1024 * 1024
+// 邀请码生成上限（管理端批量生成）
+export const INVITE_MAX_USES = 1000
+export const INVITE_MAX_BATCH_COUNT = 50
+export const INVITE_NOTE_MAX_LEN = 200
 export const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
