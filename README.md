@@ -5,11 +5,15 @@
 [![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Bun](https://img.shields.io/badge/Bun-1.3-fbf0df?style=flat-square&logo=bun&logoColor=black)](https://bun.sh/)
+[![Hono](https://img.shields.io/badge/Hono-E36002?style=flat-square&logo=hono&logoColor=white)](https://hono.dev/)
+[![PWA](https://img.shields.io/badge/PWA-ready-5A0FC8?style=flat-square&logo=pwa&logoColor=white)](#-核心特性)
 
-**面向电商商品图的 AI 图片生成与编辑工作台**
+**面向电商商品图的自托管 AI 图片生成与编辑工作台**
 
-提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口以及可导入的自定义 HTTP 服务商。<br>
-支持文本生图、参考图与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
+简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口与可导入的自定义 HTTP 服务商。<br>
+涵盖文本生图、参考图与遮罩编辑、多轮 Agent 对话；个人历史与图片纯本地存储（IndexedDB），<br>
+并内置多用户团队能力：邀请注册、共享画廊、用量统计与管理后台。
 
 </div>
 
@@ -97,6 +101,13 @@
 - **提示词防改写**：Responses API 会始终在请求文本前加入强制指令防止提示词被改写；开启 Codex CLI 模式后，Images API 也会获得同等保护。
 - **智能诊断提示**：当检测到接口异常改写行为或缺少常规参数时，自动提示开启相应的兼容模式。
 - **习惯配置**：支持设置提交后清空输入、重启后保留历史输入、临时复用历史任务 API 配置等。
+
+### 👥 团队与多用户（自托管后端）
+- **邀请码注册与会话安全**：邀请码注册（管理员可批量生成，设有效期 / 使用次数）；JWT 短时令牌 + 过期前静默刷新的滑动会话（默认 2h 有效、7d 绝对上限），重置密码即令该用户全设备登出。
+- **管理后台**：用户管理（启用 / 禁用、管理员授权、重置密码、删除），邀请码管理，团队服务配置（默认批量上限、全局并发与排队上限，**运行时生效、无需重启**），用量概览与请求事件流水（支持 CSV 导出）。
+- **共享画廊**：可将满意作品一键公开到团队画廊（自动附带本次引用的原图），管理员可「推荐」置顶或撤下违规图；每用户独立存储配额。
+- **统一上游代理**：所有出图请求经同源 `/api-proxy/` 由服务端鉴权后转发，真实上游地址与 Key 仅存于服务端、前端永不可见；全局并发信号量 + FIFO 排队，配套「当前 N 个排队中」可见性与一键取消。
+- **站内通知**：图片被公开 / 撤下 / 推荐等事件以站内通知触达本人。
 
 ---
 
@@ -426,11 +437,19 @@ JSON 结构示例：
 
 <div align="center">
   <br>
+  <b>前端</b><br>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/React_19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React 19" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-B73BFE?style=for-the-badge&logo=vite&logoColor=FFD62E" alt="Vite" /></a>
   <a href="https://tailwindcss.com/"><img src="https://img.shields.io/badge/Tailwind_CSS_3-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white" alt="Tailwind CSS 3" /></a>
   <a href="https://zustand.docs.pmnd.rs/"><img src="https://img.shields.io/badge/Zustand-764ABC?style=for-the-badge&logo=react&logoColor=white" alt="Zustand" /></a>
+  <a href="https://zod.dev/"><img src="https://img.shields.io/badge/Zod-3E67B1?style=for-the-badge&logo=zod&logoColor=white" alt="Zod" /></a>
+  <br><br>
+  <b>后端</b><br>
+  <a href="https://bun.sh/"><img src="https://img.shields.io/badge/Bun-000000?style=for-the-badge&logo=bun&logoColor=white" alt="Bun" /></a>
+  <a href="https://hono.dev/"><img src="https://img.shields.io/badge/Hono-E36002?style=for-the-badge&logo=hono&logoColor=white" alt="Hono" /></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite_(bun:sqlite)-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" /></a>
+  <a href="https://sharp.pixelplumbing.com/"><img src="https://img.shields.io/badge/sharp-99CC00?style=for-the-badge&logoColor=white" alt="sharp" /></a>
   <br>
   <br>
 </div>
