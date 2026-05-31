@@ -56,7 +56,6 @@ services:
       - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cliproxy:8317}
       - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY}
       - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
-      - MAX_CONCURRENT_PER_USER=${MAX_CONCURRENT_PER_USER:-2}
       - DATA_DIR=/data
       - DB_PATH=/data/auth.db
     volumes:
