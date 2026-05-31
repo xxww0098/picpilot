@@ -8,6 +8,7 @@ import {
   normalizeSettings,
   normalizeStreamPartialImages,
 } from './apiProfiles'
+import { classifyImportEnvelope } from './schemas'
 
 const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'streamImages', 'streamPartialImages']
 
@@ -30,7 +31,8 @@ function createUrlProfileId(usedIds: Set<string>) {
 }
 
 function pickUrlSettingsPayload(value: unknown): unknown | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  // Zod 结构性预检（纯加性）：仅接受非 null、非数组的对象，与原 typeof 门闸等价。
+  if (classifyImportEnvelope(value) !== 'object') return null
   const record = value as Record<string, unknown>
   return {
     customProviders: record.customProviders,

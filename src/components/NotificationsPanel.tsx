@@ -8,6 +8,7 @@ import {
 import { formatRelative } from '../lib/format'
 import { showAppToast } from '../lib/dialog'
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { parseGalleryRevokedMeta } from '../lib/schemas'
 import PanelShell from './PanelShell'
 import { BellIcon } from './icons'
 
@@ -17,22 +18,15 @@ interface Props {
   onUnreadChange?: (unread: number) => void
 }
 
-interface GalleryRevokedMeta {
-  prompt_excerpt?: string
-  reason?: string | null
-  actor_display_name?: string | null
-  actor_username?: string | null
-}
-
 function getReason(item: NotificationItem): string | null {
-  if (!item.metadata || typeof item.metadata !== 'object') return null
-  const meta = item.metadata as GalleryRevokedMeta
+  const meta = parseGalleryRevokedMeta(item.metadata)
+  if (!meta) return null
   return typeof meta.reason === 'string' && meta.reason.trim() ? meta.reason : null
 }
 
 function getActorName(item: NotificationItem): string | null {
-  if (!item.metadata || typeof item.metadata !== 'object') return null
-  const meta = item.metadata as GalleryRevokedMeta
+  const meta = parseGalleryRevokedMeta(item.metadata)
+  if (!meta) return null
   return meta.actor_display_name || meta.actor_username || null
 }
 

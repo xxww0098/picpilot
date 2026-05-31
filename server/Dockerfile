@@ -1,4 +1,4 @@
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.14 AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends libvips42 \
     && rm -rf /var/lib/apt/lists/*
@@ -9,7 +9,7 @@ RUN bun install --production --frozen-lockfile
 COPY index.ts config.ts concurrencyQueue.ts ./
 COPY utils/ utils/
 
-FROM oven/bun:1
+FROM oven/bun:1.3.14
 
 RUN apt-get update && apt-get install -y --no-install-recommends libvips42 \
     && rm -rf /var/lib/apt/lists/*

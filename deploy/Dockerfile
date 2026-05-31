@@ -1,5 +1,5 @@
 # ---- Build stage ----
-FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.3.14-alpine AS build
 
 WORKDIR /app
 

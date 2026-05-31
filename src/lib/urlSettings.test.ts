@@ -244,4 +244,64 @@ describe('URL settings params', () => {
       model: 'wrapped-model',
     })
   })
+
+  it('gracefully ignores a garbage-shape settings param without changing profiles', () => {
+    const current = normalizeSettings(DEFAULT_SETTINGS)
+    const params = new URLSearchParams()
+    // 数组形状不是合法的设置信封（pickUrlSettingsPayload 经 Zod 结构预检拒绝）→ 安全忽略
+    params.set('settings', JSON.stringify([1, 2, 3]))
+
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, params),
+    })
+
+    expect(next.profiles).toHaveLength(1)
+    expect(next.customProviders).toHaveLength(0)
+    expect(next.activeProfileId).toBe(current.activeProfileId)
+  })
+
+  it('still imports a valid settings param after the structural pre-check', () => {
+    const importedSettings = {
+      customProviders: [{
+        id: 'custom-valid',
+        name: 'Custom Valid',
+        submit: {
+          path: 'images/generations',
+          method: 'POST',
+          contentType: 'json',
+          body: { model: '$profile.model', prompt: '$prompt' },
+          result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+        },
+      }],
+      profiles: [{
+        id: 'custom-valid-profile',
+        name: 'Custom Valid Profile',
+        provider: 'custom-valid',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+        model: 'valid-model',
+        timeout: 300,
+        apiMode: 'images',
+        codexCli: false,
+      }],
+    }
+    const params = new URLSearchParams()
+    params.set('settings', JSON.stringify(importedSettings))
+
+    const next = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      ...buildSettingsFromUrlParams(DEFAULT_SETTINGS, params),
+    })
+
+    expect(next.customProviders).toHaveLength(1)
+    expect(next.customProviders[0]).toMatchObject({ id: 'custom-valid', name: 'Custom Valid' })
+    expect(next.activeProfileId).toBe('custom-valid-profile')
+    expect(next.profiles.find((profile) => profile.id === next.activeProfileId)).toMatchObject({
+      provider: 'custom-valid',
+      baseUrl: '',
+      apiKey: '',
+      model: 'valid-model',
+    })
+  })
 })

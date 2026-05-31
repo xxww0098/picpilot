@@ -518,3 +518,44 @@ describe('custom providers', () => {
   })
 
 })
+
+describe('importCustomProviderSettingsFromJson structural pre-check', () => {
+  it('throws the existing error for invalid JSON syntax', () => {
+    expect(() => importCustomProviderSettingsFromJson('{ not valid json'))
+      .toThrow('JSON 格式无效')
+  })
+
+  it('throws the existing error when the JSON root is a primitive', () => {
+    expect(() => importCustomProviderSettingsFromJson('123')).toThrow('JSON 根节点必须是对象')
+    expect(() => importCustomProviderSettingsFromJson('"a string"')).toThrow('JSON 根节点必须是对象')
+    expect(() => importCustomProviderSettingsFromJson('null')).toThrow('JSON 根节点必须是对象')
+  })
+
+  it('still rejects a JSON array root with the unrecognized-config error (legacy flow-through preserved)', () => {
+    // 数组通过结构门闸（与旧 typeof 行为一致），再由 normalize 返回 null → 既有「无法识别」错误
+    expect(() => importCustomProviderSettingsFromJson('[1, 2, 3]'))
+      .toThrow('无法识别该 JSON')
+  })
+
+  it('throws the existing error for an unrecognized object that is neither wrapper nor manifest', () => {
+    expect(() => importCustomProviderSettingsFromJson(JSON.stringify({ foo: 'bar' })))
+      .toThrow('无法识别该 JSON')
+  })
+
+  it('still imports a valid single manifest object after the structural pre-check', () => {
+    const result = importCustomProviderSettingsFromJson(JSON.stringify({
+      name: 'Structural Manifest',
+      submit: {
+        path: 'images/generations',
+        method: 'POST',
+        contentType: 'json',
+        body: { model: '$profile.model', prompt: '$prompt' },
+        result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+      },
+    }))
+
+    expect(result.customProviders).toHaveLength(1)
+    expect(result.customProviders[0]).toMatchObject({ name: 'Structural Manifest', template: 'http-image' })
+    expect(result.profiles).toEqual([])
+  })
+})

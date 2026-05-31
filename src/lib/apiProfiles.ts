@@ -15,6 +15,7 @@ import type {
   MultiImageMode,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
+import { classifyImportEnvelope } from './schemas'
 
 const CLIENT_VISIBLE_BASE_URL = ''
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
@@ -499,7 +500,11 @@ export function importCustomProviderSettingsFromJson(
     throw new Error('JSON 格式无效')
   }
 
-  if (!parsed || typeof parsed !== 'object') {
+  // Zod 结构性预检（纯加性）：复刻既有「根节点必须是对象」门闸。
+  // 信封识别 (a) 包裹结构 / (b) 单 Manifest 两种对象形状；数组与旧逻辑一致放行，
+  // 由下方 normalizeCustomProviderDefinition 返回 null 后抛「无法识别该 JSON」。
+  // 仅 null / 原始类型在此抛错——通过/拒绝的输入集合与改造前完全一致。
+  if (classifyImportEnvelope(parsed) === 'invalid') {
     throw new Error('JSON 根节点必须是对象')
   }
 

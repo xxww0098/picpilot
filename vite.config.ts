@@ -83,6 +83,7 @@ export default defineConfig(({ command }) => {
               return 'vendor-markdown'
             }
             if (id.includes('fflate')) return 'vendor-fflate'
+            if (id.includes('/zod/')) return 'vendor-zod'
             if (id.includes('zustand')) return 'vendor-zustand'
           },
         },

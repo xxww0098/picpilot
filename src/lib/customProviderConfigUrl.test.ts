@@ -107,4 +107,33 @@ describe('custom provider config URL', () => {
       new Response('not found', { status: 404 })
     ))).rejects.toThrow('HTTP 404')
   })
+
+  it('rejects a non-object JSON root with the existing structural error', async () => {
+    await expect(loadCustomProviderSettingsFromUrl('https://example.com/garbage.json', async () => (
+      new Response('123', { status: 200 })
+    ))).rejects.toThrow('JSON 根节点必须是对象')
+  })
+
+  it('still imports a valid custom provider config from URL after the structural pre-check', async () => {
+    const payload = {
+      customProviders: [{
+        id: 'custom-url',
+        name: 'URL Custom',
+        submit: {
+          path: 'images/generations',
+          method: 'POST',
+          contentType: 'json',
+          body: { model: '$profile.model', prompt: '$prompt' },
+          result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+        },
+      }],
+      profiles: [],
+    }
+
+    const result = await loadCustomProviderSettingsFromUrl('https://example.com/provider.json', async () => (
+      new Response(JSON.stringify(payload), { status: 200 })
+    ))
+
+    expect(result?.customProviders[0]).toMatchObject({ id: 'custom-url', name: 'URL Custom' })
+  })
 })
