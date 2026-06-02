@@ -1,5 +1,7 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useStore, getGalleryDisplayedImageIds } from '../store'
+import { getActiveApiProfile } from '../lib/apiProfiles'
+import ModelPicker from './ModelPicker'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -21,6 +23,8 @@ const NotificationsPanel = lazy(() => import('./NotificationsPanel'))
 export default function Header() {
   const appMode = useStore((s) => s.appMode)
   const setAppMode = useStore((s) => s.setAppMode)
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setShowLogPanel = useStore((s) => s.setShowLogPanel)
   const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
@@ -35,6 +39,17 @@ export default function Header() {
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const historyButtonRef = useRef<HTMLButtonElement>(null)
   const createConversation = useStore((s) => s.createAgentConversation)
+
+  // 图像模型切换开关：仅画廊模式 + 内置 OpenAI 兼容 + Images 接口时出现
+  // （Agent 走对话模型、自定义服务商/Responses 在设置里管理模型，故不显示）。
+  // 切换写入活动配置的 model 字段（setSettings 的 legacy 覆盖路径，等价于设置里的模型输入框）。
+  const activeProfile = useMemo(() => getActiveApiProfile(settings), [settings])
+  const showModelPicker = appMode === 'gallery'
+    && activeProfile.provider === 'openai'
+    && activeProfile.apiMode === 'images'
+  const handleModelChange = useCallback((model: string) => {
+    setSettings({ model })
+  }, [setSettings])
 
   useEffect(() => {
     if (appMode === 'agent') {
@@ -195,6 +210,11 @@ export default function Header() {
               </button>
             </div>
           )}
+          {showModelPicker && (
+            <div className="hidden sm:flex items-center mr-2">
+              <ModelPicker model={activeProfile.model} onChange={handleModelChange} />
+            </div>
+          )}
           <div className="hidden sm:flex items-center gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mr-4">
             <button
               type="button"
@@ -265,7 +285,12 @@ export default function Header() {
             )}
           </div>
         </div>
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
+        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-28 opacity-100 pb-2'}`}>
+          {showModelPicker && (
+            <div className="flex justify-center mb-2 mx-2">
+              <ModelPicker model={activeProfile.model} onChange={handleModelChange} />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
             <button
               type="button"
@@ -294,7 +319,14 @@ export default function Header() {
 
       <div className={`safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
         <div className="safe-header-inner" />
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-20 pb-2'}`}>
+        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-28 pb-2'}`}>
+          {showModelPicker && (
+            <div className="flex justify-center mb-2 mx-2">
+              <div className="inline-flex items-center gap-1 rounded-xl border border-transparent p-1">
+                <div className="px-3 py-1.5 text-sm">占位</div>
+              </div>
+            </div>
+          )}
           <div className="p-1">
             <div className="py-1.5 text-sm">占位</div>
           </div>

@@ -15,7 +15,6 @@ import InputBarBatchToolbar from './inputBar/InputBarBatchToolbar'
 import InputBarDragOverlay from './inputBar/InputBarDragOverlay'
 import InputBarImageStrip from './inputBar/InputBarImageStrip'
 import InputBarParamsPanel from './inputBar/InputBarParamsPanel'
-import InputBarModelPicker from './inputBar/InputBarModelPicker'
 import InputBarPromptEditor from './inputBar/InputBarPromptEditor'
 import InputBarActions, { InputBarFileInputs } from './inputBar/InputBarActions'
 import { useInputBarFileUpload } from './inputBar/useInputBarFileUpload'
@@ -141,16 +140,6 @@ export default function InputBar() {
       void submitTask()
     }
   }, [appMode])
-
-  // 图像模型选择器：仅画廊模式 + 内置 OpenAI 兼容 + Images 接口时出现
-  // （Agent 走对话模型、自定义服务商/Responses 在设置里管理模型，故不显示）。
-  // 切换写入活动配置的 model 字段（setSettings 的 legacy 覆盖路径，等价于设置里的模型输入框）。
-  const showModelPicker = appMode !== 'agent'
-    && currentActiveProfile.provider === 'openai'
-    && currentActiveProfile.apiMode === 'images'
-  const handleModelChange = useCallback((model: string) => {
-    setSettings({ model })
-  }, [setSettings])
 
   const promptEditor = useInputBarPromptEditor({
     prompt,
@@ -684,12 +673,6 @@ export default function InputBar() {
 
           {/* 参数 + 按钮 */}
           <div className="mt-3">
-            {/* 模型选择（始终可见，不随移动端参数折叠） */}
-            {showModelPicker && (
-              <div className="mb-2 flex items-center">
-                <InputBarModelPicker model={currentActiveProfile.model} onChange={handleModelChange} />
-              </div>
-            )}
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
               {renderParams('grid-cols-6')}
