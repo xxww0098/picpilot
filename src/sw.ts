@@ -1,4 +1,4 @@
-const CACHE_NAME = 'picpilot-v0.1.13'
+const CACHE_NAME = 'picpilot-v0.1.14'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.png', './pwa-icon-192.png', './pwa-icon-512.png']
 
 const sw = self as unknown as ServiceWorkerGlobalScope

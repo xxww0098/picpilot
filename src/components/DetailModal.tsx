@@ -10,6 +10,7 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getProviderDisplayName, getUserFacingErrorMessage } from '../lib/userFacingText'
+import { getImageModelLabel } from '../lib/imageModels'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 import PublishGalleryButton from './PublishGalleryButton'
 import ModalShell from './ModalShell'
@@ -217,7 +218,7 @@ export default function DetailModal() {
   const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const taskProviderName = getProviderDisplayName(taskProvider)
   const taskProfileName = task.apiProfileName || '未知'
-  const taskModel = task.apiModel || '未知'
+  const taskModel = task.apiModel ? getImageModelLabel(task.apiModel) : '未知'
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const rawImageUrls = task.rawImageUrls ?? []
@@ -868,7 +869,8 @@ export default function DetailModal() {
                 <span className="text-gray-400 dark:text-gray-500">来源</span>
                 <br />
                 <span className="font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</span>
-                <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · {taskModel}</span>
+                <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · </span>
+                <span className="text-gray-400 dark:text-gray-500" title={task.apiModel || undefined}>{taskModel}</span>
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 text-xs mb-4">

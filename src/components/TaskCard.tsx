@@ -4,6 +4,7 @@ import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTa
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
+import { getImageModelLabel, isKnownImageModel } from '../lib/imageModels'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
@@ -337,7 +338,9 @@ function TaskCard({
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
 
-  const showModel = task.apiModel && task.apiModel !== DEFAULT_IMAGES_MODEL
+  // 始终标注可选图像模型（gpt-image-2 / grok-imagine-image），便于一眼区分是哪个模型生的；
+  // 其余情况沿用旧规则——仅当非默认模型时显示，避免给历史卡片平添噪声。
+  const showModel = Boolean(task.apiModel) && (isKnownImageModel(task.apiModel ?? '') || task.apiModel !== DEFAULT_IMAGES_MODEL)
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
 
   return (
@@ -624,7 +627,7 @@ function TaskCard({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                   </svg>
                   <span className="truncate max-w-[8rem]">
-                    {task.apiModel}
+                    {getImageModelLabel(task.apiModel ?? '')}
                   </span>
                 </span>
               )}
