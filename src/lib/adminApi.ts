@@ -76,6 +76,9 @@ export interface AdminEventRow {
   error_stack: string | null
   output_count: number | null
   output_bytes: number | null
+  action_type: string | null
+  task_id: string | null
+  image_index: number | null
   user_agent: string | null
   ip: string | null
   client_version: string | null

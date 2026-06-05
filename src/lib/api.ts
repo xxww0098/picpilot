@@ -21,6 +21,9 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     input_image_count: opts.inputImageDataUrls.length,
     has_mask: Boolean(opts.maskDataUrl),
     prompt: opts.prompt,
+    action_type: opts.telemetry?.actionType ?? 'generate',
+    task_id: opts.telemetry?.taskId,
+    image_index: opts.telemetry?.imageIndex,
   }
   logger.info('api', '图像 API 调用开始', {
     provider: profile.provider,
@@ -47,13 +50,15 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       rawImageUrls: result.rawImageUrls?.length ?? 0,
       elapsedMs,
     })
-    void reportEvent({
+    const event = {
       ...baseEvent,
       event_type: 'success',
       duration_ms: elapsedMs,
       output_count: result.images.length,
       output_bytes: result.images.reduce((sum, url) => sum + getDataUrlDecodedByteSize(url), 0),
-    })
+    } as const
+    if (opts.telemetry?.awaitReport) await reportEvent(event)
+    else void reportEvent(event)
     return result
   } catch (err) {
     const elapsedMs = Date.now() - startedAt
@@ -66,7 +71,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       error: serializeError(err),
     })
     const cls = classifyError(err)
-    void reportEvent({
+    const event = {
       ...baseEvent,
       event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
       duration_ms: elapsedMs,
@@ -74,7 +79,9 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       error_type: cls.error_type,
       error_message: err instanceof Error ? err.message : String(err),
       error_stack: err instanceof Error ? err.stack : undefined,
-    })
+    } as const
+    if (opts.telemetry?.awaitReport) await reportEvent(event)
+    else void reportEvent(event)
     throw err
   }
 }

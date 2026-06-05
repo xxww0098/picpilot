@@ -16,6 +16,9 @@ export interface TelemetryEvent {
   input_image_count?: number
   has_mask?: boolean
   prompt?: string
+  action_type?: string
+  task_id?: string
+  image_index?: number
   duration_ms?: number
   http_status?: number
   error_type?: string

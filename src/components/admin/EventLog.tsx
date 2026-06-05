@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { downloadAdminEventsCsv, fetchAdminEvents, type AdminEventRow } from '../../lib/adminApi'
 import { formatBytes, formatTimestamp } from '../../lib/format'
 import {
+  getEventActionLabel,
   getApiModeLabel,
   getErrorTypeLabel,
   getEventTypeLabel,
@@ -54,6 +55,9 @@ function formatEventDetailText(event: AdminEventRow): string {
     `时间：${formatTimestamp(event.created_at)}`,
     `用户：${event.username}`,
     `结果：${getEventTypeLabel(event.event_type)}`,
+    `操作：${getEventActionLabel(event.action_type)}`,
+    `任务 ID：${event.task_id ?? '—'}`,
+    `图片序号：${event.image_index == null ? '—' : event.image_index + 1}`,
     `服务商：${getProviderDisplayName(event.provider)}`,
     `模型：${event.model ?? '—'}`,
     `接口模式：${getApiModeLabel(event.api_mode)}`,
@@ -187,6 +191,7 @@ export default function EventLog() {
                 <th className="py-2 pr-3">时间</th>
                 <th className="py-2 pr-3">用户</th>
                 <th className="py-2 pr-3">结果</th>
+                <th className="py-2 pr-3">操作</th>
                 <th className="py-2 pr-3">服务商</th>
                 <th className="py-2 pr-3">模型</th>
                 <th className="py-2 pr-3 text-right">耗时</th>
@@ -196,13 +201,14 @@ export default function EventLog() {
             </thead>
             <tbody>
               {events.length === 0 && (
-                <tr><td colSpan={8} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
+                <tr><td colSpan={9} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
               )}
               {events.map((e) => (
                 <tr key={e.id} className="border-b border-[hsl(var(--border))] last:border-0">
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatTimestamp(e.created_at)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--foreground))]">{e.username}</td>
                   <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{getEventTypeLabel(e.event_type)}</td>
+                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getEventActionLabel(e.action_type)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getProviderDisplayName(e.provider)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{e.model ?? '—'}</td>
                   <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
@@ -272,6 +278,9 @@ export default function EventLog() {
               <Field label="时间">{formatTimestamp(detail.created_at)}</Field>
               <Field label="用户">{detail.username}</Field>
               <Field label="结果" valueClass={eventTypeColor(detail.event_type)}>{getEventTypeLabel(detail.event_type)}</Field>
+              <Field label="操作">{getEventActionLabel(detail.action_type)}</Field>
+              <Field label="任务 ID">{detail.task_id ?? '—'}</Field>
+              <Field label="图片序号">{detail.image_index == null ? '—' : detail.image_index + 1}</Field>
               <Field label="服务商">{getProviderDisplayName(detail.provider)}</Field>
               <Field label="模型">{detail.model ?? '—'}</Field>
               <Field label="接口模式">{getApiModeLabel(detail.api_mode)}</Field>

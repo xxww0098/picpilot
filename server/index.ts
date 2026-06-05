@@ -110,6 +110,9 @@ db.exec(`
     error_stack       TEXT,
     output_count      INTEGER,
     output_bytes      INTEGER,
+    action_type       TEXT,
+    task_id           TEXT,
+    image_index       INTEGER,
     user_agent        TEXT,
     ip                TEXT,
     client_version    TEXT,
@@ -185,6 +188,9 @@ ensureColumn('users', 'public_storage_bytes', 'public_storage_bytes INTEGER NOT 
 ensureColumn('users', 'disabled', 'disabled INTEGER NOT NULL DEFAULT 0')
 // 令牌版本：JWT 携带 tv 声明，自增即令该用户所有旧令牌失效（改密码 = 全设备登出）
 ensureColumn('users', 'token_version', 'token_version INTEGER NOT NULL DEFAULT 0')
+ensureColumn('request_events', 'action_type', 'action_type TEXT')
+ensureColumn('request_events', 'task_id', 'task_id TEXT')
+ensureColumn('request_events', 'image_index', 'image_index INTEGER')
 // 共享画廊「推荐」：管理员可标记，被标记的图缩略图右上角显示点赞图案并在画廊置顶
 ensureColumn('public_images', 'featured', 'featured INTEGER NOT NULL DEFAULT 0')
 
@@ -1006,8 +1012,9 @@ app.post('/api/telemetry/event', async (c) => {
         user_id, username, event_type, provider, api_mode, model, size, quality, n_images,
         has_input_image, input_image_count, has_mask, prompt, duration_ms, http_status,
         error_type, error_message, error_stack, output_count, output_bytes,
+        action_type, task_id, image_index,
         user_agent, ip, client_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       payload.sub, payload.username, clip(e.event_type, 32),
       clip(e.provider, 64), clip(e.api_mode, 32), clip(e.model, 128), clip(e.size, 32), clip(e.quality, 32), e.n_images ?? null,
@@ -1015,6 +1022,7 @@ app.post('/api/telemetry/event', async (c) => {
       clip(e.prompt, 4000), e.duration_ms ?? null, e.http_status ?? null,
       clip(e.error_type, 64), clip(e.error_message, 2000), clip(e.error_stack, 8000),
       e.output_count ?? null, e.output_bytes ?? null,
+      clip(e.action_type, 64), clip(e.task_id, 128), Number.isInteger(e.image_index) ? e.image_index : null,
       clip(c.req.header('user-agent'), 512), getClientIp(c), clip(e.client_version, 64), now,
     )
 
@@ -1281,6 +1289,9 @@ const EVENT_EXPORT_COLUMNS: Array<{ key: string; label: string }> = [
   { key: 'error_message', label: '错误信息' },
   { key: 'output_count', label: '输出张数' },
   { key: 'output_bytes', label: '输出字节' },
+  { key: 'action_type', label: '操作类型' },
+  { key: 'task_id', label: '任务ID' },
+  { key: 'image_index', label: '图片序号' },
   { key: 'user_agent', label: '浏览器' },
   { key: 'ip', label: 'IP' },
   { key: 'client_version', label: '客户端版本' },
@@ -1328,6 +1339,7 @@ app.get('/api/admin/events/export', (c) => {
     EVENT_EXPORT_COLUMNS.map(({ key }) => {
       const v = row[key]
       if (key === 'created_at' && typeof v === 'number') return csvEscape(new Date(v).toISOString())
+      if (key === 'image_index' && typeof v === 'number') return csvEscape(v + 1)
       if (key === 'has_mask') return csvEscape(v ? '是' : '否')
       return csvEscape(v)
     }).join(','),

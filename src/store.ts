@@ -2483,6 +2483,11 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: { ...task.params, n: requestCount },
+      telemetry: {
+        actionType: options.silent ? 'auto_retry_failed_images' : 'retry_failed_images',
+        taskId,
+        awaitReport: true,
+      },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
       fanoutConcurrency,
@@ -2640,6 +2645,12 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
         settings: settingsForAttempt,
         prompt: promptForApi,
         params: requestParams,
+        telemetry: {
+          actionType: 'regenerate_image',
+          taskId,
+          imageIndex,
+          awaitReport: true,
+        },
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,
         onCustomTaskEnqueued: (request) => {

@@ -39,6 +39,12 @@ export interface CallApiOptions {
   settings: AppSettings
   prompt: string
   params: TaskParams
+  telemetry?: {
+    actionType?: 'generate' | 'retry_failed_images' | 'auto_retry_failed_images' | 'regenerate_image'
+    taskId?: string
+    imageIndex?: number
+    awaitReport?: boolean
+  }
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
   maskDataUrl?: string

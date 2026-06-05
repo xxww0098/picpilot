@@ -249,6 +249,40 @@ test('改密码自增 token_version，令旧令牌失效', async () => {
   expect((await authGet('/api/auth/me', victimToken)).status).toBe(401)
 })
 
+test('请求事件：记录单张重新生成操作上下文', async () => {
+  seedUser('u-event-regenerate', 'eventregen')
+  const token = await tokenFor('u-event-regenerate', 'eventregen')
+  const res = await app.request('/api/telemetry/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      event_type: 'success',
+      provider: 'openai',
+      api_mode: 'images',
+      model: 'gpt-image-1',
+      n_images: 1,
+      output_count: 1,
+      action_type: 'regenerate_image',
+      task_id: 'task-regenerate-1',
+      image_index: 2,
+    }),
+  })
+
+  expect(res.status).toBe(200)
+  const row = db.query(`
+    SELECT action_type, task_id, image_index
+    FROM request_events
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get('u-event-regenerate') as { action_type: string; task_id: string; image_index: number } | null
+  expect(row).toEqual({
+    action_type: 'regenerate_image',
+    task_id: 'task-regenerate-1',
+    image_index: 2,
+  })
+})
+
 test('团队设置：管理员可设置画廊失败自动重试次数，并随用户资料下发', async () => {
   seedUser('u-admin-team-settings', 'adminteam')
   db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-team-settings')

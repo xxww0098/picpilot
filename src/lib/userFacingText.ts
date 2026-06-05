@@ -5,6 +5,13 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   cancelled: '已取消',
 }
 
+const EVENT_ACTION_LABELS: Record<string, string> = {
+  generate: '普通生成',
+  retry_failed_images: '重试失败图片',
+  auto_retry_failed_images: '自动重试失败图片',
+  regenerate_image: '单张重新生成',
+}
+
 const ERROR_TYPE_LABELS: Record<string, string> = {
   timeout: '请求超时',
   cancelled: '已取消',
@@ -70,6 +77,11 @@ function preserveHint(message: string, firstLine: string): string {
 export function getEventTypeLabel(value: string | null | undefined): string {
   if (!value) return '—'
   return EVENT_TYPE_LABELS[value] ?? value
+}
+
+export function getEventActionLabel(value: string | null | undefined): string {
+  if (!value) return '—'
+  return EVENT_ACTION_LABELS[value] ?? value
 }
 
 export function getErrorTypeLabel(value: string | null | undefined): string {
