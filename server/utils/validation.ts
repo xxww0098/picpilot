@@ -38,6 +38,19 @@ export function parseQueuePatchValue(value: unknown): number | null {
   return Math.trunc(numeric)
 }
 
+// 画廊批量卡片失败自动补重试次数。范围 0-5，0 表示关闭。
+export function normalizeGalleryAutoRetryCount(value: unknown, fallback = 1): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(0, Math.min(5, Math.trunc(numeric)))
+}
+
+export function parseGalleryAutoRetryCountPatchValue(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 5) return null
+  return Math.trunc(numeric)
+}
+
 export function generateInviteCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   let code = ''

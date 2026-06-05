@@ -3,13 +3,26 @@
 }
 
 image.xxww.online {
+	@api_proxy path /api-proxy/*
+	reverse_proxy @api_proxy frontend:80 {
+		transport http {
+			dial_timeout 60s
+			response_header_timeout 600s
+			read_timeout 600s
+			write_timeout 600s
+		}
+	}
+
 	reverse_proxy frontend:80
 }
 
 api.xxww.online {
 	reverse_proxy cliproxy:8317 {
 		transport http {
+			dial_timeout 60s
+			response_header_timeout 600s
 			read_timeout 600s
+			write_timeout 600s
 		}
 	}
 }

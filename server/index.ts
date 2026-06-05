@@ -6,7 +6,7 @@ import path from 'path'
 import { existsSync, statSync } from 'fs'
 import { unlink, writeFile } from 'fs/promises'
 import { createConcurrencyQueue, QueueFullError, ClientAbortError } from './concurrencyQueue.ts'
-import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue, normalizeConcurrencyLimit, parseConcurrencyPatchValue, normalizeQueueLimit, parseQueuePatchValue } from './utils/validation.ts'
+import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue, normalizeConcurrencyLimit, parseConcurrencyPatchValue, normalizeQueueLimit, parseQueuePatchValue, normalizeGalleryAutoRetryCount, parseGalleryAutoRetryCountPatchValue } from './utils/validation.ts'
 
 import {
   AVATAR_SIZE,
@@ -15,6 +15,7 @@ import {
   API_PROXY_URL,
   DATA_DIR,
   DB_PATH,
+  DEFAULT_GALLERY_AUTO_RETRY_COUNT,
   DEFAULT_MAX_BATCH_IMAGES,
   EVENT_RETENTION_DAYS,
   INVITE_MAX_BATCH_COUNT,
@@ -283,6 +284,7 @@ function getTeamSettingsPayload() {
   const settings = readTeamSettingsRecord()
   return {
     defaultMaxBatchImages: normalizeBatchImageLimit(settings.defaultMaxBatchImages, DEFAULT_MAX_BATCH_IMAGES),
+    galleryAutoRetryCount: normalizeGalleryAutoRetryCount(settings.galleryAutoRetryCount, DEFAULT_GALLERY_AUTO_RETRY_COUNT),
     // 并发/排队上限优先采用管理端配置，未配置时回退到环境默认值（MAX_CONCURRENT / PROXY_QUEUE_MAX）。
     maxConcurrent: normalizeConcurrencyLimit(settings.maxConcurrent, MAX_CONCURRENT),
     maxQueue: normalizeQueueLimit(settings.maxQueue, PROXY_QUEUE_MAX),
@@ -505,6 +507,7 @@ function getAuthUserPayload(userId: string) {
     isAdmin: user.is_admin === 1,
     avatarUpdatedAt: user.avatar_updated_at,
     maxBatchImages: getDefaultMaxBatchImages(),
+    galleryAutoRetryCount: getTeamSettingsPayload().galleryAutoRetryCount,
     maxConcurrent: proxyQueue.limits().maxConcurrent,
     maxQueue: proxyQueue.limits().maxQueue,
     publicGalleryCount: user.public_gallery_count,
@@ -902,8 +905,9 @@ app.all('/api-proxy/*', async (c) => {
   }
 
   // 并发控制：全局上限 MAX_CONCURRENT，超出则进入 FIFO 队列排队等待。
+  // 等待者记录 userId，供 /api/queue/stats 返回当前用户在 FIFO 队列中的位置。
   try {
-    await proxyQueue.acquire(c.req.raw.signal)
+    await proxyQueue.acquire(c.req.raw.signal, undefined, { userId: payload.sub })
   } catch (err) {
     if (err instanceof ClientAbortError) {
       // 客户端在排队期间已断开，无需返回响应体。
@@ -968,13 +972,14 @@ app.all('/api-proxy/*', async (c) => {
 })
 
 // ===== Queue stats =====
-// 暴露全局队列深度，供前端展示「当前 N 个请求排队中」以降低排队焦虑。
-// 只读全局计数（O(1)、无 DB）；上限本就经 /api/auth/me 公开，仅做 JWT 校验防匿名探测容量。
+// 暴露队列深度，供前端展示「当前 N 个请求排队中 / 你排第 X 位」以降低排队焦虑。
+// 只读内存计数（无 DB）；上限本就经 /api/auth/me 公开，仅做 JWT 校验防匿名探测容量。
 app.use('/api/queue/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
 app.get('/api/queue/stats', (c) => {
-  const { inflight, queued } = proxyQueue.stats()
+  const payload = c.get('jwtPayload') as { sub?: string }
+  const { inflight, queued, myQueued, myNextPosition } = proxyQueue.stats(payload.sub)
   const { maxConcurrent, maxQueue } = proxyQueue.limits()
-  return c.json({ inflight, queued, maxConcurrent, maxQueue })
+  return c.json({ inflight, queued, maxConcurrent, maxQueue, myQueued: myQueued ?? 0, myNextPosition: myNextPosition ?? null })
 })
 
 // ===== Telemetry =====
@@ -1075,12 +1080,25 @@ app.patch('/api/admin/team-settings', async (c) => {
     hasUpdates = true
   }
 
+  if ('galleryAutoRetryCount' in record) {
+    const val = parseGalleryAutoRetryCountPatchValue(record.galleryAutoRetryCount)
+    if (val == null) return c.json({ error: '失败自动重试次数必须是 0 到 5 之间的数字。' }, 400)
+    settings.galleryAutoRetryCount = val
+    hasUpdates = true
+  }
+
   if (!hasUpdates) return c.json({ error: '没有可更新的字段。' }, 400)
   saveTeamSettingsRecord(settings, payload.sub)
   // 立即把新上限应用到在跑的队列，无需重启 auth 容器。
   const effective = getTeamSettingsPayload()
   proxyQueue.setLimits({ maxConcurrent: effective.maxConcurrent, maxQueue: effective.maxQueue })
-  logger.info({ scope: 'admin', updatedBy: payload.sub, maxConcurrent: effective.maxConcurrent, maxQueue: effective.maxQueue }, 'Team service limits updated')
+  logger.info({
+    scope: 'admin',
+    updatedBy: payload.sub,
+    maxConcurrent: effective.maxConcurrent,
+    maxQueue: effective.maxQueue,
+    galleryAutoRetryCount: effective.galleryAutoRetryCount,
+  }, 'Team service limits updated')
   return c.json(effective)
 })
 
@@ -1709,6 +1727,7 @@ if (import.meta.main) {
     maxQueue: PROXY_QUEUE_MAX,
     maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
     defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
+    defaultGalleryAutoRetryCount: DEFAULT_GALLERY_AUTO_RETRY_COUNT,
   }, 'Runtime configuration')
 }
 

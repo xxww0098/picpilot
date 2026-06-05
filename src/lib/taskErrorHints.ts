@@ -43,20 +43,21 @@ export function getApiRequestNetworkErrorHint(
   if (!isApiRequestNetworkError(err)) return null
 
   const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
+  const roundedElapsedSeconds = Math.max(1, Math.round(elapsedSeconds))
 
   if (elapsedSeconds <= 15) {
     return '提示：请求立即失败，请联系管理员检查团队 API 代理服务是否正常运行。'
   }
 
   if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
-    return `提示：请求等待约 60 秒后被断开，这通常是反向代理的默认超时，而非接口本身报错。可调大代理的超时时间，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是某一层反向代理的默认超时，而非接口本身报错。请检查所有代理层的超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
   }
 
   if (elapsedSeconds >= 110 && elapsedSeconds <= 140) {
-    return `提示：请求等待约 120 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制，而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${getTimeoutStreamingHint(profile)}`
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制，而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${getTimeoutStreamingHint(profile)}`
   }
 
-  return `提示：请求等待较长时间后被断开，通常是反向代理或网关的超时限制，而非接口本身报错。可检查代理超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
+  return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，通常是反向代理或网关的超时限制，或服务在部署/重启时断开连接。可检查代理超时设置和服务重启时间，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
 }
 
 export function getUpstreamApiErrorHint(err: unknown): string | null {

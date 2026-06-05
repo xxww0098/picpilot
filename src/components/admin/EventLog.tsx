@@ -12,6 +12,7 @@ import {
 } from '../../lib/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { showAppToast } from '../../lib/dialog'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
 import ModalShell from '../ModalShell'
 
 const PAGE_SIZE = 50
@@ -47,6 +48,36 @@ function rangeToMs(from: string, to: string): { since: number; until: number } |
   return { since: a.since, until: b.until }
 }
 
+function formatEventDetailText(event: AdminEventRow): string {
+  const lines = [
+    `请求详情 #${event.id}`,
+    `时间：${formatTimestamp(event.created_at)}`,
+    `用户：${event.username}`,
+    `结果：${getEventTypeLabel(event.event_type)}`,
+    `服务商：${getProviderDisplayName(event.provider)}`,
+    `模型：${event.model ?? '—'}`,
+    `接口模式：${getApiModeLabel(event.api_mode)}`,
+    `尺寸：${event.size ?? '—'}`,
+    `质量：${getParamValueLabel('quality', event.quality)}`,
+    `请求张数：${event.n_images ?? '—'}`,
+    `参考图：${event.has_input_image ? `${event.has_input_image} 张` : '无'}`,
+    `遮罩：${event.has_mask ? '有' : '无'}`,
+    `耗时：${event.duration_ms ? `${event.duration_ms}ms` : '—'}`,
+    `HTTP 状态：${getHttpStatusLabel(event.http_status)}`,
+    `输出张数：${event.output_count ?? '—'}`,
+    `输出大小：${event.output_bytes == null ? '—' : formatBytes(event.output_bytes)}`,
+    `客户端版本：${event.client_version ?? '—'}`,
+    `IP：${event.ip ?? '—'}`,
+    `浏览器：${event.user_agent ?? '—'}`,
+  ]
+
+  if (event.prompt) lines.push('', '提示词：', event.prompt)
+  if (event.error_message) lines.push('', '错误说明：', getUserFacingErrorMessage(event.error_message))
+  if (event.error_stack) lines.push('', '技术堆栈：', event.error_stack)
+
+  return lines.join('\n')
+}
+
 export default function EventLog() {
   const [page, setPage] = useState(0)
   const [eventType, setEventType] = useState('')
@@ -75,6 +106,15 @@ export default function EventLog() {
   function changeDay(value: string) {
     setPage(0)
     setDay(value)
+  }
+
+  async function copyDetail(row: AdminEventRow) {
+    try {
+      await copyTextToClipboard(formatEventDetailText(row))
+      showAppToast('请求详情已复制', 'success')
+    } catch (err) {
+      showAppToast(getClipboardFailureMessage('复制请求详情失败', err), 'error')
+    }
   }
 
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1)
@@ -218,7 +258,16 @@ export default function EventLog() {
           scrollRef={detailPanelRef}
           panelClassName="m-4 max-h-[85vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl border border-[hsl(var(--border))] bg-white p-6 shadow-xl dark:bg-[hsl(240_10%_12%)]"
         >
-            <h3 className="mb-3 text-base font-semibold">请求详情 #{detail.id}</h3>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold">请求详情 #{detail.id}</h3>
+              <button
+                type="button"
+                onClick={() => void copyDetail(detail)}
+                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
+              >
+                复制详情
+              </button>
+            </div>
             <dl className="grid grid-cols-3 gap-y-2 text-sm">
               <Field label="时间">{formatTimestamp(detail.created_at)}</Field>
               <Field label="用户">{detail.username}</Field>
@@ -257,7 +306,14 @@ export default function EventLog() {
                 <pre className="whitespace-pre-wrap rounded bg-[hsl(var(--muted))] p-3 text-xs">{detail.error_stack}</pre>
               </div>
             )}
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void copyDetail(detail)}
+                className="rounded border border-[hsl(var(--border))] px-4 py-1.5 text-sm hover:bg-[hsl(var(--muted))]"
+              >
+                复制详情
+              </button>
               <button onClick={() => setDetail(null)} className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))]">关闭</button>
             </div>
         </ModalShell>

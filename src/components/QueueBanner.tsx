@@ -16,17 +16,21 @@ export default function QueueBanner() {
   if (!hasRunningTask || !queueStats || queueStats.queued <= 0) return null
 
   const avgMs = getRecentAvgTaskMs(tasks)
-  const etaMinutes = computeQueueEtaMinutes(queueStats.queued, queueStats.maxConcurrent, avgMs)
+  const myPosition = queueStats.myNextPosition
+  const etaQueueDepth = myPosition ?? queueStats.queued
+  const etaMinutes = computeQueueEtaMinutes(etaQueueDepth, queueStats.maxConcurrent, avgMs)
 
   return (
     <div className="mb-3 flex items-center justify-center">
-      <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+      <div className="inline-flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] px-3 py-1.5 text-center text-xs text-[hsl(var(--muted-foreground))] sm:rounded-full">
         <span className="relative flex h-2 w-2" aria-hidden>
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/70" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
         </span>
         <span>
           当前 {queueStats.queued} 个请求排队中
+          {myPosition != null ? `，你排第 ${myPosition} 位` : ''}
+          {queueStats.myQueued > 1 ? `（你的 ${queueStats.myQueued} 个请求在等）` : ''}
           {etaMinutes != null ? `，预计 ~${etaMinutes} 分钟` : ''}
         </span>
       </div>

@@ -4,7 +4,7 @@ import pino from 'pino'
 import path from 'path'
 import { mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { normalizeBatchImageLimit } from './utils/validation.ts'
+import { normalizeBatchImageLimit, normalizeGalleryAutoRetryCount } from './utils/validation.ts'
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -47,6 +47,7 @@ export const PROXY_QUEUE_MAX_WAIT_MS = Math.min(240_000, Math.max(0, Number(proc
 // 队列长度上限：已满时新请求立即 429，避免无限堆积。
 export const PROXY_QUEUE_MAX = Math.max(0, Number(process.env.PROXY_QUEUE_MAX ?? 10))
 export const DEFAULT_MAX_BATCH_IMAGES = normalizeBatchImageLimit(process.env.DEFAULT_MAX_BATCH_IMAGES, 10)
+export const DEFAULT_GALLERY_AUTO_RETRY_COUNT = normalizeGalleryAutoRetryCount(process.env.DEFAULT_GALLERY_AUTO_RETRY_COUNT, 1)
 export const MAX_IMAGE_LONG_EDGE = 2048
 export const THUMB_LONG_EDGE = 256
 export const AVATAR_SIZE = 256

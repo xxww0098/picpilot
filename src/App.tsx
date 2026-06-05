@@ -16,7 +16,6 @@ import ConfirmDialog from './components/ConfirmDialog'
 import PromptDialog from './components/PromptDialog'
 import Toast from './components/Toast'
 import ImageContextMenu from './components/ImageContextMenu'
-import SupportPromptModal from './components/SupportPromptModal'
 import LoginModal from './components/LoginModal'
 import RegisterModal from './components/RegisterModal'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
@@ -174,7 +173,6 @@ export default function App() {
       )}
       <ConfirmDialog />
       <PromptDialog />
-      <SupportPromptModal />
       {showLogPanel && (
         <Suspense fallback={null}>
           <LogPanel />

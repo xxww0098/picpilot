@@ -41,7 +41,7 @@ import {
 } from './lib/db'
 import { callImageApi, type CallApiOptions, type CallApiResult } from './lib/api'
 import { logger, serializeError } from './lib/logger'
-import { getImageApiFanoutConcurrency, IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { getImageApiFanoutConcurrency, IMAGE_FETCH_CORS_HINT, isApiTimeoutError } from './lib/imageApiShared'
 import { settleWithConcurrency } from './lib/runWithConcurrency'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -114,10 +114,10 @@ export {
 } from './store/imageCache'
 
 const CUSTOM_RECOVERY_POLL_MS = 10_000
-const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const failedImageRetryLocks = new Set<string>()
 let agentConversationPersistenceReady = false
 
 function uint8ToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -152,10 +152,6 @@ function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: strin
   return next
 }
 
-function isAgentTask(task: TaskRecord) {
-  return task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
-}
-
 export interface GalleryFilter {
   searchQuery: string
   filterStatus: 'all' | 'running' | 'done' | 'error'
@@ -185,49 +181,6 @@ export function getGalleryDisplayedImageIds(
     filterStatus: state.filterStatus,
     filterFavorite: state.filterFavorite,
   }).flatMap((t) => t.outputImages)
-}
-
-function countSuccessfulOutputImages(tasks: TaskRecord[]) {
-  return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages.length : 0), 0)
-}
-
-function skipSupportPromptForImportedData(tasks: TaskRecord[]) {
-  const count = countSuccessfulOutputImages(tasks)
-  useStore.setState((state) => {
-    if (state.supportPromptDismissed) return {}
-    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-      return { supportPromptSkippedForImportedData: false }
-    }
-    if (state.supportPromptOpen) return {}
-    return { supportPromptSkippedForImportedData: true }
-  })
-}
-
-function showSupportPromptForExistingLocalData(tasks: TaskRecord[]) {
-  const count = countSuccessfulOutputImages(tasks)
-  useStore.setState((state) => {
-    if (state.supportPromptDismissed || state.supportPromptOpen) return {}
-    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-      return { supportPromptSkippedForImportedData: false }
-    }
-    if (state.supportPromptSkippedForImportedData) return {}
-    return { supportPromptOpen: true }
-  })
-}
-
-function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskRecord[], taskId: string) {
-  const state = useStore.getState()
-  if (state.supportPromptDismissed || state.supportPromptOpen || state.supportPromptSkippedForImportedData) return
-
-  const previousTask = previousTasks.find((task) => task.id === taskId)
-  const nextTask = nextTasks.find((task) => task.id === taskId)
-  if (!nextTask || previousTask?.status === 'done' || nextTask.status !== 'done' || nextTask.outputImages.length === 0) return
-
-  const previousCount = countSuccessfulOutputImages(previousTasks)
-  const nextCount = countSuccessfulOutputImages(nextTasks)
-  if (previousCount <= SUPPORT_PROMPT_IMAGE_THRESHOLD && nextCount > SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-    useStore.setState({ supportPromptOpen: true })
-  }
 }
 
 function createAgentConversation(now = Date.now()): AgentConversation {
@@ -276,9 +229,6 @@ export function getPersistedState(state: AppState) {
     agentSidebarCollapsed: state.agentSidebarCollapsed,
     agentAssetTab: state.agentAssetTab,
     agentAssetPanelCollapsed: state.agentAssetPanelCollapsed,
-    supportPromptDismissed: state.supportPromptDismissed,
-    supportPromptOpen: state.supportPromptOpen,
-    supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
   }
 }
 
@@ -341,9 +291,6 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     agentSidebarCollapsed: Boolean(persisted.agentSidebarCollapsed),
     agentAssetTab: persisted.agentAssetTab === 'references' ? 'references' : 'outputs',
     agentAssetPanelCollapsed: Boolean(persisted.agentAssetPanelCollapsed),
-    supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
-    supportPromptOpen: Boolean(persisted.supportPromptOpen),
-    supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
     prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
     inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
@@ -419,6 +366,9 @@ export interface AppState {
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
+  regeneratingImageSlots: Record<string, number>
+  regeneratingImageSlotLabels: Record<string, string>
+  setRegeneratingImageSlot: (taskId: string, imageIndex: number | null, label?: string) => void
 
   // 搜索和筛选
   searchQuery: string
@@ -445,11 +395,6 @@ export interface AppState {
   setShowSettings: (v: boolean, tab?: SettingsTab) => void
   showLogPanel: boolean
   setShowLogPanel: (v: boolean) => void
-  supportPromptOpen: boolean
-  supportPromptDismissed: boolean
-  supportPromptSkippedForImportedData: boolean
-  setSupportPromptOpen: (v: boolean) => void
-  dismissSupportPrompt: () => void
 
   // Queue stats（后端全局排队深度快照，由 QueueBanner 轮询写入；瞬时态，不持久化）
   queueStats: QueueStats | null
@@ -1002,12 +947,7 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      setTasks: (tasks) => set(() => ({
-        tasks,
-        ...(countSuccessfulOutputImages(tasks) <= SUPPORT_PROMPT_IMAGE_THRESHOLD
-          ? { supportPromptSkippedForImportedData: false }
-          : {}),
-      })),
+      setTasks: (tasks) => set({ tasks }),
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
@@ -1030,6 +970,22 @@ export const useStore = create<AppState>()(
         delete next[taskId]
         delete nextSlots[taskId]
         return { streamPreviews: next, streamPreviewSlots: nextSlots }
+      }),
+      regeneratingImageSlots: {},
+      regeneratingImageSlotLabels: {},
+      setRegeneratingImageSlot: (taskId, imageIndex, label) => set((s) => {
+        const { [taskId]: _removed, ...rest } = s.regeneratingImageSlots
+        const { [taskId]: _removedLabel, ...restLabels } = s.regeneratingImageSlotLabels
+        return {
+          regeneratingImageSlots: imageIndex == null
+            ? rest
+            : { ...rest, [taskId]: imageIndex },
+          regeneratingImageSlotLabels: imageIndex == null
+            ? restLabels
+            : label
+            ? { ...restLabels, [taskId]: label }
+            : restLabels,
+        }
       }),
 
       // Search & Filter
@@ -1084,11 +1040,6 @@ export const useStore = create<AppState>()(
         if (showLogPanel) dismissAllTooltips()
         set({ showLogPanel })
       },
-      supportPromptOpen: false,
-      supportPromptDismissed: false,
-      supportPromptSkippedForImportedData: false,
-      setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
-      dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
 
       // Queue stats
       queueStats: null,
@@ -1293,6 +1244,25 @@ function getTaskApiProfileName(task: TaskRecord) {
   return task.apiProfileName || task.apiModel || '未知配置'
 }
 
+function shouldRetryRegenerateWithoutStream(err: unknown, profile: ApiProfile): boolean {
+  if (profile.provider !== 'openai' || profile.streamImages !== true) return false
+  if (isApiTimeoutError(err)) return false
+
+  if (err instanceof TypeError) return true
+  if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
+
+  const message = err instanceof Error ? err.message : String(err)
+  return /empty_stream|upstream stream closed before first payload|internal_server_error|server_error|\bHTTP 5\d\d\b/i.test(message)
+}
+
+function createSettingsWithoutImageStreaming(settings: AppSettings, profile: ApiProfile): AppSettings {
+  return createSettingsForApiProfile(settings, {
+    ...profile,
+    streamImages: false,
+    streamPartialImages: 0,
+  })
+}
+
 function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
   if (!(err instanceof Error)) return {}
 
@@ -1364,7 +1334,6 @@ export async function initStore() {
     .filter((task, index) => interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
-  showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
       task.customTaskId &&
@@ -1775,6 +1744,11 @@ async function resolveImageApiFanoutConcurrency(): Promise<number> {
   }
 }
 
+function getGalleryAutoRetryCount(): number {
+  const count = getCachedAuthUser()?.galleryAutoRetryCount ?? 1
+  return Number.isFinite(count) ? Math.max(0, Math.min(5, Math.trunc(count))) : 1
+}
+
 // 多图「每张」合并卡的执行：按每张输入图各发一次请求，汇总成一个 CallApiResult。
 // 输出顺序 = 输入图顺序；图片/实际参数/改写提示词按输出顺序对齐；任一输入失败计入 failedCount（每输入占 perInputCount 张）。
 // 流式预览槽位按 inputIndex * perInputCount 偏移，避免不同输入的中间帧互相覆盖。
@@ -2152,6 +2126,9 @@ async function executeTask(taskId: string) {
         : `生成完成，共 ${outputIds.length} 张图片`,
       failedImageCount > 0 ? 'info' : 'success',
     )
+    if (failedImageCount > 0) {
+      await autoRetryFailedImages(taskId, getGalleryAutoRetryCount())
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -2253,7 +2230,6 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
     t.id === taskId ? { ...t, ...patch } : t,
   )
   setTasks(updated)
-  maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
   if (task) putTask(task)
 }
@@ -2373,28 +2349,113 @@ export async function retryTaskInPlace(taskId: string) {
   else executeTask(taskId)
 }
 
-/**
- * 只重试批量任务里失败的那几张：用 n = 失败数 重新请求，成功的追加到 outputImages，
- * 并据返回的失败数更新 failedImageCount。不新建任务，直接补齐当前任务。
- */
-export async function retryFailedImages(taskId: string): Promise<void> {
-  const state = useStore.getState()
-  const task = state.tasks.find((t) => t.id === taskId)
-  if (!task) return
-  const failedCount = task.failedImageCount ?? 0
-  if (failedCount <= 0) return
+type RetryFailedImagesResult = { added: number; stillFailed: number }
 
-  // 「每张」合并卡不追踪具体哪张输入图失败，无法只补失败槽位（按 n=失败数 重发会变成合成语义），整卡重跑。
-  if (task.perInputImage) {
-    await retryTaskInPlace(taskId)
-    return
+async function autoRetryFailedImages(taskId: string, maxAttempts: number): Promise<void> {
+  const attempts = Math.max(0, Math.min(5, Math.trunc(maxAttempts)))
+  if (attempts <= 0) return
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const latest = useStore.getState().tasks.find((t) => t.id === taskId)
+    const failedCount = latest?.failedImageCount ?? 0
+    if (!latest || latest.status !== 'done' || failedCount <= 0 || latest.perInputImage) return
+
+    useStore.getState().showToast(`有 ${failedCount} 张失败，正在自动重试（${attempt}/${attempts}）`, 'info')
+    try {
+      const result = await retryFailedImages(taskId, { silent: true })
+      if (!result) return
+      if (result.stillFailed <= 0) {
+        useStore.getState().showToast(`自动重试已补齐失败的 ${result.added} 张图片`, 'success')
+        return
+      }
+    } catch (err) {
+      const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+      const message = getUserFacingErrorMessage(err, '自动重试失败', { apiUpstream: !isNetworkOrTimeout })
+      logger.error('task', '自动重试失败图片出错', { taskId, attempt, error: serializeError(err) })
+      useStore.getState().showToast(`自动重试失败：${message}`, 'error')
+      return
+    }
   }
 
-  const { settings } = state
-  const profile = getTaskApiProfile(settings, task) ?? getActiveApiProfile(settings)
-  const requestSettings = createSettingsForApiProfile(settings, profile)
+  const latest = useStore.getState().tasks.find((t) => t.id === taskId)
+  const stillFailed = latest?.failedImageCount ?? 0
+  if (stillFailed > 0) {
+    useStore.getState().showToast(`自动重试结束，仍有 ${stillFailed} 张失败，可在详情中手动重试`, 'info')
+  }
+}
+
+/**
+ * 只重试批量任务里失败的那几张：按原请求 n 的缺口数重新请求，成功的追加到 outputImages，
+ * 并据返回的失败数更新 failedImageCount。不新建任务，直接补齐当前任务。
+ */
+export async function retryFailedImages(taskId: string, options: { silent?: boolean } = {}): Promise<RetryFailedImagesResult | null> {
+  if (failedImageRetryLocks.has(taskId)) {
+    if (!options.silent) useStore.getState().showToast('这组图片正在重试失败图片，请稍候', 'info')
+    return null
+  }
+  failedImageRetryLocks.add(taskId)
+
+  let retrySlotIndex = -1
+  let markedRegenerating = false
 
   try {
+    const state = useStore.getState()
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) return null
+    const failedCount = task.failedImageCount ?? 0
+    if (failedCount <= 0) return null
+
+    // 「每张」合并卡不追踪具体哪张输入图失败，无法只补失败槽位（按 n=失败数 重发会变成合成语义），整卡重跑。
+    if (task.perInputImage) {
+      if (options.silent) return null
+      await retryTaskInPlace(taskId)
+      return null
+    }
+
+    const runningImageIndex = useStore.getState().regeneratingImageSlots[taskId]
+    if (runningImageIndex != null) {
+      if (!options.silent) {
+        state.showToast(`第 ${runningImageIndex + 1} 张图片正在重新生成，请稍候`, 'info')
+      }
+      return null
+    }
+
+    const { settings } = state
+    const profile = getTaskApiProfile(settings, task) ?? getActiveApiProfile(settings)
+    const requestSettings = createSettingsForApiProfile(settings, profile)
+    retrySlotIndex = task.outputImages.length
+    const requestedOutputCount = Number.isFinite(task.params.n) && task.params.n > 0 ? Math.trunc(task.params.n) : task.outputImages.length + failedCount
+    const targetOutputCount = Math.max(1, requestedOutputCount)
+    const missingOutputCount = Math.max(0, targetOutputCount - task.outputImages.length)
+    const requestCount = Math.min(failedCount, missingOutputCount)
+    if (requestCount <= 0) {
+      updateTaskInStore(taskId, {
+        failedImageCount: undefined,
+        partialImageErrors: undefined,
+        actualParams: { ...task.actualParams, n: task.outputImages.length },
+      })
+      if (!options.silent) {
+        state.showToast(`这组图片已有 ${task.outputImages.length} 张，已达到或超过目标数量 ${targetOutputCount} 张`, 'info')
+      }
+      logger.warn('task', '重试失败图片跳过：当前输出已达到目标数量', {
+        taskId,
+        failedCount,
+        targetOutputCount,
+        currentOutputCount: task.outputImages.length,
+      })
+      return { added: 0, stillFailed: 0 }
+    }
+
+    const retryLabel = requestCount > 1
+      ? `正在重试 ${requestCount} 张失败图片`
+      : `正在重试第 ${retrySlotIndex + 1} 张`
+
+    useStore.getState().setRegeneratingImageSlot(taskId, retrySlotIndex, retryLabel)
+    markedRegenerating = true
+    if (!options.silent) {
+      state.showToast(`已开始重试 ${requestCount} 张失败图片`, 'info')
+    }
+
     const inputDataUrls = await Promise.all(
       task.inputImageIds.map(async (imgId) => {
         const dataUrl = await ensureImageCached(imgId)
@@ -2408,17 +2469,27 @@ export async function retryFailedImages(taskId: string): Promise<void> {
       if (!maskDataUrl) throw new Error('遮罩图片已不存在')
     }
 
-    logger.info('task', '重试失败图片', { taskId, retryCount: failedCount, provider: task.apiProvider })
+    logger.info('task', '重试失败图片', {
+      taskId,
+      retryCount: requestCount,
+      failedCount,
+      targetOutputCount,
+      currentOutputCount: task.outputImages.length,
+      provider: task.apiProvider,
+    })
 
     const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
     const result = await callImageApi({
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
-      params: { ...task.params, n: failedCount },
+      params: { ...task.params, n: requestCount },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
       fanoutConcurrency,
     })
+
+    const latest = useStore.getState().tasks.find((t) => t.id === taskId)
+    if (!latest) return null
 
     const newIds: string[] = []
     for (const dataUrl of result.images) {
@@ -2427,9 +2498,7 @@ export async function retryFailedImages(taskId: string): Promise<void> {
       newIds.push(imgId)
     }
 
-    const latest = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latest) return
-    const stillFailed = Math.max(0, result.failedCount ?? failedCount - newIds.length)
+    const stillFailed = Math.max(0, targetOutputCount - latest.outputImages.length - newIds.length)
     const mergedOutput = [...latest.outputImages, ...newIds]
     updateTaskInStore(taskId, {
       outputImages: mergedOutput,
@@ -2438,18 +2507,35 @@ export async function retryFailedImages(taskId: string): Promise<void> {
       actualParams: { ...latest.actualParams, n: mergedOutput.length },
     })
 
-    logger.info('task', '重试失败图片完成', { taskId, added: newIds.length, stillFailed })
-    state.showToast(
-      stillFailed > 0
-        ? `已重试：成功 ${newIds.length} 张，仍有 ${stillFailed} 张失败`
-        : `已补齐失败的 ${newIds.length} 张图片`,
-      stillFailed > 0 ? 'info' : 'success',
-    )
+    logger.info('task', '重试失败图片完成', {
+      taskId,
+      added: newIds.length,
+      stillFailed,
+      targetOutputCount,
+      requested: requestCount,
+      returned: result.images.length,
+    })
+    if (!options.silent) {
+      state.showToast(
+        stillFailed > 0
+          ? `已重试：成功 ${newIds.length} 张，仍有 ${stillFailed} 张失败`
+          : `已补齐失败的 ${newIds.length} 张图片`,
+        stillFailed > 0 ? 'info' : 'success',
+      )
+    }
+    return { added: newIds.length, stillFailed }
   } catch (err) {
+    if (options.silent) throw err
     const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
     const message = getUserFacingErrorMessage(err, '重试失败', { apiUpstream: !isNetworkOrTimeout })
     logger.error('task', '重试失败图片出错', { taskId, error: serializeError(err) })
-    state.showToast(`重试失败：${message}`, 'error')
+    useStore.getState().showToast(`重试失败：${message}`, 'error')
+    return null
+  } finally {
+    failedImageRetryLocks.delete(taskId)
+    if (markedRegenerating && retrySlotIndex >= 0 && useStore.getState().regeneratingImageSlots[taskId] === retrySlotIndex) {
+      useStore.getState().setRegeneratingImageSlot(taskId, null)
+    }
   }
 }
 
@@ -2471,10 +2557,7 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
   const oldImageId = task.outputImages[imageIndex]
   const { settings } = state
   const taskProfile = getTaskApiProfile(settings, task)
-  if (!taskProfile && task.apiProfileId) {
-    state.showToast('找不到此任务所使用的 API 配置。', 'error')
-    return
-  }
+  const fallbackToCurrentProfile = Boolean(!taskProfile && task.apiProfileId)
 
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const apiProfileError = validateApiProfile(activeProfile)
@@ -2506,10 +2589,25 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
   }
 
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
-  const taskProvider = task.apiProvider ?? activeProfile.provider
+  const taskProvider = fallbackToCurrentProfile ? activeProfile.provider : task.apiProvider ?? activeProfile.provider
   let customTaskInfo: { taskId: string } | null = null
+  let markedRegenerating = false
+  const runningImageIndex = useStore.getState().regeneratingImageSlots[taskId]
+  if (runningImageIndex != null) {
+    state.showToast(`第 ${runningImageIndex + 1} 张图片正在重新生成，请稍候`, 'info')
+    return
+  }
 
   try {
+    useStore.getState().setRegeneratingImageSlot(taskId, imageIndex)
+    markedRegenerating = true
+    state.showToast(
+      fallbackToCurrentProfile
+        ? `原 API 配置「${getTaskApiProfileName(task)}」已不存在，已使用当前配置「${activeProfile.name}」重新生成第 ${imageIndex + 1} 张图片`
+        : `已开始重新生成第 ${imageIndex + 1} 张图片`,
+      'info',
+    )
+
     const inputDataUrls = await Promise.all(
       requestInputImageIds.map(async (imgId) => {
         const dataUrl = await ensureImageCached(imgId)
@@ -2534,17 +2632,40 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     })
 
     const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
-    const result = await callImageApi({
-      settings: requestSettings,
-      prompt: replaceImageMentionsForApi(task.prompt, promptImageCount),
-      params: { ...task.params, n: 1 },
-      inputImageDataUrls: inputDataUrls,
-      maskDataUrl,
-      onCustomTaskEnqueued: (request) => {
-        customTaskInfo = request
-      },
-      fanoutConcurrency,
-    })
+    const promptForApi = replaceImageMentionsForApi(task.prompt, promptImageCount)
+    const requestParams = { ...task.params, n: 1 }
+    const callRegenerateApi = async (settingsForAttempt: AppSettings): Promise<CallApiResult> => {
+      customTaskInfo = null
+      return callImageApi({
+        settings: settingsForAttempt,
+        prompt: promptForApi,
+        params: requestParams,
+        inputImageDataUrls: inputDataUrls,
+        maskDataUrl,
+        onCustomTaskEnqueued: (request) => {
+          customTaskInfo = request
+        },
+        fanoutConcurrency,
+      })
+    }
+
+    let result: CallApiResult
+    try {
+      result = await callRegenerateApi(requestSettings)
+    } catch (err) {
+      if (!shouldRetryRegenerateWithoutStream(err, activeProfile)) throw err
+
+      logger.warn('task', '单张图片重新生成流式失败，关闭流式后自动重试', {
+        taskId,
+        imageIndex,
+        provider: activeProfile.provider,
+        profileName: activeProfile.name,
+        model: activeProfile.model,
+        error: serializeError(err),
+      })
+      state.showToast(`上游流式响应断开，正在关闭流式重试第 ${imageIndex + 1} 张图片`, 'info')
+      result = await callRegenerateApi(createSettingsWithoutImageStreaming(settings, activeProfile))
+    }
 
     const replacementImage = result.images[0]
     if (!replacementImage) throw new Error('接口没有返回可替换的图片')
@@ -2605,6 +2726,9 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     })
     state.showToast(`重新生成失败：${message}`, 'error')
   } finally {
+    if (markedRegenerating && useStore.getState().regeneratingImageSlots[taskId] === imageIndex) {
+      useStore.getState().setRegeneratingImageSlot(taskId, null)
+    }
     for (const imgId of requestInputImageIds) evictCachedImage(imgId)
   }
 }
@@ -2807,15 +2931,13 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
-      supportPromptOpen: false,
-      supportPromptSkippedForImportedData: false,
     })
     clearInputImages()
     clearMaskDraft()
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
+    useStore.setState({ dismissedCodexCliPrompts: [] })
     setSettings({ ...DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
@@ -3107,7 +3229,6 @@ export async function importData(file: File, options: ImportOptions = { importCo
         }
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)
-      skipSupportPromptForImportedData(tasks)
       scheduleThumbnailBackfill(importedImageIds)
     }
 

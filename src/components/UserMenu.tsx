@@ -214,6 +214,13 @@ export default function UserMenu({ user, onOpenGallery }: Props) {
               tone="primary"
             />
             <InfoTile
+              label="失败重试"
+              value={`${user.galleryAutoRetryCount} 次`}
+              sub={user.galleryAutoRetryCount > 0 ? '自动补齐' : '已关闭'}
+              percent={user.galleryAutoRetryCount > 0 ? 100 : 0}
+              tone="primary"
+            />
+            <InfoTile
               label="共享画廊"
               value={`${user.publicGalleryCount} 张`}
               sub={`${formatBytes(user.publicStorageBytes)} / ${formatBytes(user.publicStorageQuotaBytes)}`}

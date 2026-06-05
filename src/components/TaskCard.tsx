@@ -6,7 +6,7 @@ import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { getImageModelLabel, isKnownImageModel } from '../lib/imageModels'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { CodeIcon } from './icons'
+import { CodeIcon, RefreshIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 import { getVideo } from '../lib/db'
 
@@ -82,6 +82,8 @@ function TaskCard({
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const regeneratingImageIndex = useStore((s) => s.regeneratingImageSlots[task.id] ?? null)
+  const regeneratingImageLabel = useStore((s) => s.regeneratingImageSlotLabels[task.id] ?? null)
   const queueStats = useStore((s) => s.queueStats)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
@@ -339,15 +341,16 @@ function TaskCard({
         : runningSeconds >= 30
           ? '上游响应较慢，仍在等待…'
           : null
-  // 全局队列有人等待、且本卡尚无预览时，提示"系统繁忙正在排队"——比单纯转圈更安心。
-  // 位置为近似值（无法精确知道本请求在队中第几位），故用"约"措辞。
-  const queueWaitingCount =
-    task.status === 'running' && !streamPreviewSrc && queueStats && queueStats.queued > 0
-      ? queueStats.queued
-      : 0
+  // 全局队列有人等待、且本卡尚无预览时，提示"系统繁忙正在排队"。
+  // 若后端能识别当前用户的等待请求，优先显示用户在 FIFO 队列中的位置。
+  const queueWaitingText = task.status === 'running' && !streamPreviewSrc && queueStats && queueStats.queued > 0
+    ? queueStats.myNextPosition != null
+      ? `服务繁忙，你排第 ${queueStats.myNextPosition} 位${queueStats.myQueued > 1 ? `，你的 ${queueStats.myQueued} 个请求在等` : ''}…`
+      : `服务繁忙，前方约 ${queueStats.queued} 个请求排队中…`
+    : null
   const waitingHint =
-    queueWaitingCount > 0
-      ? `服务繁忙，前方约 ${queueWaitingCount} 个请求排队中…${slowUpstreamHint ? `\n${slowUpstreamHint}` : ''}`
+    queueWaitingText
+      ? `${queueWaitingText}${slowUpstreamHint ? `\n${slowUpstreamHint}` : ''}`
       : slowUpstreamHint
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -373,6 +376,7 @@ function TaskCard({
   // 其余情况沿用旧规则——仅当非默认模型时显示，避免给历史卡片平添噪声。
   const showModel = Boolean(task.apiModel) && (isKnownImageModel(task.apiModel ?? '') || task.apiModel !== DEFAULT_IMAGES_MODEL)
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
+  const isRegeneratingImage = regeneratingImageIndex !== null
 
   return (
     <div className="relative rounded-xl">
@@ -402,6 +406,8 @@ function TaskCard({
         } ${
           task.status === 'running'
             ? 'border-blue-400 generating'
+            : isRegeneratingImage
+            ? 'border-blue-400 ring-1 ring-blue-400/40 shadow-md shadow-blue-500/10'
             : isSelected
             ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
             : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'
@@ -550,7 +556,7 @@ function TaskCard({
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-output-image-ids={task.outputImages.join(',')}
-                className="saveable-image w-full h-full object-cover"
+                className={`saveable-image w-full h-full object-cover transition-opacity duration-200 ${isRegeneratingImage ? 'opacity-60' : ''}`}
                 loading="lazy"
                 alt=""
               />
@@ -585,6 +591,16 @@ function TaskCard({
                 d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
               />
             </svg>
+          )}
+          {isRegeneratingImage && (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/30 px-3 backdrop-blur-[1px]">
+              <div className="flex max-w-[8.5rem] items-center gap-1.5 rounded bg-black/75 px-2.5 py-1.5 text-white shadow-sm">
+                <RefreshIcon className="h-4 w-4 flex-shrink-0 motion-safe:animate-spin" />
+                <span className="min-w-0 text-center text-[11px] font-medium leading-tight">
+                  {regeneratingImageLabel ?? `正在重生成第 ${regeneratingImageIndex + 1} 张`}
+                </span>
+              </div>
+            </div>
           )}
           {/* 左上角操作 / 信息条：取消按钮、耗时、尺寸、失败重试统一排在一行，避免相互重叠 */}
           <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1">

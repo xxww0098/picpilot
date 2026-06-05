@@ -23,7 +23,7 @@ export default function SettingsAboutSection() {
       `picpilot v${version}`,
       user ? `账户: ${user.displayName || user.username} (@${user.username})` : '账户: 未登录',
       user ? `角色: ${user.isAdmin ? '管理员' : '成员'}` : null,
-      user ? `服务并发: ${user.maxConcurrent} · 排队上限: ${user.maxQueue} · 单次批量: ${user.maxBatchImages}` : null,
+      user ? `服务并发: ${user.maxConcurrent} · 排队上限: ${user.maxQueue} · 单次批量: ${user.maxBatchImages} · 失败自动重试: ${user.galleryAutoRetryCount}` : null,
       user ? `共享画廊: ${user.publicGalleryCount} 张 · ${formatBytes(user.publicStorageBytes)} / ${formatBytes(user.publicStorageQuotaBytes)}` : null,
       `本地任务: ${taskCount} · 对话: ${conversationCount}`,
       `UA: ${navigator.userAgent}`,
@@ -81,6 +81,7 @@ export default function SettingsAboutSection() {
           <Row label="服务并发">{user.maxConcurrent} 个</Row>
           <Row label="排队上限">{user.maxQueue} 个</Row>
           <Row label="单次批量上限">{user.maxBatchImages} 张 / 次</Row>
+          <Row label="失败自动重试">{user.galleryAutoRetryCount} 次</Row>
           <Row label="共享画廊">
             <span className="tabular-nums">{user.publicGalleryCount} 张</span>
             <span className="ml-2 text-gray-400 dark:text-gray-500">

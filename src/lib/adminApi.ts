@@ -32,6 +32,7 @@ export interface AdminUserRow {
 
 export interface AdminTeamSettings {
   defaultMaxBatchImages: number
+  galleryAutoRetryCount: number
   maxConcurrent: number
   maxQueue: number
 }
@@ -93,7 +94,7 @@ export function fetchAdminTeamSettings() {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', undefined, '加载失败')
 }
 
-export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number; maxConcurrent?: number; maxQueue?: number }) {
+export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number; galleryAutoRetryCount?: number; maxConcurrent?: number; maxQueue?: number }) {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

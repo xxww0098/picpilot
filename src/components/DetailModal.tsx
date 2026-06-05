@@ -32,6 +32,7 @@ export default function DetailModal() {
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
+  const regeneratingImageIndex = useStore((s) => detailTaskId ? s.regeneratingImageSlots[detailTaskId] ?? null : null)
 
   const [imageIndex, setImageIndex] = useState(0)
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
@@ -44,7 +45,6 @@ export default function DetailModal() {
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const [retryingFailed, setRetryingFailed] = useState(false)
-  const [regeneratingImageIndex, setRegeneratingImageIndex] = useState<number | null>(null)
   const [videoSrc, setVideoSrc] = useState('')
   const [videoPosterSrc, setVideoPosterSrc] = useState('')
   const modalRef = useRef<HTMLDivElement>(null)
@@ -108,7 +108,6 @@ export default function DetailModal() {
     setImageIndex(0)
     // 切换到另一条记录时重置"重试中"状态，避免上一条的转圈状态串到当前这条
     setRetryingFailed(false)
-    setRegeneratingImageIndex(null)
   }, [detailTaskId])
 
   useEffect(() => {
@@ -264,7 +263,22 @@ export default function DetailModal() {
   const displayTaskError = getUserFacingErrorMessage(task.error || '生成失败', '生成失败')
   const isRegeneratingImage = regeneratingImageIndex !== null
   const isRegeneratingCurrentImage = regeneratingImageIndex === imageIndex
-  const canRegenerateCurrentImage = task.status === 'done' && !isVideoTask && Boolean(currentOutputImageId) && !isFailedSlot
+  const regenerateCurrentImageUnavailableReason =
+    task.status !== 'done'
+      ? '当前记录还未完成，不能重新生成单张图片'
+      : isVideoTask
+      ? '视频记录不能重新生成单张图片'
+      : isFailedSlot
+      ? '这张生成失败，请使用重试按钮补齐'
+      : !currentOutputImageId
+      ? '找不到要重新生成的图片'
+      : null
+  const canRegenerateCurrentImage = regenerateCurrentImageUnavailableReason == null
+  const regenerateImageButtonLabel = isRegeneratingCurrentImage
+    ? '正在重新生成'
+    : isRegeneratingImage && regeneratingImageIndex != null
+    ? `第 ${regeneratingImageIndex + 1} 张正在重新生成`
+    : '重新生成这一张'
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -431,14 +445,16 @@ export default function DetailModal() {
   }
 
   const handleRegenerateCurrentImage = async () => {
-    if (!canRegenerateCurrentImage || isRegeneratingImage) return
-    const targetIndex = imageIndex
-    setRegeneratingImageIndex(targetIndex)
-    try {
-      await regenerateTaskImage(task.id, targetIndex)
-    } finally {
-      setRegeneratingImageIndex((current) => current === targetIndex ? null : current)
+    if (isRegeneratingImage) {
+      showToast(`第 ${(regeneratingImageIndex ?? imageIndex) + 1} 张图片正在重新生成，请稍候`, 'info')
+      return
     }
+    if (!canRegenerateCurrentImage) {
+      showToast(regenerateCurrentImageUnavailableReason ?? '当前图片不能重新生成', 'error')
+      return
+    }
+    const targetIndex = imageIndex
+    await regenerateTaskImage(task.id, targetIndex)
   }
 
   return (
@@ -495,14 +511,14 @@ export default function DetailModal() {
                     regenerateImageTooltip.handlers.onClick()
                     void handleRegenerateCurrentImage()
                   }}
-                  disabled={!canRegenerateCurrentImage || isRegeneratingImage}
+                  disabled={isRegeneratingImage}
                   className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 disabled:cursor-wait disabled:opacity-70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
-                  aria-label={isRegeneratingCurrentImage ? '正在重新生成' : '重新生成这一张'}
+                  aria-label={regenerateImageButtonLabel}
                 >
                   <RefreshIcon className={`h-4 w-4 ${isRegeneratingCurrentImage ? 'animate-spin' : ''}`} />
                 </button>
                 <ViewportTooltip visible={regenerateImageTooltip.visible} className="whitespace-nowrap">
-                  {isRegeneratingCurrentImage ? '正在重新生成' : '重新生成这一张'}
+                  {regenerateImageButtonLabel}
                 </ViewportTooltip>
               </div>
               {currentOutputImageId && (
@@ -574,7 +590,7 @@ export default function DetailModal() {
               <img
                 src={currentOutputPreviewSrc}
                 data-image-id={currentOutputImageId}
-                className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
+                className={`saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer transition-opacity ${isRegeneratingCurrentImage ? 'opacity-60' : ''}`}
                 onLoad={(e) => {
                   const image = e.currentTarget
                   if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
@@ -614,7 +630,21 @@ export default function DetailModal() {
                   )
                 )}
               </div>
+              {isRegeneratingCurrentImage && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/25 backdrop-blur-[1px]">
+                  <div className="inline-flex items-center gap-2 rounded bg-black/70 px-3 py-1.5 text-xs font-medium text-white shadow-sm">
+                    <RefreshIcon className="h-4 w-4 animate-spin" />
+                    <span>正在重新生成这一张</span>
+                  </div>
+                </div>
+              )}
             </>
+          )}
+          {task.status === 'done' && !isVideoTask && outputLen > 0 && currentOutputImageId && !currentOutputPreviewSrc && !isFailedSlot && (
+            <div className="flex flex-col items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+              <RefreshIcon className="h-6 w-6 animate-spin text-blue-400" />
+              <span>正在载入图片</span>
+            </div>
           )}
           {isFailedSlot && (
             <div className="flex flex-col items-center gap-3 px-6 text-center">

@@ -33,17 +33,26 @@ export interface ConcurrencyQueueOptions {
   maxWaitMs: number
 }
 
+export interface ConcurrencyQueueStats {
+  inflight: number
+  queued: number
+  /** 当前用户排队中的请求数；未传 userId 时不返回。 */
+  myQueued?: number
+  /** 当前用户第一个等待请求在 FIFO 队列中的 1-based 位置；未排队为 null。 */
+  myNextPosition?: number | null
+}
+
 export interface ConcurrencyQueue {
   /**
    * 获取一个并发槽位。有空位且无人排队时立即放行；否则进入 FIFO 队列等待。
    * 队满抛 QueueFullError，等待超时抛 QueueWaitTimeoutError，
    * 客户端中途断开抛 ClientAbortError。成功后调用方必须在结束时调用 release()。
    */
-  acquire(signal: AbortSignal, maxWaitMs?: number): Promise<void>
+  acquire(signal: AbortSignal, maxWaitMs?: number, meta?: { userId?: string | null }): Promise<void>
   /** 释放一个并发槽位并唤醒队首等待者。 */
   release(): void
   /** 当前在途数与排队数，用于日志/调试。 */
-  stats(): { inflight: number; queued: number }
+  stats(userId?: string | null): ConcurrencyQueueStats
   /**
    * 运行时调整上限（管理端「团队服务配置」用）。只更新提供的字段。
    * 提高 maxConcurrent 会立即唤醒可放行的队首等待者；
@@ -58,6 +67,7 @@ export interface ConcurrencyQueue {
 interface SlotWaiter {
   resolve: () => void
   reject: (err: Error) => void
+  userId: string | null
 }
 
 export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): ConcurrencyQueue {
@@ -68,7 +78,11 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
   let inflight = 0
   const waiters: SlotWaiter[] = []
 
-  function acquire(signal: AbortSignal, maxWaitMs: number = defaultWaitMs): Promise<void> {
+  function acquire(
+    signal: AbortSignal,
+    maxWaitMs: number = defaultWaitMs,
+    meta?: { userId?: string | null },
+  ): Promise<void> {
     // 有空位且没有排队者：直接占位放行
     if (inflight < maxConcurrent && waiters.length === 0) {
       inflight++
@@ -83,7 +97,9 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
 
     return new Promise<void>((resolve, reject) => {
       let settled = false
+      const userId = typeof meta?.userId === 'string' && meta.userId ? meta.userId : null
       const waiter: SlotWaiter = {
+        userId,
         resolve: () => finish(() => { inflight++; resolve() }),
         reject: (err) => finish(() => reject(err)),
       }
@@ -108,7 +124,8 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
   // 在有空位时按 FIFO 唤醒队首等待者；resolve 内部会 inflight++。
   function pump(): void {
     while (waiters.length > 0 && inflight < maxConcurrent) {
-      waiters.shift()!.resolve()
+      const waiter = waiters.shift()
+      if (waiter) waiter.resolve()
     }
   }
 
@@ -131,10 +148,25 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
     pump()
   }
 
+  function stats(userId?: string | null): ConcurrencyQueueStats {
+    const base = { inflight, queued: waiters.length }
+    const targetUserId = typeof userId === 'string' && userId ? userId : null
+    if (!targetUserId) return base
+
+    let myQueued = 0
+    let myNextPosition: number | null = null
+    waiters.forEach((waiter, index) => {
+      if (waiter.userId !== targetUserId) return
+      myQueued++
+      if (myNextPosition == null) myNextPosition = index + 1
+    })
+    return { ...base, myQueued, myNextPosition }
+  }
+
   return {
     acquire,
     release,
-    stats: () => ({ inflight, queued: waiters.length }),
+    stats,
     setLimits,
     limits: () => ({ maxConcurrent, maxQueue }),
   }

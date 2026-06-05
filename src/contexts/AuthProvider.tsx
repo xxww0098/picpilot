@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { fetchCurrentUser, logout, refreshAuthToken, type AuthUser } from '../lib/auth'
+import { fetchCurrentUser, logout, patchCachedAuthUser, refreshAuthToken, type AuthUser } from '../lib/auth'
 
 // 访问令牌有效期较短（默认 2h），在过期前定时续期，确保活跃用户不被中途登出。
 // 远小于令牌寿命即可保证总在有效窗口内换发；同时在窗口重新获得焦点时立即续一次。
@@ -41,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const patchUser = useCallback((patch: Partial<AuthUser>) => {
+    patchCachedAuthUser(patch)
     setUser((prev) => (prev ? { ...prev, ...patch } : prev))
   }, [])
 

@@ -43,6 +43,32 @@ test('按 FIFO 顺序唤醒等待者', async () => {
   expect(order).toEqual(['b', 'c', 'd'])
 })
 
+test('按用户返回当前 FIFO 排队位置', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 1, maxQueue: 10, maxWaitMs: 0 })
+  await q.acquire(neverAbort(), undefined, { userId: 'owner' })
+
+  const b = q.acquire(neverAbort(), undefined, { userId: 'user-b' })
+  const a1 = q.acquire(neverAbort(), undefined, { userId: 'user-a' })
+  const a2 = q.acquire(neverAbort(), undefined, { userId: 'user-a' })
+  await tick()
+
+  expect(q.stats()).toEqual({ inflight: 1, queued: 3 })
+  expect(q.stats('user-b')).toEqual({ inflight: 1, queued: 3, myQueued: 1, myNextPosition: 1 })
+  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 3, myQueued: 2, myNextPosition: 2 })
+  expect(q.stats('nobody')).toEqual({ inflight: 1, queued: 3, myQueued: 0, myNextPosition: null })
+
+  q.release()
+  await b
+  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 2, myQueued: 2, myNextPosition: 1 })
+
+  q.release()
+  await a1
+  q.release()
+  await a2
+  q.release()
+  expect(q.stats('user-a')).toEqual({ inflight: 0, queued: 0, myQueued: 0, myNextPosition: null })
+})
+
 test('队列已满时立即抛 QueueFullError', async () => {
   const q = createConcurrencyQueue({ maxConcurrent: 1, maxQueue: 1, maxWaitMs: 0 })
   await q.acquire(neverAbort())

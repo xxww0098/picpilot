@@ -248,3 +248,30 @@ test('改密码自增 token_version，令旧令牌失效', async () => {
   // 旧令牌（tv=0）现在失效
   expect((await authGet('/api/auth/me', victimToken)).status).toBe(401)
 })
+
+test('团队设置：管理员可设置画廊失败自动重试次数，并随用户资料下发', async () => {
+  seedUser('u-admin-team-settings', 'adminteam')
+  db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-team-settings')
+  seedUser('u-team-member', 'teamuser')
+  const adminToken = await tokenFor('u-admin-team-settings', 'adminteam', true)
+  const memberToken = await tokenFor('u-team-member', 'teamuser')
+
+  const patch = await app.request('/api/admin/team-settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ galleryAutoRetryCount: 3 }),
+  })
+  expect(patch.status).toBe(200)
+  expect(((await patch.json()) as { galleryAutoRetryCount: number }).galleryAutoRetryCount).toBe(3)
+
+  const invalid = await app.request('/api/admin/team-settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ galleryAutoRetryCount: 6 }),
+  })
+  expect(invalid.status).toBe(400)
+
+  const me = await authGet('/api/auth/me', memberToken)
+  expect(me.status).toBe(200)
+  expect(((await me.json()) as { galleryAutoRetryCount: number }).galleryAutoRetryCount).toBe(3)
+})

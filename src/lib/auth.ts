@@ -47,6 +47,7 @@ export interface AuthUser {
   isAdmin: boolean
   avatarUpdatedAt: number | null
   maxBatchImages: number
+  galleryAutoRetryCount: number
   maxConcurrent: number
   maxQueue: number
   publicGalleryCount: number
@@ -60,6 +61,12 @@ export function getCachedAuthUser(): AuthUser | null {
   return cachedAuthUser
 }
 
+export function patchCachedAuthUser(patch: Partial<AuthUser>): AuthUser | null {
+  if (!cachedAuthUser) return null
+  cachedAuthUser = normalizeAuthUser({ ...cachedAuthUser, ...patch })
+  return cachedAuthUser
+}
+
 function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
   return {
     userId: data.userId ?? '',
@@ -68,6 +75,7 @@ function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
     isAdmin: !!data.isAdmin,
     avatarUpdatedAt: data.avatarUpdatedAt ?? null,
     maxBatchImages: Number(data.maxBatchImages ?? 10),
+    galleryAutoRetryCount: Number(data.galleryAutoRetryCount ?? 1),
     maxConcurrent: Number(data.maxConcurrent ?? 5),
     maxQueue: Number(data.maxQueue ?? 50),
     publicGalleryCount: Number(data.publicGalleryCount ?? 0),
