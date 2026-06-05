@@ -15,15 +15,20 @@ import type {
   MultiImageMode,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
+import { DEFAULT_AGENT_MODEL } from './chatModels'
 import { classifyImportEnvelope } from './schemas'
 
 const CLIENT_VISIBLE_BASE_URL = ''
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
+export const DEFAULT_XAI_IMAGES_MODEL = 'grok-imagine-image-quality'
+export const DEFAULT_XAI_FAST_IMAGES_MODEL = 'grok-imagine-image'
+export const DEFAULT_VIDEO_MODEL = 'grok-imagine-video-1.5-preview'
+export const DEFAULT_VIDEO_DURATION_SECONDS = 6
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 900
 
-const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai'])
+const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'xAI'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
   generationPath: 'images/generations',
   editPath: 'images/edits',
@@ -294,6 +299,11 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
   }
 }
 
+export function getDefaultModelForProvider(provider: ApiProvider, apiMode: ApiMode = 'images'): string {
+  if (provider === 'xAI') return DEFAULT_XAI_IMAGES_MODEL
+  return apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+}
+
 export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvider, customProvider?: CustomProviderDefinition): ApiProfile {
   const providerDrafts = {
     ...profile.providerDrafts,
@@ -328,11 +338,11 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     ...profile,
     provider,
     baseUrl: CLIENT_VISIBLE_BASE_URL,
-    model: savedDraft?.model ?? DEFAULT_IMAGES_MODEL,
-    apiMode: savedDraft?.apiMode ?? profile.apiMode,
-    codexCli: savedDraft?.codexCli ?? profile.codexCli,
+    model: savedDraft?.model ?? getDefaultModelForProvider(provider),
+    apiMode: provider === 'xAI' ? 'images' : savedDraft?.apiMode ?? profile.apiMode,
+    codexCli: provider === 'openai' ? savedDraft?.codexCli ?? profile.codexCli : false,
     responseFormatB64Json: savedDraft?.responseFormatB64Json,
-    streamImages: savedDraft?.streamImages ?? (profile.provider === 'openai' ? profile.streamImages : true),
+    streamImages: provider === 'openai' ? savedDraft?.streamImages ?? (profile.provider === 'openai' ? profile.streamImages : true) : false,
     streamPartialImages: savedDraft?.streamPartialImages ?? (profile.provider === 'openai' ? profile.streamPartialImages : DEFAULT_STREAM_PARTIAL_IMAGES),
     providerDrafts,
   }
@@ -343,7 +353,7 @@ function normalizeProviderDraft(input: unknown, provider: ApiProvider, customPro
   const fallback = createDefaultOpenAIProfile()
   const model = typeof input.model === 'string' && input.model.trim() ? input.model : undefined
   const apiMode = input.apiMode === 'responses' ? 'responses' : input.apiMode === 'images' ? 'images' : undefined
-  const knownProvider = provider === 'openai' || customProviderIds.has(provider)
+  const knownProvider = BUILT_IN_PROVIDER_IDS.has(provider) || customProviderIds.has(provider)
   if (!knownProvider) return undefined
 
   return {
@@ -369,17 +379,18 @@ function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>)
 function isSupportedApiProfileInput(input: unknown, customProviderIds: Set<string>): boolean {
   if (!isRecord(input)) return false
   const rawProvider = typeof input.provider === 'string' ? input.provider : ''
-  return !rawProvider || rawProvider === 'openai' || customProviderIds.has(rawProvider)
+  return !rawProvider || BUILT_IN_PROVIDER_IDS.has(rawProvider) || customProviderIds.has(rawProvider)
 }
 
 export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfile>, customProviderIds = new Set<string>()): ApiProfile {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
-  const knownProvider = rawProvider === 'openai' || customProviderIds.has(rawProvider)
-  const provider: ApiProvider = knownProvider && customProviderIds.has(rawProvider) ? rawProvider : 'openai'
+  const knownProvider = BUILT_IN_PROVIDER_IDS.has(rawProvider) || customProviderIds.has(rawProvider)
+  const provider: ApiProvider = knownProvider ? rawProvider : 'openai'
   const defaults = createDefaultOpenAIProfile(fallback)
-  const apiMode: ApiMode = record.apiMode === 'responses' ? 'responses' : 'images'
+  const apiMode: ApiMode = provider === 'xAI' ? 'images' : record.apiMode === 'responses' ? 'responses' : 'images'
   const shouldUseRecordModel = knownProvider || !rawProvider
+  const defaultModel = getDefaultModelForProvider(provider, apiMode)
 
   return {
     ...defaults,
@@ -388,12 +399,12 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     provider,
     baseUrl: CLIENT_VISIBLE_BASE_URL,
     apiKey: '',
-    model: shouldUseRecordModel && typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
+    model: shouldUseRecordModel && typeof record.model === 'string' && record.model.trim() ? record.model : defaultModel,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
-    codexCli: Boolean(record.codexCli),
+    codexCli: provider === 'openai' ? Boolean(record.codexCli) : false,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
-    streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages,
+    streamImages: provider === 'openai' ? (typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages) : false,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, defaults.streamPartialImages),
     providerDrafts: normalizeProviderDrafts(record.providerDrafts, customProviderIds),
   }
@@ -459,9 +470,17 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
+    agentModel: typeof record.agentModel === 'string' && record.agentModel.trim() ? record.agentModel.trim() : DEFAULT_AGENT_MODEL,
+    videoDurationSeconds: normalizeVideoDurationSeconds(record.videoDurationSeconds),
     profiles,
     activeProfileId,
   }
+}
+
+export function normalizeVideoDurationSeconds(value: unknown, fallback = DEFAULT_VIDEO_DURATION_SECONDS): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(15, Math.max(1, Math.trunc(numeric)))
 }
 
 export function getCustomProviderDefinition(settings: Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
@@ -471,11 +490,12 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'openai') return 'OpenAI 兼容'
+  if (provider === 'xAI') return 'xAI Imagine'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }
 
 export function isOpenAICompatibleProvider(settings: Partial<AppSettings> | unknown, provider: ApiProvider): boolean {
-  return provider === 'openai' || Boolean(getCustomProviderDefinition(settings, provider))
+  return provider === 'openai' || provider === 'xAI' || Boolean(getCustomProviderDefinition(settings, provider))
 }
 
 export interface ImportedProviderSettings {
@@ -737,4 +757,6 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
+  agentModel: DEFAULT_AGENT_MODEL,
+  videoDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS,
 })

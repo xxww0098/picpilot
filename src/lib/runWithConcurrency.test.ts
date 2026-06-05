@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runWithConcurrency } from './runWithConcurrency'
+import { runWithConcurrency, settleWithConcurrency } from './runWithConcurrency'
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -36,5 +36,26 @@ describe('runWithConcurrency', () => {
     let called = 0
     await runWithConcurrency([], 0, async () => { called++ })
     expect(called).toBe(0)
+  })
+
+  it('settleWithConcurrency 保持结果顺序并限制并发', async () => {
+    const items = [1, 2, 3, 4, 5]
+    let active = 0
+    let peak = 0
+
+    const results = await settleWithConcurrency(items, 2, async (n) => {
+      active++
+      peak = Math.max(peak, active)
+      await tick(5)
+      active--
+      if (n === 3) throw new Error('boom')
+      return n * 10
+    })
+
+    expect(peak).toBeLessThanOrEqual(2)
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled', 'rejected', 'fulfilled', 'fulfilled'])
+    expect(results[0]).toEqual({ status: 'fulfilled', value: 10 })
+    expect(results[3]).toEqual({ status: 'fulfilled', value: 40 })
+    expect((results[2] as PromiseRejectedResult).reason).toBeInstanceOf(Error)
   })
 })

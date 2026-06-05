@@ -7,7 +7,11 @@ image.xxww.online {
 }
 
 api.xxww.online {
-	reverse_proxy cliproxy:8317
+	reverse_proxy cliproxy:8317 {
+		transport http {
+			read_timeout 600s
+		}
+	}
 }
 
 dc.xxww.online {

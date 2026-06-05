@@ -14,6 +14,7 @@ import type {
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from './apiProfiles'
+import { chatModelSupportsHostedImageTool, getAgentImageEngine } from './chatModels'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage } from './agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './agentImageReferences'
 import { IMAGE_FETCH_CORS_HINT } from './imageApiShared'
@@ -894,6 +895,15 @@ async function executeAgentRound(
   requestSettings: AppSettings,
   activeProfile: ApiProfile,
 ) {
+  // Agent 对话用独立的 agentModel（与图像配置解耦）；超时/流式等沿用活动配置。
+  const agentProfile: ApiProfile = { ...activeProfile, apiMode: 'responses', model: requestSettings.agentModel }
+  // 该对话模型实际出图所用的图像模型：支持托管工具(gpt-5.5)沿用活动配置；否则(grok)用其 imageEngine。
+  const agentImageModel = chatModelSupportsHostedImageTool(requestSettings.agentModel)
+    ? activeProfile.model
+    : getAgentImageEngine(requestSettings.agentModel)
+  const agentImageProvider = chatModelSupportsHostedImageTool(requestSettings.agentModel)
+    ? activeProfile.provider
+    : 'xAI'
   const startedAt = Date.now()
   const controller = new AbortController()
   const controllerKey = getAgentRoundControllerKey(conversationId, roundId)
@@ -957,11 +967,11 @@ async function executeAgentRound(
         id: genId(),
         prompt: taskPrompt,
         params: { ...params, n: 1 },
-        apiProvider: activeProfile.provider,
+        apiProvider: agentImageProvider,
         apiProfileId: activeProfile.id,
         apiProfileName: activeProfile.name,
         apiMode: activeProfile.apiMode,
-        apiModel: activeProfile.model,
+        apiModel: agentImageModel,
         inputImageIds,
         maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : round.maskTargetImageId ?? null,
         maskImageId: options.maskImageId !== undefined ? options.maskImageId : round.maskImageId ?? null,
@@ -1119,7 +1129,8 @@ async function executeAgentRound(
       const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds }) => {
 
         const batchResult = await callBatchImageSingle({
-          profile: activeProfile,
+          settings: requestSettings,
+          profile: agentProfile,
           params,
           batchItemId: item.id,
           prompt: item.prompt,
@@ -1194,7 +1205,7 @@ async function executeAgentRound(
       let currentResponseOutputItems: ResponsesOutputItem[] = []
       const result = await callAgentResponsesApi({
         settings: requestSettings,
-        profile: activeProfile,
+        profile: agentProfile,
         params,
         input: apiInputForTurn,
         maskDataUrl,
@@ -1291,7 +1302,7 @@ async function executeAgentRound(
           id: genId(),
           prompt: image.revisedPrompt ?? round?.prompt ?? userMessage.content,
           params,
-          apiProvider: activeProfile.provider,
+          apiProvider: agentImageProvider,
           apiProfileId: activeProfile.id,
           apiProfileName: activeProfile.name,
           apiMode: activeProfile.apiMode,
@@ -1466,7 +1477,8 @@ async function executeAgentRound(
       const upstreamHint = getUpstreamApiErrorHint(err)
       if (upstreamHint) message += `\n${upstreamHint}`
     }
-    message = getUserFacingErrorMessage(message, 'Agent 请求失败')
+    const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+    message = getUserFacingErrorMessage(message, 'Agent 请求失败', { apiUpstream: !isNetworkOrTimeout })
 
     updateAgentConversation(conversationId, (current) => {
       const failedRound = current.rounds.find((round) => round.id === roundId)

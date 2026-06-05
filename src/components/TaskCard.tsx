@@ -8,6 +8,7 @@ import { getImageModelLabel, isKnownImageModel } from '../lib/imageModels'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
+import { getVideo } from '../lib/db'
 
 interface Props {
   task: TaskRecord
@@ -68,6 +69,8 @@ function TaskCard({
   disableSwipe,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
+  const [videoSrc, setVideoSrc] = useState<string>('')
+  const [videoPosterSrc, setVideoPosterSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
@@ -90,6 +93,7 @@ function TaskCard({
   const swipeOffsetRef = useRef(0)
   const pendingSwipeOffsetRef = useRef(0)
   const swipeFrameRef = useRef<number | null>(null)
+  const isVideoTask = task.mediaType === 'video'
 
   const updateSwipeDirection = (nextDirection: -1 | 0 | 1) => {
     if (swipeDirectionRef.current === nextDirection) return
@@ -251,6 +255,7 @@ function TaskCard({
     setCoverRatio('')
     setCoverSize('')
     setThumbSrc('')
+    if (isVideoTask) return
 
     let cancelled = false
     const imageId = task.outputImages?.[0]
@@ -279,7 +284,33 @@ function TaskCard({
       cancelled = true
       unsubscribe?.()
     }
-  }, [task.outputImages])
+  }, [isVideoTask, task.outputImages])
+
+  useEffect(() => {
+    setVideoSrc('')
+    setVideoPosterSrc('')
+    if (!isVideoTask || !task.outputVideos?.[0]) return
+
+    let cancelled = false
+    let objectUrl = ''
+    getVideo(task.outputVideos[0]).then((video) => {
+      if (cancelled || !video) return
+      if (video.blob) {
+        objectUrl = URL.createObjectURL(video.blob)
+        setVideoSrc(objectUrl)
+      } else if (video.remoteUrl) {
+        setVideoSrc(video.remoteUrl)
+      }
+      setVideoPosterSrc(video.posterDataUrl || '')
+    }).catch(() => {
+      if (!cancelled) setVideoSrc('')
+    })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [isVideoTask, task.outputVideos])
 
   const duration = (() => {
     let seconds: number
@@ -325,18 +356,18 @@ function TaskCard({
     : 'bg-gray-200 dark:bg-gray-700'
 
   const qualityDisplay = getParamDisplay(task, 'quality')
-  const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
+  const showQuality = !isVideoTask && (task.params.quality !== 'auto' || qualityDisplay.isMismatch)
 
   const sizeDisplay = getParamDisplay(task, 'size')
-  const showSize = task.params.size !== 'auto' || sizeDisplay.isMismatch
+  const showSize = !isVideoTask && (task.params.size !== 'auto' || sizeDisplay.isMismatch)
 
   const formatDisplay = getParamDisplay(task, 'output_format')
-  const showFormat = task.params.output_format !== 'png' || formatDisplay.isMismatch
+  const showFormat = !isVideoTask && (task.params.output_format !== 'png' || formatDisplay.isMismatch)
 
   const nDisplay = getParamDisplay(task, 'n')
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
   const showPendingPrompt = isAgentTaskPromptPending(task)
-  const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
+  const showN = !isVideoTask && !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
 
   // 始终标注可选图像模型（gpt-image-2 / grok-imagine-image），便于一眼区分是哪个模型生的；
   // 其余情况沿用旧规则——仅当非默认模型时显示，避免给历史卡片平添噪声。
@@ -387,7 +418,7 @@ function TaskCard({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
-        draggable={task.status === 'done' && task.outputImages?.length > 0}
+        draggable={!isVideoTask && task.status === 'done' && task.outputImages?.length > 0}
         onDragStart={(e) => {
           if (task.status !== 'done' || !task.outputImages?.length) return;
           const imageIds = task.outputImages;
@@ -503,7 +534,17 @@ function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'done' && thumbSrc && (
+          {task.status === 'done' && isVideoTask && videoSrc && (
+            <video
+              src={videoSrc}
+              poster={videoPosterSrc || undefined}
+              className="h-full w-full object-cover"
+              muted
+              playsInline
+              preload="metadata"
+            />
+          )}
+          {task.status === 'done' && !isVideoTask && thumbSrc && (
             <>
               <img
                 src={thumbSrc}
@@ -520,7 +561,17 @@ function TaskCard({
               )}
             </>
           )}
-          {task.status === 'done' && !thumbSrc && (
+          {task.status === 'done' && isVideoTask && !videoSrc && (
+            <svg
+              className="w-8 h-8 text-gray-300"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          )}
+          {task.status === 'done' && !isVideoTask && !thumbSrc && (
             <svg
               className="w-8 h-8 text-gray-300"
               fill="none"
@@ -631,6 +682,11 @@ function TaskCard({
                   </span>
                 </span>
               )}
+              {isVideoTask && (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 text-xs flex-shrink-0">
+                  视频{task.videoDurationSeconds ? ` · ${task.videoDurationSeconds}s` : ''}
+                </span>
+              )}
               {/* Mask */}
               {task.maskImageId && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
@@ -737,7 +793,7 @@ function TaskCard({
                 tooltip="编辑输出"
                 onClick={onEditOutputs}
                 className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
-                disabled={!task.outputImages?.length}
+                disabled={isVideoTask || !task.outputImages?.length}
               >
                 <svg
                   className="w-4 h-4"

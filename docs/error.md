@@ -98,3 +98,42 @@ curl https://your-domain/api-proxy/models \
 ```
 
 返回模型列表即表示修复成功。
+
+## 出图请求约 60 秒后失败：网络请求失败 + 反向代理超时提示
+
+### 症状
+
+前端任务卡片显示两段拼接的错误信息：
+
+```
+网络请求失败：无法连接到团队 API 代理，请稍后重试或联系管理员。
+提示：请求等待约 60 秒后被断开，这通常是反向代理的默认超时，而非接口本身报错。可调大代理的超时时间，或降低图片尺寸/质量后重试。
+```
+
+### 原因
+
+Caddy 反向代理 `api.xxww.online → cliproxy:8317` 未配置 `read_timeout`，Caddy 默认约 60 秒无响应即断开连接。出图（尤其 `/images/edits`）单次请求常超过 60 秒，被 Caddy 切断后前端收到 `TypeError: Failed to fetch`。
+
+### 修复
+
+修改 Caddyfile，给 `api.xxww.online` 加 600 秒读超时：
+
+```caddyfile
+api.xxww.online {
+	reverse_proxy cliproxy:8317 {
+		transport http {
+			read_timeout 600s
+		}
+	}
+}
+```
+
+重新加载 Caddy：
+
+```bash
+docker exec picpilot-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+```
+
+### 验证
+
+提交一个耗时较长的出图请求（如大尺寸 edits），确认不再 60 秒报错，能正常等到结果或超时提示变为「请求超时：上游长时间没有返回」（说明已由客户端超时控制，而非 Caddy 切断）。

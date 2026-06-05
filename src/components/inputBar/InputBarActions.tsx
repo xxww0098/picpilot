@@ -11,6 +11,7 @@ export type InputBarActionsProps = {
   canSubmit: boolean
   submitButtonAriaLabel: string
   submitTooltipText: string
+  submitIdleLabel?: string
   maskDraft: MaskDraft | null
   fileInputRef: RefObject<HTMLInputElement | null>
   cameraInputRef: RefObject<HTMLInputElement | null>
@@ -78,6 +79,7 @@ export default function InputBarActions({
   submitButtonAriaLabel,
   submitTooltipText,
   maskDraft,
+  submitIdleLabel = maskDraft ? '遮罩编辑' : '生成图像',
   fileInputRef,
   cameraInputRef,
   canPerImageSplit = false,
@@ -226,7 +228,7 @@ export default function InputBarActions({
         ) : (
           <SubmitIcon className={variant === 'mobile' ? 'w-4 h-4' : undefined} />
         )}
-        {variant === 'mobile' && (activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像')}
+        {variant === 'mobile' && (activeAgentIsRunning ? '停止生成' : submitIdleLabel)}
       </button>
     </div>
   )

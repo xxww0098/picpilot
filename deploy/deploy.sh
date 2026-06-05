@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-COMPOSE_DIR="/opt/docker_file"
+COMPOSE_DIR="/opt/picpilot"
 PROJECT_DIR="/root/picpilot"
 
 cd "$PROJECT_DIR"

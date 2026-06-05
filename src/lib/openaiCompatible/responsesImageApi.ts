@@ -9,12 +9,14 @@ import {
   getApiErrorMessage,
   getDataUrlDecodedByteSize,
   getDataUrlEncodedByteSize,
+  getImageApiFanoutConcurrency,
   loggedFetch,
   mergeActualParams,
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
 } from '../imageApiShared'
+import { settleWithConcurrency } from '../runWithConcurrency'
 import {
   collectConcurrentFailures,
   createRequestHeaders,
@@ -205,13 +207,16 @@ export async function callResponsesImageApi(opts: CallApiOptions, profile: ApiPr
     return callResponsesImageApiSingle(opts, profile)
   }
 
-  const promises = Array.from({ length: n }).map((_, requestIndex) => callResponsesImageApiSingle({
-    ...opts,
-    onPartialImage: opts.onPartialImage
-      ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
-      : undefined,
-  }, profile))
-  const results = await Promise.allSettled(promises)
+  const results = await settleWithConcurrency(
+    Array.from({ length: n }),
+    getImageApiFanoutConcurrency({ maxConcurrent: opts.fanoutConcurrency }),
+    (_, requestIndex) => callResponsesImageApiSingle({
+      ...opts,
+      onPartialImage: opts.onPartialImage
+        ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
+        : undefined,
+    }, profile),
+  )
   
   const successfulResults = results
     .filter((r): r is PromiseFulfilledResult<CallApiResult> => r.status === 'fulfilled')

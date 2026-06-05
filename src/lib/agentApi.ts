@@ -1,5 +1,7 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
-import { DEFAULT_RESPONSES_MODEL } from './apiProfiles'
+import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, normalizeSettings } from './apiProfiles'
+import { chatModelSupportsHostedImageTool, getAgentImageEngine } from './chatModels'
+import { callImageApi } from './api'
 import { getStoredAuthToken } from './auth'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
@@ -52,17 +54,25 @@ const AGENT_IMAGE_INSTRUCTIONS = [
   'Resolve user mentions ("the first image") to the matching id. Only use existing ids in image_generation prompts and generate_image_batch prompts.',
 ].join('\n')
 
-function createAgentInstructions(settings: AppSettings) {
+function createAgentInstructions(settings: AppSettings, hostedImageTool: boolean) {
   const maxToolRounds = Number.isFinite(settings.agentMaxToolRounds)
     ? Math.max(1, Math.trunc(settings.agentMaxToolRounds))
     : DEFAULT_AGENT_MAX_TOOL_ROUNDS
+  // 无托管图像工具的对话模型（grok）：所有出图都必须走 generate_image_batch，连单图也是。
+  const noHostedToolDirective = hostedImageTool ? [] : [
+    '',
+    '## IMPORTANT — how to generate images',
+    'You do NOT have a built-in image-generation tool. To produce ANY image — including a single image — you MUST call the generate_image_batch function with one or more image entries.',
+    'Never draw with HTML/SVG/markdown, never describe an image as a substitute for generating it, and never claim an image tool you do not have.',
+  ]
   return [
     AGENT_IMAGE_INSTRUCTIONS,
+    ...noHostedToolDirective,
     '',
     '## Tool policy',
     `- Current maximum tool-use rounds for this Agent turn: ${maxToolRounds}.`,
     '- Call continue_generation ONLY when you have generated a prerequisite image and need another round to generate dependent images. Do NOT call it when the task is complete.',
-    '- When web_search is available, use it only when current external information would improve the answer or the user asks for research/news/facts.',
+    ...(hostedImageTool ? ['- When web_search is available, use it only when current external information would improve the answer or the user asks for research/news/facts.'] : []),
     '- When the requested task is complete, stop calling tools and provide the final response.',
   ].join('\n')
 }
@@ -119,7 +129,12 @@ function createImageTool(params: TaskParams, profile: ApiProfile, maskDataUrl?: 
 }
 
 function createAgentTools(params: TaskParams, profile: ApiProfile, settings: AppSettings, maskDataUrl?: string): Array<Record<string, unknown>> {
-  const tools: Array<Record<string, unknown>> = [createImageTool(params, profile, maskDataUrl)]
+  // 对话模型不支持 OpenAI 托管 image_generation 工具时（如 grok），不下发它——
+  // 出图改由 generate_image_batch 函数调用 + Images API 完成（见 callBatchImageSingle）。
+  const hostedImageTool = chatModelSupportsHostedImageTool(resolveAgentModel(profile, settings))
+  const tools: Array<Record<string, unknown>> = hostedImageTool
+    ? [createImageTool(params, profile, maskDataUrl)]
+    : []
 
   // generate_image_batch: custom function tool for concurrent multi-image generation
   tools.push({
@@ -185,7 +200,7 @@ function createAgentTools(params: TaskParams, profile: ApiProfile, settings: App
     strict: true,
   })
 
-  if (settings.agentWebSearch) {
+  if (hostedImageTool && settings.agentWebSearch) {
     tools.push({ type: 'web_search' })
   }
   return tools
@@ -590,9 +605,11 @@ async function parseAgentStreamResponse(
   }
 }
 
-// Agent 走 Responses API（经 env 配置的上游代理）。仅当配置本身就是 Responses 模式时才沿用其模型，
-// 否则该模型多半是图像模型（如 gpt-image-2），需回退到对话模型，让 Agent 模式开箱即用。
-function resolveAgentModel(profile: ApiProfile): string {
+// Agent 走 Responses API（经 env 配置的上游代理）。优先使用独立的 settings.agentModel；
+// 旧数据/测试没有该字段时才兼容 Responses profile 的模型或默认对话模型。
+function resolveAgentModel(profile: ApiProfile, settings?: AppSettings): string {
+  const configured = settings?.agentModel?.trim()
+  if (configured) return configured
   return profile.apiMode === 'responses' && profile.model.trim() ? profile.model : DEFAULT_RESPONSES_MODEL
 }
 
@@ -621,8 +638,8 @@ export async function callAgentResponsesApi(opts: {
 
   try {
     const body: Record<string, unknown> = {
-      model: resolveAgentModel(profile),
-      instructions: createAgentInstructions(settings),
+      model: resolveAgentModel(profile, settings),
+      instructions: createAgentInstructions(settings, chatModelSupportsHostedImageTool(resolveAgentModel(profile, settings))),
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
     }
@@ -690,7 +707,7 @@ export async function callAgentConversationTitleApi(opts: {
       headers: createHeaders(profile, useApiProxy),
       cache: 'no-store',
       body: JSON.stringify({
-        model: resolveAgentModel(profile),
+        model: resolveAgentModel(profile, opts.settings),
         instructions: AGENT_TITLE_INSTRUCTIONS,
         input: [{ role: 'user', content }],
         max_output_tokens: 32,
@@ -732,7 +749,70 @@ export interface BatchImageCallResult {
  * Generate a single image using Responses API with prompt-rewrite guard.
  * This mirrors the gallery mode's callResponsesImageApiSingle pattern.
  */
+// grok 等无托管图像工具的对话模型：用 Images API（engine，如 grok-imagine-image）实际出图。
+// 合成一个仅含 openai images 配置的 settings 交给 callImageApi，复用画廊那套出图/流式/结果解析。
+async function generateBatchImageViaImagesApi(opts: {
+  settings: AppSettings
+  engine: string
+  profile: ApiProfile
+  params: TaskParams
+  batchItemId: string
+  prompt: string
+  referenceImageDataUrls: string[]
+  signal?: AbortSignal
+  onImageToolStarted?: () => void | Promise<void>
+  onPartialImage?: (event: { image: string; partialImageIndex?: number }) => void | Promise<void>
+  onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
+}): Promise<BatchImageCallResult> {
+  const { settings, engine, profile, params, batchItemId, prompt, referenceImageDataUrls, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
+  const imageProfile = createDefaultOpenAIProfile({
+    provider: 'xAI',
+    model: engine,
+    apiMode: 'images',
+    timeout: profile.timeout,
+    streamImages: profile.streamImages,
+    streamPartialImages: profile.streamPartialImages,
+  })
+  const imageSettings = normalizeSettings({
+    ...settings,
+    customProviders: [],
+    profiles: [imageProfile],
+    activeProfileId: imageProfile.id,
+    model: engine,
+    apiMode: 'images',
+    codexCli: false,
+  })
+
+  try {
+    await onImageToolStarted?.()
+    const result = await callImageApi({
+      settings: imageSettings,
+      prompt,
+      params,
+      inputImageDataUrls: referenceImageDataUrls,
+      onPartialImage: onPartialImage
+        ? (partial) => { void onPartialImage({ image: partial.image, partialImageIndex: partial.partialImageIndex }) }
+        : undefined,
+      signal,
+    })
+    const dataUrl = result.images[0]
+    if (!dataUrl) {
+      return { batchItemId, image: null, error: result.failedErrors?.[0] ?? '图像生成失败，未返回图片。' }
+    }
+    const image: AgentApiResultImage = {
+      dataUrl,
+      actualParams: result.actualParams ?? result.actualParamsList?.[0],
+      revisedPrompt: result.revisedPrompts?.[0],
+    }
+    await onImageToolCompleted?.(image)
+    return { batchItemId, image, error: null }
+  } catch (err) {
+    return { batchItemId, image: null, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export async function callBatchImageSingle(opts: {
+  settings: AppSettings
   profile: ApiProfile
   params: TaskParams
   batchItemId: string
@@ -744,7 +824,25 @@ export async function callBatchImageSingle(opts: {
   onPartialImage?: (event: { image: string; partialImageIndex?: number }) => void | Promise<void>
   onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
 }): Promise<BatchImageCallResult> {
-  const { profile, params, batchItemId, prompt, referenceImageDataUrls, referenceIds, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
+  const { settings, profile, params, batchItemId, prompt, referenceImageDataUrls, referenceIds, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
+
+  // 对话模型不支持托管 image_generation 工具（grok）→ 改用 Images API（grok-imagine-image 等）实际出图。
+  if (!chatModelSupportsHostedImageTool(resolveAgentModel(profile, settings))) {
+    return generateBatchImageViaImagesApi({
+      settings,
+      engine: getAgentImageEngine(resolveAgentModel(profile, settings)),
+      profile,
+      params,
+      batchItemId,
+      prompt,
+      referenceImageDataUrls,
+      signal,
+      onImageToolStarted,
+      onPartialImage,
+      onImageToolCompleted,
+    })
+  }
+
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy()
@@ -793,7 +891,7 @@ export async function callBatchImageSingle(opts: {
     }
 
     const body: Record<string, unknown> = {
-      model: resolveAgentModel(profile),
+      model: resolveAgentModel(profile, settings),
       input,
       tools: [tool],
       tool_choice: 'required',

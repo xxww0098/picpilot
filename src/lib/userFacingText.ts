@@ -86,6 +86,7 @@ export function getApiModeLabel(value: string | null | undefined): string {
 export function getProviderDisplayName(value: string | null | undefined): string {
   if (!value) return '—'
   if (value === 'openai') return 'OpenAI 兼容'
+  if (value === 'xAI') return 'xAI Imagine'
   return value
 }
 
@@ -100,10 +101,35 @@ export function getParamValueLabel(paramKey: string, value: string | number | nu
   return PARAM_VALUE_LABELS[paramKey]?.[raw] ?? raw
 }
 
-export function getUserFacingErrorMessage(error: unknown, fallback = '操作失败', httpStatus?: number): string {
+export interface GetUserFacingErrorMessageOptions {
+  httpStatus?: number
+  /**
+   * 设为 true 表示消息来自上游 API（cliproxy / OpenAI 兼容接口）的错误响应体，
+   * 应原样透传给用户，不做任何正则改写（仅清理 Error: 前缀）。
+   */
+  apiUpstream?: boolean
+}
+
+export function getUserFacingErrorMessage(error: unknown, fallback = '操作失败', httpStatusOrOpts?: number | GetUserFacingErrorMessageOptions): string {
+  const opts = typeof httpStatusOrOpts === 'number' ? { httpStatus: httpStatusOrOpts } : httpStatusOrOpts
+  const httpStatus = opts?.httpStatus
+  const apiUpstream = opts?.apiUpstream
+
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const message = cleanTechnicalPrefix(raw || fallback)
   if (!message) return fallback
+
+  // 上游 API 错误已由后端原样透传，直接展示给用户，不做正则改写。
+  if (apiUpstream) {
+    // CF 错误页（HTML）或后端透传的 5xx 网关错误 → 给出明确的等待提示。
+    if (/cloudflare|cdn-cgi|ray\s*id/i.test(message)) {
+      return '上游服务暂时不可用（Cloudflare 网关错误），请稍等几分钟后重试。'
+    }
+    if (/^HTTP\s*5(02|03|04)\b/.test(message) || /^(502|503|504)\b/.test(message) || /bad\s*gateway|gateway\s*timeout|service\s*unavailable/i.test(message)) {
+      return `上游服务暂时不可用（${message.match(/^HTTP\s*\d+|^\d{3}/)?.[0] ?? message}），请稍等几分钟后重试。`
+    }
+    return message
+  }
 
   // 后端已给出清晰文案的场景直接透传（含排队繁忙提示，避免被下方通用 429 文案覆盖为"额度已用完"）。
   if (/用户名或密码错误|登录失败次数过多|邀请码|密码至少|用户名长度|用户名已被占用|额度|团队服务|批量生成数量上限|服务繁忙|排队/.test(message)) {

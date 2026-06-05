@@ -1,5 +1,6 @@
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import { useHintTooltip } from '../../hooks/useHintTooltip'
+import { getProviderCapabilities } from '../../lib/imageProviderCapabilities'
 import Select from '../Select'
 import ButtonTooltip from './ButtonTooltip'
 import type { TaskParams } from '../../types'
@@ -9,6 +10,7 @@ export type InputBarParamsPanelProps = {
   params: TaskParams
   setParams: (patch: Partial<TaskParams>) => void
   settings: { codexCli?: boolean }
+  provider?: string
   displaySize: string
   qualityOptions: { label: string; value: string }[]
   compressionDisabled: boolean
@@ -39,6 +41,7 @@ export default function InputBarParamsPanel({
   params,
   setParams,
   settings,
+  provider,
   displaySize,
   qualityOptions,
   compressionDisabled,
@@ -63,6 +66,7 @@ export default function InputBarParamsPanel({
   compressionHint,
   nLimitHint,
 }: InputBarParamsPanelProps) {
+  const caps = getProviderCapabilities(provider)
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
   return (
@@ -89,33 +93,39 @@ export default function InputBarParamsPanel({
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
         <Select
-          value={settings.codexCli ? 'auto' : params.quality}
+          value={(settings.codexCli || !caps.supportsQuality) ? 'auto' : params.quality}
           onChange={(val) => {
-            if (!settings.codexCli) setParams({ quality: val as any })
+            if (!settings.codexCli && caps.supportsQuality) setParams({ quality: val as any })
           }}
           options={qualityOptions}
-          disabled={settings.codexCli}
-          className={settings.codexCli
+          disabled={settings.codexCli || !caps.supportsQuality}
+          className={(settings.codexCli || !caps.supportsQuality)
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
-          visible={Boolean(settings.codexCli) && qualityHint.visible}
-          text="Codex CLI 不支持质量参数"
+          visible={Boolean(settings.codexCli || !caps.supportsQuality) && qualityHint.visible}
+          text={!caps.supportsQuality ? '当前服务商不支持质量参数' : 'Codex CLI 不支持质量参数'}
         />
       </label>
       <label className="flex flex-col gap-0.5">
         <span className="text-gray-400 dark:text-gray-500 ml-1">格式</span>
-        <Select
-          value={params.output_format}
-          onChange={(val) => setParams({ output_format: val as any })}
-          options={[
-            { label: 'PNG', value: 'png' },
-            { label: 'JPEG', value: 'jpeg' },
-            { label: 'WebP', value: 'webp' },
-          ]}
-          className={selectClass}
-        />
+        {caps.supportsOutputFormat ? (
+          <Select
+            value={params.output_format}
+            onChange={(val) => setParams({ output_format: val as any })}
+            options={[
+              { label: 'PNG', value: 'png' },
+              { label: 'JPEG', value: 'jpeg' },
+              { label: 'WebP', value: 'webp' },
+            ]}
+            className={selectClass}
+          />
+        ) : (
+          <div className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 text-xs cursor-not-allowed">
+            默认
+          </div>
+        )}
       </label>
       <label
         className="relative flex flex-col gap-0.5"
@@ -144,7 +154,7 @@ export default function InputBarParamsPanel({
         />
         <ButtonTooltip
           visible={compressionHint.visible}
-          text="仅 JPEG 和 WebP 支持压缩率"
+          text={!caps.supportsCompression ? '当前服务商不支持压缩率' : '仅 JPEG 和 WebP 支持压缩率'}
         />
       </label>
       <label className="flex flex-col gap-0.5">

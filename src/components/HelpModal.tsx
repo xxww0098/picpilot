@@ -21,6 +21,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
   const isMobile = useIsMobile()
   const modalRef = useRef<HTMLDivElement>(null)
   const isAgentMode = appMode === 'agent'
+  const isVideoMode = appMode === 'video'
 
   return (
     <ModalShell
@@ -58,11 +59,25 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
               <section>
                 <div className="space-y-4">
                   <ul className="list-disc pl-4 space-y-2">
-                    <li>需要使用 Responses API 配置。</li>
-                    <li>如需 Agent 搜索互联网或读取 URL 内容，可在设置的 Agent 配置中开启“网络搜索”。</li>
+                    <li>顶栏可在 <strong className="text-gray-800 dark:text-gray-100 font-medium">GPT-5.5</strong> 与 <strong className="text-gray-800 dark:text-gray-100 font-medium">Grok 4.3</strong> 间切换对话模型。</li>
+                    <li>GPT-5.5 使用托管图像工具出图；Grok 4.3 不支持托管图像工具，Agent 会自动改用 <code className="rounded bg-gray-100 px-1 py-0.5 text-xs dark:bg-white/[0.06]">grok-imagine-image</code> 生图。</li>
+                    <li>如需 Agent 搜索互联网或读取 URL 内容，可在设置的 Agent 配置中开启“网络搜索”；该能力只在支持托管工具的对话模型下可用。</li>
                     <li>输入 <strong className="text-blue-500 dark:text-blue-400 font-medium">@</strong> 可引用参考图或前面轮次生成的图片；Agent 也会自行参考上下文中的图片。</li>
                     <li>编辑某轮消息重新发送，或重新生成某轮消息，会产生可切换的分支。</li>
                     <li>生成的图片会同步到画廊；删除对话默认不会删除画廊中的记录。</li>
+                  </ul>
+                </div>
+              </section>
+            </>
+          ) : isVideoMode ? (
+            <>
+              <section>
+                <div className="space-y-4">
+                  <ul className="list-disc pl-4 space-y-2">
+                    <li>video 模式使用 <code className="rounded bg-gray-100 px-1 py-0.5 text-xs dark:bg-white/[0.06]">grok-imagine-video-1.5-preview</code> 提交异步视频任务。</li>
+                    <li>可直接输入提示词生成视频，也可上传 1 张参考图做图生视频。</li>
+                    <li>底部参数可选择 6、10、15 秒；视频模式不支持遮罩局部重绘。</li>
+                    <li>生成完成后会缓存视频文件，视频记录只在 video 页显示，不混入图片画廊。</li>
                   </ul>
                 </div>
               </section>

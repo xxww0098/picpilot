@@ -7,8 +7,10 @@ import {
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
+  DEFAULT_XAI_IMAGES_MODEL,
   getApiProviderLabel,
   getActiveApiProfile,
+  getDefaultModelForProvider,
   importCustomProviderSettingsFromJson,
   isOpenAICompatibleProvider,
   mergeImportedSettings,
@@ -16,6 +18,7 @@ import {
   normalizeCustomProviderDefinition,
   normalizeSettings,
   normalizeStreamPartialImages,
+  normalizeVideoDurationSeconds,
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
@@ -105,11 +108,12 @@ export default function SettingsModal() {
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
-  const defaultProviderOrder = ['openai', ...draft.customProviders.map(p => p.id)]
+  const defaultProviderOrder = ['openai', 'xAI', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
+    { label: 'xAI Imagine', value: 'xAI', draggable: true },
     ...draft.customProviders.map((provider) => ({
       label: provider.name,
       value: provider.id,
@@ -136,8 +140,8 @@ export default function SettingsModal() {
     })
   ]
 
-  const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
-    apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+  const getDefaultModelForMode = (apiMode: AppSettings['apiMode'], provider = activeProfile.provider) =>
+    getDefaultModelForProvider(provider, apiMode)
 
   const wasSettingsOpenRef = useRef(false)
 
@@ -241,7 +245,7 @@ export default function SettingsModal() {
 
   const commitSettings = (nextDraft: AppSettings) => {
     const normalizedProfiles = nextDraft.profiles.map((profile) => {
-      const defaultModel = getDefaultModelForMode(profile.apiMode)
+      const defaultModel = getDefaultModelForMode(profile.apiMode, profile.provider)
       return {
         ...profile,
         name: profile.name.trim() || (profile.id === DEFAULT_OPENAI_PROFILE_ID ? '默认' : '新配置'),
@@ -249,6 +253,7 @@ export default function SettingsModal() {
         apiKey: '',
         model: profile.model.trim() || defaultModel,
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
+        apiMode: profile.provider === 'xAI' ? 'images' : profile.apiMode,
         codexCli: profile.provider === 'openai' ? profile.codexCli : false,
         streamImages: profile.provider === 'openai' ? profile.streamImages : false,
         streamPartialImages: profile.provider === 'openai' ? normalizeStreamPartialImages(profile.streamPartialImages) : DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -257,6 +262,7 @@ export default function SettingsModal() {
     const fallbackProfile = createDefaultOpenAIProfile({ id: newId('openai') })
     const normalizedDraft = normalizeSettings({
       ...nextDraft,
+      videoDurationSeconds: normalizeVideoDurationSeconds(nextDraft.videoDurationSeconds),
       profiles: normalizedProfiles.length ? normalizedProfiles : [fallbackProfile],
       activeProfileId: normalizedProfiles.some((profile) => profile.id === nextDraft.activeProfileId)
         ? nextDraft.activeProfileId
@@ -273,7 +279,7 @@ export default function SettingsModal() {
 
     if (profile.provider === 'openai') {
       url.searchParams.set('apiMode', profile.apiMode)
-      const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode)
+      const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode, profile.provider)
       url.searchParams.set('model', model)
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
       if (profile.streamImages !== DEFAULT_SETTINGS.streamImages) url.searchParams.set('streamImages', String(Boolean(profile.streamImages)))
@@ -313,7 +319,7 @@ export default function SettingsModal() {
       await testApiConnection(activeProfile)
       showToast('接口连通性测试成功。', 'success')
     } catch (err) {
-      showToast(`接口连通性测试失败：${getUserFacingErrorMessage(err, '请检查团队 API 代理是否正常运行')}`, 'error')
+      showToast(`接口连通性测试失败：${getUserFacingErrorMessage(err, '请检查团队 API 代理是否正常运行', { apiUpstream: true })}`, 'error')
     } finally {
       setTestingConnectionProfileId(null)
     }
@@ -595,7 +601,7 @@ export default function SettingsModal() {
   }
 
   const handleProviderReorder = (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => {
-    const currentOrder = draft.providerOrder || ['openai', ...draft.customProviders.map(p => p.id)]
+    const currentOrder = draft.providerOrder || ['openai', 'xAI', ...draft.customProviders.map(p => p.id)]
     const sourceIndex = currentOrder.indexOf(String(sourceValue))
     const targetIndex = currentOrder.indexOf(String(targetValue))
     if (sourceIndex < 0 || targetIndex < 0) return
@@ -1097,6 +1103,8 @@ export default function SettingsModal() {
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeCustomProvider ? (
                     <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
+                  ) : activeProfile.provider === 'xAI' ? (
+                    <>xAI Images API 可使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">grok-imagine-image</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_XAI_IMAGES_MODEL}</code>。</>
                   ) : (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
                     <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
                   ) : (
@@ -1152,7 +1160,7 @@ export default function SettingsModal() {
                               const apiMode = value as AppSettings['apiMode']
                               const nextModel =
                                 activeProfile.model === DEFAULT_IMAGES_MODEL || activeProfile.model === DEFAULT_RESPONSES_MODEL
-                                  ? getDefaultModelForMode(apiMode)
+                                  ? getDefaultModelForMode(apiMode, 'openai')
                                   : activeProfile.model
                               updateActiveProfile({ apiMode, model: nextModel }, true)
                             }}
@@ -1209,24 +1217,26 @@ export default function SettingsModal() {
                         </div>
                       )}
 
-                      <div className="block">
-                        <div className="mb-1.5 flex items-center justify-between">
-                          <span className="block text-sm text-gray-600 dark:text-gray-300">直接返回图片数据（Base64）</span>
-                          <button
-                            type="button"
-                            onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
-                            className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                            role="switch"
-                            aria-checked={!!activeProfile.responseFormatB64Json}
-                            aria-label="直接返回图片数据（Base64）"
-                          >
-                            <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.responseFormatB64Json ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                          </button>
+                      {activeProfile.provider !== 'xAI' && (
+                        <div className="block">
+                          <div className="mb-1.5 flex items-center justify-between">
+                            <span className="block text-sm text-gray-600 dark:text-gray-300">直接返回图片数据（Base64）</span>
+                            <button
+                              type="button"
+                              onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
+                              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                              role="switch"
+                              aria-checked={!!activeProfile.responseFormatB64Json}
+                              aria-label="直接返回图片数据（Base64）"
+                            >
+                              <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.responseFormatB64Json ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                            </button>
+                          </div>
+                          <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                            接口直接返回 Base64，避免 URL 跨域或过期；并非所有服务商支持。
+                          </div>
                         </div>
-                        <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                          接口直接返回 Base64，避免 URL 跨域或过期；并非所有服务商支持。
-                        </div>
-                      </div>
+                      )}
 
                       {activeProfile.provider === 'openai' && (
                         <div className="block">

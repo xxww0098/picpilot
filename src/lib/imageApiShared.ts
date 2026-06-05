@@ -10,6 +10,30 @@ export const MIME_MAP: Record<string, string> = {
 
 export const MAX_MASK_EDIT_FILE_BYTES = 50 * 1024 * 1024
 export const MAX_IMAGE_INPUT_PAYLOAD_BYTES = 512 * 1024 * 1024
+export const DEFAULT_IMAGE_API_FANOUT_CONCURRENCY = 5
+
+export interface ImageApiFanoutLoadSnapshot {
+  maxConcurrent?: number | null
+  inflight?: number | null
+  queued?: number | null
+}
+
+function normalizeNonNegativeInteger(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+}
+
+function normalizePositiveInteger(value: number | null | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+export function getImageApiFanoutConcurrency(snapshot: ImageApiFanoutLoadSnapshot = {}): number {
+  const maxConcurrent = normalizePositiveInteger(snapshot.maxConcurrent, DEFAULT_IMAGE_API_FANOUT_CONCURRENCY)
+  const queued = normalizeNonNegativeInteger(snapshot.queued)
+  if (queued > 0) return 1
+
+  const inflight = normalizeNonNegativeInteger(snapshot.inflight)
+  return Math.max(1, Math.min(maxConcurrent, maxConcurrent - inflight))
+}
 
 export interface CallApiOptions {
   settings: AppSettings
@@ -22,6 +46,8 @@ export interface CallApiOptions {
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
   /** 调用方取消信号；与各 provider 内部的超时 controller 合并，用于用户主动取消任务 */
   signal?: AbortSignal
+  /** 限制单次批量 fan-out，不设置时按默认可用并发计算。 */
+  fanoutConcurrency?: number
 }
 
 export interface CallApiResult {

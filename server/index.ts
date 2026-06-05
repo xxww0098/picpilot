@@ -594,6 +594,10 @@ function createApiProxyResponseHeaders(response: Response): Headers {
   return headers
 }
 
+function isAbortLikeError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
+}
+
 // ===== app =====
 
 const app = new Hono()
@@ -934,6 +938,10 @@ app.all('/api-proxy/*', async (c) => {
     } as RequestInit)
   } catch (err) {
     release()
+    if (c.req.raw.signal.aborted || isAbortLikeError(err)) {
+      logger.info({ scope: 'proxy', target: target.href, err: String(err) }, 'API proxy request aborted')
+      return new Response(null, { status: 499 })
+    }
     logger.error({ scope: 'proxy', target: target.href, err: String(err) }, 'Upstream API request failed')
     return c.json({ error: err instanceof Error ? err.message : '上游 API 请求失败，请稍后重试。' }, 502)
   }

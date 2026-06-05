@@ -1,27 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { getParamValueLabel } from '../lib/userFacingText'
+import { getProviderCapabilities } from '../lib/imageProviderCapabilities'
 import ModalShell from './ModalShell'
 import ViewportTooltip from './ViewportTooltip'
-
-const TIERS: SizeTier[] = ['1K', '2K', '4K']
-const SIZE_LIMIT_TEXT = '由于模型限制，最终输出会自动规整到合法尺寸：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。'
-const RATIOS = [
-  { label: '1:1', value: '1:1' },
-  { label: '3:2', value: '3:2' },
-  { label: '2:3', value: '2:3' },
-  { label: '16:9', value: '16:9' },
-  { label: '9:16', value: '9:16' },
-  { label: '4:3', value: '4:3' },
-  { label: '3:4', value: '3:4' },
-  { label: '21:9', value: '21:9' },
-]
 
 interface Props {
   currentSize: string
   onSelect: (size: string) => void
   onClose: () => void
   allowAuto?: boolean
+  provider?: string
 }
 
 type Mode = 'auto' | 'ratio' | 'resolution'
@@ -32,10 +21,10 @@ function parseSize(size: string) {
   return { width: match[1], height: match[2] }
 }
 
-function findPresetForSize(size: string) {
+function findPresetForSize(size: string, tiers: SizeTier[], ratios: { label: string; value: string }[]) {
   const normalized = normalizeImageSize(size)
-  for (const tier of TIERS) {
-    for (const ratio of RATIOS) {
+  for (const tier of tiers) {
+    for (const ratio of ratios) {
       if (calculateImageSize(tier, ratio.value) === normalized) {
         return { tier, ratio: ratio.value }
       }
@@ -44,19 +33,21 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, provider }: Props) {
+  const caps = getProviderCapabilities(provider)
+  const { tiers, ratios, limitText } = caps.sizePresets
   const modalRef = useRef<HTMLDivElement>(null)
-  const currentPreset = findPresetForSize(currentSize)
+  const currentPreset = findPresetForSize(currentSize, tiers, ratios)
   const currentParsedSize = parseSize(currentSize)
   const [mode, setMode] = useState<Mode>(() => {
     if (!currentSize || currentSize === 'auto') return allowAuto ? 'auto' : 'ratio'
     if (currentPreset) return 'ratio'
-    return 'resolution'
+    return caps.sizeMode === 'pixels' ? 'resolution' : 'ratio'
   })
 
   // Ratio mode state
-  const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
-  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+  const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? tiers[0])
+  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : ratios[0]?.value ?? '1:1'))
   const [customRatio, setCustomRatio] = useState('16:9')
 
   // Resolution mode state
@@ -183,12 +174,14 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             >
               按比例
             </button>
-            <button
-              onClick={() => setMode('resolution')}
-              className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'resolution' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
-            >
-              自定义宽高
-            </button>
+            {caps.sizeMode === 'pixels' && (
+              <button
+                onClick={() => setMode('resolution')}
+                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'resolution' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+              >
+                自定义宽高
+              </button>
+            )}
           </div>
 
           <div className="h-[380px] max-h-[55vh] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 dark:scrollbar-thumb-white/10 pr-1 -mr-1 pb-2">
@@ -213,9 +206,11 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             {mode === 'ratio' && (
               <div className="space-y-5 animate-fade-in">
                 <section>
-                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">基准分辨率</div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {TIERS.map((item) => (
+                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">
+                    {caps.sizeMode === 'pixels' ? '基准分辨率' : '分辨率档位'}
+                  </div>
+                  <div className={`grid gap-2 ${tiers.length <= 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                    {tiers.map((item) => (
                       <button key={item} className={buttonClass(tier === item)} onClick={() => setTier(item)}>
                         {item}
                       </button>
@@ -226,7 +221,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">图像比例</div>
                   <div className="grid grid-cols-4 gap-2">
-                    {RATIOS.map((item) => {
+                    {ratios.map((item) => {
                       const [w, h] = item.value.split(':').map(Number)
                       const isHorizontal = w > h
                       const isSquare = w === h
@@ -249,13 +244,15 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                         </button>
                       )
                     })}
-                    <button className={`${buttonClass(ratio === 'custom')} col-span-4`} onClick={() => setRatio('custom')}>
-                      自定义比例
-                    </button>
+                    {caps.supportsCustomRatio && (
+                      <button className={`${buttonClass(ratio === 'custom')} col-span-4`} onClick={() => setRatio('custom')}>
+                        自定义比例
+                      </button>
+                    )}
                   </div>
                 </section>
 
-                {ratio === 'custom' && (
+                {ratio === 'custom' && caps.supportsCustomRatio && (
                   <label className="block animate-fade-in">
                     <span className="mb-2 block text-xs font-medium text-gray-400 dark:text-gray-500">输入自定义比例</span>
                     <input
@@ -273,7 +270,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               </div>
             )}
 
-            {mode === 'resolution' && (
+            {mode === 'resolution' && caps.sizeMode === 'pixels' && (
               <div className="space-y-5 animate-fade-in">
                 <section>
                   <div className="mb-4 text-xs font-medium text-gray-400 dark:text-gray-500">输入具体像素值</div>
@@ -310,7 +307,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                     <svg className="mt-[2px] h-4 w-4 flex-shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <div className="whitespace-pre-line leading-relaxed">{SIZE_LIMIT_TEXT}</div>
+                    <div className="whitespace-pre-line leading-relaxed">{limitText}</div>
                   </div>
                 </div>
               </div>
@@ -337,7 +334,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <ViewportTooltip visible={hintVisible} className="w-56 whitespace-pre-line text-center">
-                    {SIZE_LIMIT_TEXT}
+                    {limitText}
                   </ViewportTooltip>
                 </div>
               )}

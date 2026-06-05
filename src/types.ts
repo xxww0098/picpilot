@@ -1,11 +1,11 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'gallery' | 'agent' | 'video'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 /** 多张参考图的提交模式：each=每张各生成（N→N）；merge=合成为一次请求（N→1） */
 export type MultiImageMode = 'each' | 'merge'
-export type BuiltInApiProvider = 'openai'
+export type BuiltInApiProvider = 'openai' | 'xAI'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
@@ -99,6 +99,10 @@ export interface AppSettings {
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
+  // Agent 对话模型（独立于图像配置）。见 lib/chatModels.ts。
+  agentModel: string
+  // 视频模式默认时长（秒）。xAI Imagine 视频接口当前按秒控制时长。
+  videoDurationSeconds: number
   profiles: ApiProfile[]
   activeProfileId: string
 }
@@ -172,6 +176,12 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 媒体类型：'video' 为视频任务（输出在 outputVideos / video store）；缺省为图片，向后兼容 */
+  mediaType?: 'image' | 'video'
+  /** 输出视频的 video store id 列表（mediaType === 'video' 时使用） */
+  outputVideos?: string[]
+  /** 视频时长（秒，请求值），仅视频任务 */
+  videoDurationSeconds?: number
   /** 批量生成（n>1）中失败的张数；部分成功时 > 0，此时 status 仍为 'done' */
   failedImageCount?: number
   /** 批量生成中失败槽位的错误信息（用于展示/重试提示） */
@@ -270,6 +280,22 @@ export interface StoredImage {
   width?: number
   /** 原图高度 */
   height?: number
+}
+
+export interface StoredVideo {
+  id: string
+  /** mp4 二进制：浏览器内缓存，播放用 URL.createObjectURL。抓取失败时为空，回退 remoteUrl */
+  blob?: Blob
+  /** 远端视频地址：尚未缓存或抓取失败时的回退 */
+  remoteUrl?: string
+  /** MIME，如 video/mp4 */
+  mime?: string
+  /** 封面图 data URL（可选） */
+  posterDataUrl?: string
+  /** 视频时长（秒） */
+  durationSeconds?: number
+  createdAt?: number
+  source?: 'generated'
 }
 
 export interface StoredImageThumbnail {
@@ -402,5 +428,15 @@ export interface ExportData {
     width?: number
     height?: number
     thumbnailVersion?: number
+  }>
+  /** videoId → 视频信息 */
+  videoFiles?: Record<string, {
+    path?: string
+    posterPath?: string
+    remoteUrl?: string
+    mime?: string
+    durationSeconds?: number
+    createdAt?: number
+    source?: 'generated'
   }>
 }

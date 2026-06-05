@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTaskInPlace, retryFailedImages } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTaskInPlace, retryFailedImages, regenerateTaskImage } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { runWithConcurrency } from '../lib/runWithConcurrency'
@@ -11,9 +11,10 @@ import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getProviderDisplayName, getUserFacingErrorMessage } from '../lib/userFacingText'
 import { getImageModelLabel } from '../lib/imageModels'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, RefreshIcon, TrashIcon } from './icons'
 import PublishGalleryButton from './PublishGalleryButton'
 import ModalShell from './ModalShell'
+import { getVideo } from '../lib/db'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -43,6 +44,9 @@ export default function DetailModal() {
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const [retryingFailed, setRetryingFailed] = useState(false)
+  const [regeneratingImageIndex, setRegeneratingImageIndex] = useState<number | null>(null)
+  const [videoSrc, setVideoSrc] = useState('')
+  const [videoPosterSrc, setVideoPosterSrc] = useState('')
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -52,6 +56,7 @@ export default function DetailModal() {
   const viewRawResponseTooltip = useTooltip()
   const downloadPartialImagesTooltip = useTooltip()
   const retryTooltip = useTooltip()
+  const regenerateImageTooltip = useTooltip()
   const downloadImageTooltip = useTooltip()
   const downloadAllTooltip = useTooltip()
 
@@ -64,6 +69,7 @@ export default function DetailModal() {
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
   )
+  const isVideoTask = task?.mediaType === 'video'
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
       ? Object.entries(streamPreviewSlots)
@@ -91,15 +97,18 @@ export default function DetailModal() {
   useEffect(() => {
     const count = task?.status === 'running'
       ? streamPreviewItems.length
+      : isVideoTask
+      ? (task?.outputVideos?.length ?? 0)
       : (task?.outputImages?.length ?? 0) + (task?.status === 'done' ? (task?.failedImageCount ?? 0) : 0)
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
-  }, [imageIndex, streamPreviewItems.length, task?.outputImages?.length, task?.failedImageCount, task?.status])
+  }, [imageIndex, isVideoTask, streamPreviewItems.length, task?.outputImages?.length, task?.outputVideos?.length, task?.failedImageCount, task?.status])
 
   // Reset index when task changes
   useEffect(() => {
     setImageIndex(0)
     // 切换到另一条记录时重置"重试中"状态，避免上一条的转圈状态串到当前这条
     setRetryingFailed(false)
+    setRegeneratingImageIndex(null)
   }, [detailTaskId])
 
   useEffect(() => {
@@ -142,6 +151,7 @@ export default function DetailModal() {
   }, [task])
 
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
+  const currentOutputVideoId = task?.outputVideos?.[imageIndex] || ''
   const currentOutputPreviewSrc = currentOutputImageId ? outputPreviewSrcs[currentOutputImageId] || '' : ''
   const maskTargetId = task?.maskTargetImageId || null
   const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
@@ -177,6 +187,32 @@ export default function DetailModal() {
   }, [task?.outputImages])
 
   useEffect(() => {
+    setVideoSrc('')
+    setVideoPosterSrc('')
+    if (!isVideoTask || !currentOutputVideoId) return
+
+    let cancelled = false
+    let objectUrl = ''
+    getVideo(currentOutputVideoId).then((video) => {
+      if (cancelled || !video) return
+      if (video.blob) {
+        objectUrl = URL.createObjectURL(video.blob)
+        setVideoSrc(objectUrl)
+      } else if (video.remoteUrl) {
+        setVideoSrc(video.remoteUrl)
+      }
+      setVideoPosterSrc(video.posterDataUrl || '')
+    }).catch(() => {
+      if (!cancelled) setVideoSrc('')
+    })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [currentOutputVideoId, isVideoTask])
+
+  useEffect(() => {
     let cancelled = false
     setMaskPreviewSrc('')
     if (!maskTargetSrc || !maskSrc) return
@@ -201,7 +237,7 @@ export default function DetailModal() {
   const isAgentEditTool = task.status === 'done' && String(task.agentToolAction ?? '').toLowerCase() === 'edit'
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
-  const outputLen = task.outputImages?.length || 0
+  const outputLen = isVideoTask ? (task.outputVideos?.length || 0) : (task.outputImages?.length || 0)
   // 批量部分失败：把失败的张数也算进翻页槽位，成功槽渲染图片、失败槽显示失败+重试
   const failedSlotCount = task.status === 'done' ? (task.failedImageCount ?? 0) : 0
   const totalSlots = outputLen + failedSlotCount
@@ -226,6 +262,9 @@ export default function DetailModal() {
   const currentStreamPreviewSrc = activeStreamPreviewSrc
   const streamPartialImageIds = task.streamPartialImageIds ?? []
   const displayTaskError = getUserFacingErrorMessage(task.error || '生成失败', '生成失败')
+  const isRegeneratingImage = regeneratingImageIndex !== null
+  const isRegeneratingCurrentImage = regeneratingImageIndex === imageIndex
+  const canRegenerateCurrentImage = task.status === 'done' && !isVideoTask && Boolean(currentOutputImageId) && !isFailedSlot
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -311,6 +350,15 @@ export default function DetailModal() {
 
   const handleDownloadCurrentOutput = async (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (isVideoTask) {
+      if (!videoSrc || !task) return
+      const a = document.createElement('a')
+      a.href = videoSrc
+      a.download = `task-${task.id}.mp4`
+      a.click()
+      showToast('下载已开始', 'success')
+      return
+    }
     if (!currentOutputImageId || !task) return
 
     try {
@@ -328,6 +376,10 @@ export default function DetailModal() {
 
   const handleDownloadAllOutputs = async (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (isVideoTask) {
+      await handleDownloadCurrentOutput(e)
+      return
+    }
     if (!task?.outputImages?.length) return
 
     try {
@@ -378,6 +430,17 @@ export default function DetailModal() {
     }
   }
 
+  const handleRegenerateCurrentImage = async () => {
+    if (!canRegenerateCurrentImage || isRegeneratingImage) return
+    const targetIndex = imageIndex
+    setRegeneratingImageIndex(targetIndex)
+    try {
+      await regenerateTaskImage(task.id, targetIndex)
+    } finally {
+      setRegeneratingImageIndex((current) => current === targetIndex ? null : current)
+    }
+  }
+
   return (
     <>
       <ModalShell
@@ -400,8 +463,48 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {task.status === 'done' && outputLen > 0 && !isFailedSlot && (
+          {task.status === 'done' && isVideoTask && outputLen > 0 && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
+              <div className="relative group flex">
+                <button
+                  type="button"
+                  {...downloadImageTooltip.handlers}
+                  onClick={(e) => {
+                    downloadImageTooltip.handlers.onClick()
+                    handleDownloadCurrentOutput(e)
+                  }}
+                  className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
+                  aria-label="下载视频"
+                >
+                  <DownloadIcon className="h-4 w-4" />
+                </button>
+                <ViewportTooltip visible={downloadImageTooltip.visible} className="whitespace-nowrap">
+                  下载视频
+                </ViewportTooltip>
+              </div>
+            </div>
+          )}
+          {task.status === 'done' && !isVideoTask && outputLen > 0 && !isFailedSlot && (
+            <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
+              <div className="relative group flex">
+                <button
+                  type="button"
+                  {...regenerateImageTooltip.handlers}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    regenerateImageTooltip.handlers.onClick()
+                    void handleRegenerateCurrentImage()
+                  }}
+                  disabled={!canRegenerateCurrentImage || isRegeneratingImage}
+                  className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 disabled:cursor-wait disabled:opacity-70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
+                  aria-label={isRegeneratingCurrentImage ? '正在重新生成' : '重新生成这一张'}
+                >
+                  <RefreshIcon className={`h-4 w-4 ${isRegeneratingCurrentImage ? 'animate-spin' : ''}`} />
+                </button>
+                <ViewportTooltip visible={regenerateImageTooltip.visible} className="whitespace-nowrap">
+                  {isRegeneratingCurrentImage ? '正在重新生成' : '重新生成这一张'}
+                </ViewportTooltip>
+              </div>
               {currentOutputImageId && (
                 <PublishGalleryButton imageId={currentOutputImageId} prompt={task.prompt ?? ''} originalImageIds={allInputImageIds} />
               )}
@@ -443,6 +546,28 @@ export default function DetailModal() {
                 </div>
               )}
             </div>
+          )}
+          {task.status === 'done' && isVideoTask && outputLen > 0 && videoSrc && (
+            <>
+              <video
+                src={videoSrc}
+                poster={videoPosterSrc || undefined}
+                className="max-h-full max-w-full bg-black"
+                controls
+                playsInline
+                preload="metadata"
+              />
+              <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
+                {formatDuration() && (
+                  <span className="flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {formatDuration()}
+                  </span>
+                )}
+              </div>
+            </>
           )}
           {task.status === 'done' && outputLen > 0 && currentOutputPreviewSrc && !isFailedSlot && (
             <>
@@ -514,7 +639,7 @@ export default function DetailModal() {
               </button>
             </div>
           )}
-          {task.status === 'done' && totalSlots > 1 && (
+          {task.status === 'done' && !isVideoTask && totalSlots > 1 && (
             <>
               <button
                 onClick={() => setImageIndex((imageIndex - 1 + totalSlots) % totalSlots)}
@@ -874,27 +999,44 @@ export default function DetailModal() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">尺寸</span>
-                <br />
-                <DetailParamValue task={task} paramKey="size" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">质量</span>
-                <br />
-                <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">格式</span>
-                <br />
-                <DetailParamValue task={task} paramKey="output_format" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">审核</span>
-                <br />
-                <DetailParamValue task={task} paramKey="moderation" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              {!isAgentTask && (
+              {isVideoTask ? (
+                <>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">媒体</span>
+                    <br />
+                    <span className="font-medium text-gray-700 dark:text-gray-200">视频</span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">时长</span>
+                    <br />
+                    <span className="font-medium text-gray-700 dark:text-gray-200">{task.videoDurationSeconds ?? '-'} 秒</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">尺寸</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="size" className="font-medium" actualParams={currentActualParams} />
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">质量</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">格式</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="output_format" className="font-medium" actualParams={currentActualParams} />
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">审核</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="moderation" className="font-medium" actualParams={currentActualParams} />
+                  </div>
+                </>
+              )}
+              {!isVideoTask && !isAgentTask && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                   <span className="text-gray-400 dark:text-gray-500">数量</span>
                   <br />
@@ -930,7 +1072,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleEdit}
-              disabled={!outputLen}
+              disabled={isVideoTask || !outputLen}
               className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />

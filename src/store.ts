@@ -14,9 +14,9 @@ import type {
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, DEFAULT_VIDEO_DURATION_SECONDS, DEFAULT_VIDEO_MODEL, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, normalizeVideoDurationSeconds, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import type { QueueStats } from './lib/queueApi'
+import { fetchQueueStats, type QueueStats } from './lib/queueApi'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   getAllTasks,
@@ -33,11 +33,16 @@ import {
   putImageThumbnail,
   deleteImage,
   clearImages,
+  putVideo as dbPutVideo,
+  deleteVideo,
+  clearVideos,
+  getAllVideos,
   storeImage,
 } from './lib/db'
 import { callImageApi, type CallApiOptions, type CallApiResult } from './lib/api'
 import { logger, serializeError } from './lib/logger'
-import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { getImageApiFanoutConcurrency, IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { settleWithConcurrency } from './lib/runWithConcurrency'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
@@ -85,6 +90,7 @@ import {
   resetImageCacheEntry,
   scheduleThumbnailBackfill,
 } from './store/imageCache'
+import { generateVideo } from './lib/videoApi'
 
 export { getErrorToastMessage } from './lib/errorToast'
 export { migratePersistedState } from './lib/agentPersistence'
@@ -113,6 +119,12 @@ const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let agentConversationPersistenceReady = false
+
+function uint8ToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 type ToastType = 'info' | 'success' | 'error'
@@ -245,7 +257,7 @@ export function getPersistedState(state: AppState) {
   return {
     settings,
     params: state.params,
-    ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
+    ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || state.appMode === 'video' || galleryInputDraft)
       ? {
           prompt: galleryInputDraft?.prompt ?? '',
           inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
@@ -290,7 +302,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'video' ? persisted.appMode : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -643,7 +655,7 @@ function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAge
 }
 
 function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
-  if (state.appMode !== 'gallery') return state.galleryInputDraft
+  if (state.appMode !== 'gallery' && state.appMode !== 'video') return state.galleryInputDraft
   const draft = getCurrentAgentInputDraft(state)
   return isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft)
 }
@@ -677,7 +689,7 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft>>(
     maskDraft: patch.maskDraft !== undefined ? patch.maskDraft : state.maskDraft,
     maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
   }
-  if (state.appMode === 'gallery') {
+  if (state.appMode === 'gallery' || state.appMode === 'video') {
     return {
       ...patch,
       galleryInputDraft: isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft),
@@ -710,7 +722,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery') {
+        if (appMode === 'gallery' || appMode === 'video') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -1661,6 +1673,43 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.streamPartialImageIds || []) target.add(id)
 }
 
+function addTaskReferencedVideoIds(target: Set<string>, task: TaskRecord) {
+  for (const id of task.outputVideos || []) target.add(id)
+}
+
+function replaceImageKeyedValue<T>(
+  source: Record<string, T> | undefined,
+  oldImageId: string,
+  newImageId: string,
+  value: T | undefined,
+): Record<string, T> | undefined {
+  const next: Record<string, T> = {}
+  for (const [imageId, item] of Object.entries(source ?? {})) {
+    if (imageId !== oldImageId) next[imageId] = item
+  }
+  if (value !== undefined) next[newImageId] = value
+  return Object.keys(next).length ? next : undefined
+}
+
+function replaceRawImageUrl(
+  rawImageUrls: string[] | undefined,
+  outputImageCount: number,
+  imageIndex: number,
+  nextRawImageUrl: string | undefined,
+): string[] | undefined {
+  const normalizedUrl = nextRawImageUrl?.trim()
+  if (!rawImageUrls?.length) return normalizedUrl ? [normalizedUrl] : undefined
+
+  if (rawImageUrls.length === outputImageCount) {
+    const next = [...rawImageUrls]
+    if (normalizedUrl) next[imageIndex] = normalizedUrl
+    else next.splice(imageIndex, 1)
+    return next.length ? next : undefined
+  }
+
+  return normalizedUrl ? [...rawImageUrls, normalizedUrl] : rawImageUrls
+}
+
 async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
@@ -1676,6 +1725,20 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
     if (stillUsed.has(imgId)) continue
     await deleteImage(imgId)
     evictCachedImage(imgId)
+  }
+}
+
+async function deleteUnreferencedVideoIds(videoIds: Iterable<string>) {
+  const candidates = Array.from(new Set(Array.from(videoIds).filter(Boolean)))
+  if (candidates.length === 0) return
+
+  const { tasks } = useStore.getState()
+  const stillUsed = new Set<string>()
+  for (const task of tasks) addTaskReferencedVideoIds(stillUsed, task)
+
+  for (const videoId of candidates) {
+    if (stillUsed.has(videoId)) continue
+    await deleteVideo(videoId)
   }
 }
 
@@ -1701,6 +1764,17 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
 // 每个执行中任务的取消控制器；cancelTask 通过它中止底层 fetch（服务端收到 abort 返回 499 释放槽位）。
 const taskAbortControllers = new Map<string, AbortController>()
 
+async function resolveImageApiFanoutConcurrency(): Promise<number> {
+  const fallbackMaxConcurrent = getCachedAuthUser()?.maxConcurrent
+  try {
+    const stats = await fetchQueueStats()
+    useStore.getState().setQueueStats(stats)
+    return getImageApiFanoutConcurrency(stats)
+  } catch {
+    return getImageApiFanoutConcurrency({ maxConcurrent: fallbackMaxConcurrent })
+  }
+}
+
 // 多图「每张」合并卡的执行：按每张输入图各发一次请求，汇总成一个 CallApiResult。
 // 输出顺序 = 输入图顺序；图片/实际参数/改写提示词按输出顺序对齐；任一输入失败计入 failedCount（每输入占 perInputCount 张）。
 // 流式预览槽位按 inputIndex * perInputCount 偏移，避免不同输入的中间帧互相覆盖。
@@ -1710,8 +1784,10 @@ async function callImageApiPerInput(
   perInputCount: number,
   onPartialImage?: CallApiOptions['onPartialImage'],
 ): Promise<CallApiResult> {
-  const results = await Promise.allSettled(
-    inputDataUrls.map((dataUrl, inputIndex) =>
+  const results = await settleWithConcurrency(
+    inputDataUrls,
+    baseOpts.fanoutConcurrency ?? getImageApiFanoutConcurrency(),
+    (dataUrl, inputIndex) =>
       callImageApi({
         ...baseOpts,
         inputImageDataUrls: [dataUrl],
@@ -1719,7 +1795,6 @@ async function callImageApiPerInput(
           ? (partial) => onPartialImage({ ...partial, requestIndex: inputIndex * perInputCount + (partial.requestIndex ?? 0) })
           : undefined,
       }),
-    ),
   )
   const fulfilled = results.filter((r): r is PromiseFulfilledResult<CallApiResult> => r.status === 'fulfilled').map((r) => r.value)
   if (fulfilled.length === 0) {
@@ -1740,6 +1815,167 @@ async function callImageApiPerInput(
     revisedPrompts,
     ...(rawImageUrls.length ? { rawImageUrls } : {}),
     ...(failedCount ? { failedCount, failedErrors } : {}),
+  }
+}
+
+async function fetchUrlAsBlob(url: string, signal?: AbortSignal): Promise<Blob | undefined> {
+  try {
+    const response = await fetch(url, { cache: 'no-store', signal })
+    if (!response.ok) return undefined
+    return response.blob()
+  } catch {
+    return undefined
+  }
+}
+
+async function fetchUrlAsDataUrl(url: string, signal?: AbortSignal): Promise<string | undefined> {
+  const blob = await fetchUrlAsBlob(url, signal)
+  if (!blob) return undefined
+  return readBlobAsDataUrl(blob)
+}
+
+async function storeGeneratedVideo(opts: {
+  videoUrl: string
+  posterUrl?: string
+  durationSeconds?: number
+  signal?: AbortSignal
+}) {
+  const blob = await fetchUrlAsBlob(opts.videoUrl, opts.signal)
+  const posterDataUrl = opts.posterUrl ? await fetchUrlAsDataUrl(opts.posterUrl, opts.signal) : undefined
+  const id = genId()
+  await dbPutVideo({
+    id,
+    blob,
+    remoteUrl: opts.videoUrl,
+    mime: blob?.type || 'video/mp4',
+    posterDataUrl,
+    durationSeconds: opts.durationSeconds,
+    createdAt: Date.now(),
+    source: 'generated',
+  })
+  return id
+}
+
+export async function submitVideoTask() {
+  const state = useStore.getState()
+  const { prompt, inputImages, maskDraft, settings, showToast } = state
+  if (!prompt.trim()) {
+    showToast('请输入提示词', 'error')
+    return
+  }
+  if (maskDraft) {
+    showToast('视频模式暂不支持遮罩，请先移除遮罩。', 'error')
+    return
+  }
+  await Promise.all(inputImages.map((img) => storeImage(img.dataUrl)))
+
+  const durationSeconds = normalizeVideoDurationSeconds(settings.videoDurationSeconds, DEFAULT_VIDEO_DURATION_SECONDS)
+  const task: TaskRecord = {
+    id: genId(),
+    prompt: prompt.trim(),
+    params: { ...state.params, n: 1 },
+    apiProvider: 'xAI',
+    apiProfileName: 'xAI Imagine',
+    apiMode: 'images',
+    apiModel: DEFAULT_VIDEO_MODEL,
+    inputImageIds: inputImages.slice(0, 1).map((img) => img.id),
+    maskTargetImageId: null,
+    maskImageId: null,
+    outputImages: [],
+    mediaType: 'video',
+    outputVideos: [],
+    videoDurationSeconds: durationSeconds,
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+    sourceMode: 'video',
+  }
+
+  useStore.getState().setTasks([task, ...useStore.getState().tasks])
+  await putTask(task)
+  showToast('视频任务已提交', 'success')
+
+  if (settings.clearInputAfterSubmit) {
+    useStore.getState().setPrompt('')
+    useStore.getState().clearInputImages()
+  }
+
+  executeVideoTask(task.id)
+}
+
+async function executeVideoTask(taskId: string) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return
+
+  const abortController = new AbortController()
+  taskAbortControllers.set(taskId, abortController)
+
+  try {
+    const inputDataUrls = await Promise.all(
+      (task.inputImageIds || []).slice(0, 1).map(async (imgId) => {
+        const dataUrl = await ensureImageCached(imgId)
+        if (!dataUrl) throw new Error('参考图片已不存在')
+        return dataUrl
+      }),
+    )
+    const result = await generateVideo({
+      settings: useStore.getState().settings,
+      model: DEFAULT_VIDEO_MODEL,
+      prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
+      imageDataUrl: inputDataUrls[0],
+      durationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+      signal: abortController.signal,
+    })
+
+    const latestBeforeSuccess = useStore.getState().tasks.find((item) => item.id === taskId)
+    if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') return
+
+    const videoId = await storeGeneratedVideo({
+      videoUrl: result.videoUrl,
+      posterUrl: result.posterUrl,
+      durationSeconds: task.videoDurationSeconds,
+      signal: abortController.signal,
+    })
+
+    const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === taskId)
+    if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') {
+      await deleteUnreferencedVideoIds([videoId])
+      return
+    }
+
+    updateTaskInStore(taskId, {
+      outputVideos: [videoId],
+      rawImageUrls: [result.videoUrl],
+      rawResponsePayload: result.rawPayload,
+      status: 'done',
+      error: null,
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+    })
+    useStore.getState().showToast('视频生成完成', 'success')
+  } catch (err) {
+    logger.error('task', '视频任务执行失败', {
+      taskId,
+      model: task.apiModel,
+      elapsedMs: Date.now() - task.createdAt,
+      error: serializeError(err),
+    })
+    const latestTask = useStore.getState().tasks.find((item) => item.id === taskId) ?? task
+    if (latestTask.status !== 'running') return
+    const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+    updateTaskInStore(taskId, {
+      status: 'error',
+      error: getUserFacingErrorMessage(err, '视频生成失败', { apiUpstream: !isNetworkOrTimeout }),
+      ...getRawErrorPayload(err),
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+    })
+    useStore.getState().setDetailTaskId(taskId)
+  } finally {
+    taskAbortControllers.delete(taskId)
+    for (const imgId of task.inputImageIds) evictCachedImage(imgId)
   }
 }
 
@@ -1800,6 +2036,7 @@ async function executeTask(taskId: string) {
       sourceMode: task.sourceMode,
     })
 
+    const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
     const onPartialImage = (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => {
       useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
       void persistTaskStreamPartialImage(taskId, partial.image)
@@ -1814,6 +2051,7 @@ async function executeTask(taskId: string) {
             prompt: replaceImageMentionsForApi(task.prompt, 1),
             params: task.params,
             signal: abortController.signal,
+            fanoutConcurrency,
           },
           inputDataUrls,
           task.params.n > 0 ? task.params.n : 1,
@@ -1834,6 +2072,7 @@ async function executeTask(taskId: string) {
           },
           onPartialImage,
           signal: abortController.signal,
+          fanoutConcurrency,
         })
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1965,7 +2204,8 @@ async function executeTask(taskId: string) {
         const upstreamHint = getUpstreamApiErrorHint(err)
         if (upstreamHint) errorMessage += `\n${upstreamHint}`
       }
-      errorMessage = getUserFacingErrorMessage(errorMessage, '生成失败')
+      const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+      errorMessage = getUserFacingErrorMessage(errorMessage, '生成失败', { apiUpstream: !isNetworkOrTimeout })
       updateTaskInStore(taskId, {
         status: 'error',
         error: errorMessage,
@@ -2040,6 +2280,18 @@ export async function retryTask(task: TaskRecord) {
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
     outputImages: [],
+    ...(task.mediaType === 'video'
+      ? {
+          apiProvider: 'xAI',
+          apiProfileId: undefined,
+          apiProfileName: 'xAI Imagine',
+          apiMode: 'images' as const,
+          apiModel: task.apiModel || DEFAULT_VIDEO_MODEL,
+          mediaType: 'video' as const,
+          outputVideos: [],
+          videoDurationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+        }
+      : {}),
     status: 'running',
     error: null,
     createdAt: Date.now(),
@@ -2052,7 +2304,8 @@ export async function retryTask(task: TaskRecord) {
   useStore.getState().setTasks([newTask, ...latestTasks])
   await putTask(newTask)
 
-  executeTask(taskId)
+  if (newTask.mediaType === 'video') executeVideoTask(taskId)
+  else executeTask(taskId)
 }
 
 /**
@@ -2086,6 +2339,18 @@ export async function retryTaskInPlace(taskId: string) {
     apiProfileName: activeProfile.name,
     apiMode: activeProfile.apiMode,
     apiModel: activeProfile.model,
+    ...(task.mediaType === 'video'
+      ? {
+          apiProvider: 'xAI',
+          apiProfileId: undefined,
+          apiProfileName: 'xAI Imagine',
+          apiMode: 'images' as const,
+          apiModel: task.apiModel || DEFAULT_VIDEO_MODEL,
+          mediaType: 'video' as const,
+          outputVideos: [],
+          videoDurationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+        }
+      : {}),
     outputImages: [],
     streamPartialImageIds: undefined,
     rawImageUrls: undefined,
@@ -2104,7 +2369,8 @@ export async function retryTaskInPlace(taskId: string) {
     elapsed: null,
   })
 
-  executeTask(taskId)
+  if (task.mediaType === 'video') executeVideoTask(taskId)
+  else executeTask(taskId)
 }
 
 /**
@@ -2144,12 +2410,14 @@ export async function retryFailedImages(taskId: string): Promise<void> {
 
     logger.info('task', '重试失败图片', { taskId, retryCount: failedCount, provider: task.apiProvider })
 
+    const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
     const result = await callImageApi({
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: { ...task.params, n: failedCount },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
+      fanoutConcurrency,
     })
 
     const newIds: string[] = []
@@ -2178,9 +2446,166 @@ export async function retryFailedImages(taskId: string): Promise<void> {
       stillFailed > 0 ? 'info' : 'success',
     )
   } catch (err) {
-    const message = getUserFacingErrorMessage(err, '重试失败')
+    const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+    const message = getUserFacingErrorMessage(err, '重试失败', { apiUpstream: !isNetworkOrTimeout })
     logger.error('task', '重试失败图片出错', { taskId, error: serializeError(err) })
     state.showToast(`重试失败：${message}`, 'error')
+  }
+}
+
+/** 重新生成任务中的单张输出图：保留原卡片，只替换指定 outputImages 槽位。 */
+export async function regenerateTaskImage(taskId: string, imageIndex: number): Promise<void> {
+  const state = useStore.getState()
+  const task = state.tasks.find((t) => t.id === taskId)
+  if (!task) return
+
+  if (task.mediaType === 'video' || task.status !== 'done') {
+    state.showToast('当前记录不能重新生成单张图片', 'error')
+    return
+  }
+  if (!Number.isInteger(imageIndex) || imageIndex < 0 || imageIndex >= task.outputImages.length) {
+    state.showToast('找不到要重新生成的图片', 'error')
+    return
+  }
+
+  const oldImageId = task.outputImages[imageIndex]
+  const { settings } = state
+  const taskProfile = getTaskApiProfile(settings, task)
+  if (!taskProfile && task.apiProfileId) {
+    state.showToast('找不到此任务所使用的 API 配置。', 'error')
+    return
+  }
+
+  const activeProfile = taskProfile ?? getActiveApiProfile(settings)
+  const apiProfileError = validateApiProfile(activeProfile)
+  if (apiProfileError) {
+    state.showToast(`API 配置未完成：${apiProfileError}`, 'error')
+    state.setShowSettings(true)
+    return
+  }
+
+  let requestInputImageIds = task.inputImageIds
+  let promptImageCount = requestInputImageIds.length
+  let requestMaskImageId = task.maskImageId
+  if (task.perInputImage && task.inputImageIds.length > 1) {
+    const perInputCount = Math.max(1, task.params.n > 0 ? task.params.n : 1)
+    const expectedOutputCount = task.inputImageIds.length * perInputCount
+    if (task.outputImages.length !== expectedOutputCount) {
+      state.showToast('这张合并卡无法定位对应参考图，请重试整条记录。', 'error')
+      return
+    }
+
+    const inputImageId = task.inputImageIds[Math.floor(imageIndex / perInputCount)]
+    if (!inputImageId) {
+      state.showToast('找不到要重新生成的参考图', 'error')
+      return
+    }
+    requestInputImageIds = [inputImageId]
+    promptImageCount = 1
+    requestMaskImageId = null
+  }
+
+  const requestSettings = createSettingsForApiProfile(settings, activeProfile)
+  const taskProvider = task.apiProvider ?? activeProfile.provider
+  let customTaskInfo: { taskId: string } | null = null
+
+  try {
+    const inputDataUrls = await Promise.all(
+      requestInputImageIds.map(async (imgId) => {
+        const dataUrl = await ensureImageCached(imgId)
+        if (!dataUrl) throw new Error('输入图片已不存在')
+        return dataUrl
+      }),
+    )
+    let maskDataUrl: string | undefined
+    if (requestMaskImageId) {
+      maskDataUrl = await ensureImageCached(requestMaskImageId)
+      if (!maskDataUrl) throw new Error('遮罩图片已不存在')
+    }
+
+    logger.info('task', '单张图片重新生成开始', {
+      taskId,
+      imageIndex,
+      provider: taskProvider,
+      profileName: activeProfile.name,
+      model: activeProfile.model,
+      inputImages: requestInputImageIds.length,
+      mask: Boolean(requestMaskImageId),
+    })
+
+    const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
+    const result = await callImageApi({
+      settings: requestSettings,
+      prompt: replaceImageMentionsForApi(task.prompt, promptImageCount),
+      params: { ...task.params, n: 1 },
+      inputImageDataUrls: inputDataUrls,
+      maskDataUrl,
+      onCustomTaskEnqueued: (request) => {
+        customTaskInfo = request
+      },
+      fanoutConcurrency,
+    })
+
+    const replacementImage = result.images[0]
+    if (!replacementImage) throw new Error('接口没有返回可替换的图片')
+
+    const newImageId = await storeImage(replacementImage, 'generated')
+    cacheImage(newImageId, replacementImage)
+
+    const actualParamsList = result.actualParamsList?.length
+      ? [result.actualParamsList[0]]
+      : result.actualParams
+      ? [result.actualParams]
+      : await readImageSizeParamsList([replacementImage])
+    const replacementActualParams = firstActualParams(actualParamsList)
+    const isAsyncCustomTask = taskProvider !== 'openai' && Boolean(customTaskInfo)
+    const replacementRevisedPrompt = isAsyncCustomTask ? '' : result.revisedPrompts?.[0]?.trim() ?? ''
+
+    const latest = useStore.getState().tasks.find((t) => t.id === taskId)
+    if (!latest || latest.status !== 'done' || latest.outputImages[imageIndex] !== oldImageId) {
+      await deleteUnreferencedImageIds([newImageId])
+      state.showToast('图片已变化，已放弃本次替换', 'info')
+      return
+    }
+
+    const nextOutputImages = [...latest.outputImages]
+    nextOutputImages[imageIndex] = newImageId
+    const nextActualParams: Partial<TaskParams> = {
+      ...(latest.actualParams ?? replacementActualParams ?? {}),
+      n: nextOutputImages.length,
+    }
+
+    updateTaskInStore(taskId, {
+      outputImages: nextOutputImages,
+      rawImageUrls: replaceRawImageUrl(latest.rawImageUrls, latest.outputImages.length, imageIndex, result.rawImageUrls?.[0]),
+      actualParams: nextActualParams,
+      actualParamsByImage: replaceImageKeyedValue(latest.actualParamsByImage, oldImageId, newImageId, replacementActualParams),
+      revisedPromptByImage: replaceImageKeyedValue(
+        latest.revisedPromptByImage,
+        oldImageId,
+        newImageId,
+        replacementRevisedPrompt || undefined,
+      ),
+      error: null,
+    })
+    await deleteUnreferencedImageIds([oldImageId])
+
+    logger.info('task', '单张图片重新生成完成', { taskId, imageIndex, oldImageId, newImageId })
+    state.showToast(`已重新生成第 ${imageIndex + 1} 张图片`, 'success')
+  } catch (err) {
+    const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
+    const message = getUserFacingErrorMessage(err, '重新生成失败', { apiUpstream: !isNetworkOrTimeout })
+    logger.error('task', '单张图片重新生成失败', {
+      taskId,
+      imageIndex,
+      provider: task.apiProvider,
+      model: task.apiModel,
+      apiMode: task.apiMode,
+      error: serializeError(err),
+    })
+    state.showToast(`重新生成失败：${message}`, 'error')
+  } finally {
+    for (const imgId of requestInputImageIds) evictCachedImage(imgId)
   }
 }
 
@@ -2281,9 +2706,11 @@ export async function removeMultipleTasks(taskIds: string[]) {
 
   // 收集所有被删除任务的关联图片
   const deletedImageIds = new Set<string>()
+  const deletedVideoIds = new Set<string>()
   for (const t of tasks) {
     if (toDelete.has(t.id)) {
       addTaskReferencedImageIds(deletedImageIds, t)
+      addTaskReferencedVideoIds(deletedVideoIds, t)
     }
   }
 
@@ -2309,6 +2736,8 @@ export async function removeMultipleTasks(taskIds: string[]) {
     }
   }
 
+  await deleteUnreferencedVideoIds(deletedVideoIds)
+
   // 如果删除的任务在选中列表中，则移除
   const newSelection = selectedTaskIds.filter(id => !toDelete.has(id))
   if (newSelection.length !== selectedTaskIds.length) {
@@ -2329,6 +2758,7 @@ export async function removeTask(task: TaskRecord) {
     ...(task.outputImages || []),
     ...(task.streamPartialImageIds || []),
   ])
+  const taskVideoIds = new Set(task.outputVideos || [])
 
   // 从列表移除
   const remaining = await scrubAgentOutputPayloadsForDeletedTasks([task], tasks.filter((t) => t.id !== task.id))
@@ -2352,6 +2782,8 @@ export async function removeTask(task: TaskRecord) {
     }
   }
 
+  await deleteUnreferencedVideoIds(taskVideoIds)
+
   showToast('记录已删除', 'success')
 }
 
@@ -2369,6 +2801,7 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     await dbClearTasks()
     await dbClearAgentConversations()
     await clearImages()
+    await clearVideos()
     clearImageCaches()
     setTasks([])
     useStore.setState({
@@ -2436,7 +2869,7 @@ async function recoverCustomTask(taskId: string) {
     clearCustomRecoveryTimer(taskId)
     updateTaskInStore(taskId, {
       status: 'error',
-      error: getUserFacingErrorMessage(err, '自定义任务恢复失败'),
+      error: getUserFacingErrorMessage(err, '自定义任务恢复失败', { apiUpstream: true }),
       ...getRawErrorPayload(err),
       customRecoverable: false,
       finishedAt: Date.now(),
@@ -2456,9 +2889,11 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
   try {
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks ? await getAllImages() : []
+    const videos = options.exportTasks ? await getAllVideos() : []
     const { settings, agentConversations } = useStore.getState()
     const exportedAt = Date.now()
     const imageCreatedAtFallback = new Map<string, number>()
+    const videoCreatedAtFallback = new Map<string, number>()
 
     if (options.exportTasks) {
       for (const task of tasks) {
@@ -2473,11 +2908,18 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
             imageCreatedAtFallback.set(id, task.createdAt)
           }
         }
+        for (const id of task.outputVideos || []) {
+          const prev = videoCreatedAtFallback.get(id)
+          if (prev == null || task.createdAt < prev) {
+            videoCreatedAtFallback.set(id, task.createdAt)
+          }
+        }
       }
     }
 
     const imageFiles: ExportData['imageFiles'] = {}
     const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
+    const videoFiles: NonNullable<ExportData['videoFiles']> = {}
     const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
 
     if (options.exportTasks) {
@@ -2515,6 +2957,30 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
           })
         }
       }
+
+      for (const video of videos) {
+        const createdAt = video.createdAt ?? videoCreatedAtFallback.get(video.id) ?? exportedAt
+        const entry: NonNullable<ExportData['videoFiles']>[string] = {
+          remoteUrl: video.remoteUrl,
+          mime: video.mime,
+          durationSeconds: video.durationSeconds,
+          createdAt,
+          source: video.source,
+        }
+        if (video.blob) {
+          const ext = (video.mime?.split('/')[1] || 'mp4').replace(/[^a-z0-9]+/gi, '') || 'mp4'
+          const path = `videos/${video.id}.${ext}`
+          entry.path = path
+          zipFiles[path] = [new Uint8Array(await video.blob.arrayBuffer()), { mtime: new Date(createdAt) }]
+        }
+        if (video.posterDataUrl) {
+          const { ext, bytes } = dataUrlToBytes(video.posterDataUrl)
+          const posterPath = `video-posters/${video.id}.${ext}`
+          entry.posterPath = posterPath
+          zipFiles[posterPath] = [bytes, { mtime: new Date(createdAt) }]
+        }
+        videoFiles[video.id] = entry
+      }
     }
 
     const manifest: ExportData = {
@@ -2528,6 +2994,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       manifest.agentConversations = getPersistableAgentConversations(agentConversations)
       manifest.imageFiles = imageFiles
       manifest.thumbnailFiles = thumbnailFiles
+      manifest.videoFiles = videoFiles
     }
 
     zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
@@ -2603,6 +3070,21 @@ export async function importData(file: File, options: ImportOptions = { importCo
           width: info.width,
           height: info.height,
           thumbnailVersion: info.thumbnailVersion,
+        })
+      }
+
+      for (const [id, info] of Object.entries(data.videoFiles ?? {})) {
+        const bytes = info.path ? unzipped[info.path] : undefined
+        const posterBytes = info.posterPath ? unzipped[info.posterPath] : undefined
+        await dbPutVideo({
+          id,
+          blob: bytes ? new Blob([uint8ToArrayBuffer(bytes)], { type: info.mime || 'video/mp4' }) : undefined,
+          remoteUrl: info.remoteUrl,
+          mime: info.mime,
+          posterDataUrl: posterBytes && info.posterPath ? bytesToDataUrl(posterBytes, info.posterPath) : undefined,
+          durationSeconds: info.durationSeconds,
+          createdAt: info.createdAt,
+          source: info.source,
         })
       }
 

@@ -10,15 +10,17 @@ export function useInputBarFileUpload() {
   const handleFiles = useCallback(async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      const appMode = useStore.getState().appMode
+      const maxImages = appMode === 'video' ? 1 : API_MAX_IMAGES
+      if (currentCount >= maxImages) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${maxImages} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = maxImages - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -29,7 +31,7 @@ export function useInputBarFileUpload() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${maxImages} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }

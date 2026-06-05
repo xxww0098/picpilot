@@ -1,13 +1,14 @@
-import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
+import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, StoredVideo } from '../types'
 import { loadImage } from './canvasImage'
 import { logger, serializeError } from './logger'
 import { namespacedStorageKey } from './auth'
 
 const DB_NAME = namespacedStorageKey('picpilot')
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
+const STORE_VIDEOS = 'videos'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
@@ -42,6 +43,9 @@ function openDBConnection(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_THUMBNAILS)) {
         db.createObjectStore(STORE_THUMBNAILS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_VIDEOS)) {
+        db.createObjectStore(STORE_VIDEOS, { keyPath: 'id' })
       }
       if (!db.objectStoreNames.contains(STORE_AGENT_CONVERSATIONS)) {
         db.createObjectStore(STORE_AGENT_CONVERSATIONS, { keyPath: 'id' })
@@ -232,6 +236,33 @@ export function clearImages(): Promise<undefined> {
         tx.onerror = () => reject(tx.error)
       }),
   )
+}
+
+// ===== Videos =====
+// 视频缓存到浏览器（IndexedDB），与图片分库；mp4 以 Blob 存储，播放用 URL.createObjectURL。
+
+export function getVideo(id: string): Promise<StoredVideo | undefined> {
+  return dbTransaction(STORE_VIDEOS, 'readonly', (s) => s.get(id))
+}
+
+export function getAllVideos(): Promise<StoredVideo[]> {
+  return dbTransaction(STORE_VIDEOS, 'readonly', (s) => s.getAll())
+}
+
+export function getAllVideoIds(): Promise<string[]> {
+  return dbTransaction(STORE_VIDEOS, 'readonly', (s) => s.getAllKeys()).then((keys) => keys.map(String))
+}
+
+export function putVideo(video: StoredVideo): Promise<IDBValidKey> {
+  return dbTransaction(STORE_VIDEOS, 'readwrite', (s) => s.put(video))
+}
+
+export function deleteVideo(id: string): Promise<undefined> {
+  return dbTransaction(STORE_VIDEOS, 'readwrite', (s) => s.delete(id))
+}
+
+export function clearVideos(): Promise<undefined> {
+  return dbTransaction(STORE_VIDEOS, 'readwrite', (s) => s.clear())
 }
 
 // ===== Image hashing & dedup =====

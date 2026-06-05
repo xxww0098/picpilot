@@ -24,3 +24,31 @@ export async function runWithConcurrency<T>(
   const runners = Array.from({ length: Math.min(max, items.length) }, () => runner())
   await Promise.all(runners)
 }
+
+/**
+ * Promise.allSettled with a concurrency cap, preserving result order.
+ */
+export async function settleWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const max = Math.max(1, Math.floor(limit))
+  const results = new Array<PromiseSettledResult<R>>(items.length)
+  let cursor = 0
+
+  async function runner(): Promise<void> {
+    while (cursor < items.length) {
+      const index = cursor++
+      try {
+        results[index] = { status: 'fulfilled', value: await worker(items[index], index) }
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason }
+      }
+    }
+  }
+
+  const runners = Array.from({ length: Math.min(max, items.length) }, () => runner())
+  await Promise.all(runners)
+  return results
+}

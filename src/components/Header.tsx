@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useStore, getGalleryDisplayedImageIds } from '../store'
-import { getActiveApiProfile } from '../lib/apiProfiles'
+import { getActiveApiProfile, normalizeSettings, switchApiProfileProvider } from '../lib/apiProfiles'
+import { IMAGE_MODELS } from '../lib/imageModels'
+import { CHAT_MODELS } from '../lib/chatModels'
 import ModelPicker from './ModelPicker'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
@@ -44,11 +46,38 @@ export default function Header() {
   // （Agent 走对话模型、自定义服务商/Responses 在设置里管理模型，故不显示）。
   // 切换写入活动配置的 model 字段（setSettings 的 legacy 覆盖路径，等价于设置里的模型输入框）。
   const activeProfile = useMemo(() => getActiveApiProfile(settings), [settings])
-  const showModelPicker = appMode === 'gallery'
-    && activeProfile.provider === 'openai'
+  // 画廊模式：图像模型开关（仅内置 OpenAI Images 配置时）。
+  const showImagePicker = appMode === 'gallery'
+    && (activeProfile.provider === 'openai' || activeProfile.provider === 'xAI')
     && activeProfile.apiMode === 'images'
+  // Agent 模式：对话模型开关（始终可切换）。
+  const showChatPicker = appMode === 'agent'
+  // 顶栏模型开关占一行/一段，移动端占位高度需相应调整。
+  const showAnyPicker = showImagePicker || showChatPicker
   const handleModelChange = useCallback((model: string) => {
-    setSettings({ model })
+    const option = IMAGE_MODELS.find((item) => item.id === model)
+    const provider = option?.provider === 'xAI' ? 'xAI' : 'openai'
+    const normalized = normalizeSettings(settings)
+    const currentProfile = normalized.profiles.find((profile) => profile.id === normalized.activeProfileId) ?? activeProfile
+    const switchedProfile = currentProfile.provider === provider
+      ? currentProfile
+      : switchApiProfileProvider(currentProfile, provider)
+    const nextProfile = {
+      ...switchedProfile,
+      provider,
+      model,
+      apiMode: 'images' as const,
+    }
+    setSettings({
+      ...normalized,
+      model,
+      apiMode: 'images',
+      activeProfileId: currentProfile.id,
+      profiles: normalized.profiles.map((profile) => profile.id === currentProfile.id ? nextProfile : profile),
+    })
+  }, [activeProfile, settings, setSettings])
+  const handleAgentModelChange = useCallback((agentModel: string) => {
+    setSettings({ agentModel })
   }, [setSettings])
 
   useEffect(() => {
@@ -210,9 +239,14 @@ export default function Header() {
               </button>
             </div>
           )}
-          {showModelPicker && (
+          {showImagePicker && (
             <div className="hidden sm:flex items-center mr-2">
-              <ModelPicker model={activeProfile.model} onChange={handleModelChange} />
+              <ModelPicker model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
+            </div>
+          )}
+          {showChatPicker && (
+            <div className="hidden sm:flex items-center mr-2">
+              <ModelPicker model={settings.agentModel} options={CHAT_MODELS} onChange={handleAgentModelChange} ariaLabel="对话模型" />
             </div>
           )}
           <div className="hidden sm:flex items-center gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mr-4">
@@ -221,14 +255,21 @@ export default function Header() {
               onClick={() => setAppMode('gallery')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              画廊
+              gallery
             </button>
             <button
               type="button"
               onClick={() => setAppMode('agent')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              agent
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppMode('video')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'video' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+            >
+              video
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -285,26 +326,38 @@ export default function Header() {
             )}
           </div>
         </div>
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-28 opacity-100 pb-2'}`}>
-          {showModelPicker && (
+        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode !== 'agent' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-28 opacity-100 pb-2'}`}>
+          {showImagePicker && (
             <div className="flex justify-center mb-2 mx-2">
-              <ModelPicker model={activeProfile.model} onChange={handleModelChange} />
+              <ModelPicker model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
             </div>
           )}
-          <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
+          {showChatPicker && (
+            <div className="flex justify-center mb-2 mx-2">
+              <ModelPicker model={settings.agentModel} options={CHAT_MODELS} onChange={handleAgentModelChange} ariaLabel="对话模型" />
+            </div>
+          )}
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
             <button
               type="button"
               onClick={() => setAppMode('gallery')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              画廊
+              gallery
             </button>
             <button
               type="button"
               onClick={() => setAppMode('agent')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              agent
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppMode('video')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'video' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+            >
+              video
             </button>
           </div>
         </div>
@@ -319,8 +372,8 @@ export default function Header() {
 
       <div className={`safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
         <div className="safe-header-inner" />
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-28 pb-2'}`}>
-          {showModelPicker && (
+        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode !== 'agent' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-28 pb-2'}`}>
+          {showAnyPicker && (
             <div className="flex justify-center mb-2 mx-2">
               <div className="inline-flex items-center gap-1 rounded-xl border border-transparent p-1">
                 <div className="px-3 py-1.5 text-sm">占位</div>

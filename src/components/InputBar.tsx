@@ -1,9 +1,10 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
-import { useStore, submitTask, submitAgentMessage, stopAgentResponse, createInputImageFromFile, deleteImageIfUnreferenced, ensureImageCached } from '../store'
+import { useStore, submitTask, submitAgentMessage, submitVideoTask, stopAgentResponse, createInputImageFromFile, deleteImageIfUnreferenced, ensureImageCached } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import type { MultiImageMode, TaskRecord } from '../types'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
 import { getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { getProviderCapabilities } from '../lib/imageProviderCapabilities'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getParamValueLabel, getUserFacingErrorMessage } from '../lib/userFacingText'
@@ -20,6 +21,7 @@ import InputBarActions, { InputBarFileInputs } from './inputBar/InputBarActions'
 import { useInputBarFileUpload } from './inputBar/useInputBarFileUpload'
 import { useInputBarPromptEditor } from './inputBar/useInputBarPromptEditor'
 import { useAuth } from '../contexts/AuthProvider'
+import Select from './Select'
 
 
 
@@ -120,22 +122,25 @@ export default function InputBar() {
       : currentActiveProfile
   ), [currentActiveProfile, reusedTaskApiProfileId, settings])
   const activeAgentIsRunning = Boolean(activeAgentConversation?.rounds.some((round) => round.status === 'running'))
+  const isVideoMode = appMode === 'video'
   const effectiveSettings = useMemo(() => (
     activeProfile.id === currentActiveProfile.id
       ? settings
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
-  const hasSubmitApiConfig = !validateApiProfile(activeProfile)
+  const hasSubmitApiConfig = isVideoMode || !validateApiProfile(activeProfile)
   const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : hasSubmitApiConfig
-    ? maskDraft ? '遮罩编辑' : '生成图像'
+    ? isVideoMode ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像'
     : '请先配置 API 与模型'
   const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 与模型配置，请在右上角设置中进行'
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
+    } else if (appMode === 'video') {
+      void submitVideoTask()
     } else {
       void submitTask()
     }
@@ -164,7 +169,7 @@ export default function InputBar() {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
   const agentAutoImageCount = appMode === 'agent'
-  const compressionDisabled = params.output_format === 'png'
+  const compressionDisabled = !getProviderCapabilities(activeProfile.provider).supportsCompression || params.output_format === 'png'
   const providerOutputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings, user?.maxBatchImages)
   const limitedByAdminBatchLimit = Boolean(user && user.maxBatchImages < providerOutputImageLimit)
@@ -184,10 +189,11 @@ export default function InputBar() {
     { label: '中', value: 'medium' },
     { label: '高', value: 'high' },
   ]
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
-  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
+  const inputImageLimit = isVideoMode ? 1 : API_MAX_IMAGES
+  const atImageLimit = inputImages.length >= inputImageLimit
+  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${inputImageLimit} 张），无法继续添加` : '上传图片'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
-  const qualityHint = useHintTooltip({ enabled: () => settings.codexCli })
+  const qualityHint = useHintTooltip({ enabled: () => settings.codexCli || !getProviderCapabilities(activeProfile.provider).supportsQuality })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -197,7 +203,7 @@ export default function InputBar() {
     : inputImages
 
   // 多图发送模式（拆分按钮）：仅画廊模式、无遮罩、参考图 ≥2 张时可用
-  const canPerImageSplit = appMode !== 'agent' && !maskDraft && referenceImages.length >= 2
+  const canPerImageSplit = appMode === 'gallery' && !maskDraft && referenceImages.length >= 2
   const effectiveSubmitN = Math.min(outputImageLimit, Math.max(1, effectiveNValue || 1))
   const perImageOutputCount = referenceImages.length * effectiveSubmitN
   const mergeOutputCount = effectiveSubmitN
@@ -547,6 +553,7 @@ export default function InputBar() {
     canSubmit,
     submitButtonAriaLabel,
     submitTooltipText,
+    submitIdleLabel: isVideoMode ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像',
     maskDraft,
     fileInputRef,
     cameraInputRef,
@@ -591,6 +598,7 @@ export default function InputBar() {
       params={params}
       setParams={setParams}
       settings={settings}
+      provider={activeProfile.provider}
       displaySize={displaySize}
       qualityOptions={qualityOptions}
       compressionDisabled={compressionDisabled}
@@ -617,6 +625,30 @@ export default function InputBar() {
     />
   )
 
+  const renderVideoParams = (cols: string) => (
+    <div className={`grid ${cols} gap-2 text-xs flex-1`}>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">时长</span>
+        <Select
+          value={settings.videoDurationSeconds}
+          onChange={(value) => setSettings({ videoDurationSeconds: Number(value) })}
+          options={[
+            { label: '6 秒', value: 6 },
+            { label: '10 秒', value: 10 },
+            { label: '15 秒', value: 15 },
+          ]}
+          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm"
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">模型</span>
+        <div className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] text-xs text-gray-500 dark:text-gray-400">
+          Grok Video
+        </div>
+      </label>
+    </div>
+  )
+
   return (
     <>
       <InputBarDragOverlay visible={isDragging} atImageLimit={atImageLimit} />
@@ -627,6 +659,7 @@ export default function InputBar() {
           onSelect={(size) => setParams({ size })}
           onClose={() => setShowSizePicker(false)}
           allowAuto
+          provider={activeProfile.provider}
         />
       )}
 
@@ -675,7 +708,7 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-6')}
+              {isVideoMode ? renderVideoParams('grid-cols-2') : renderParams('grid-cols-6')}
 
               <InputBarActions variant="desktop" {...actionProps} />
             </div>
@@ -684,7 +717,7 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                 <div className="collapse-inner">
-                  {renderParams('grid-cols-2')}
+                  {isVideoMode ? renderVideoParams('grid-cols-2') : renderParams('grid-cols-2')}
                   <div className="h-2" />
                 </div>
               </div>
