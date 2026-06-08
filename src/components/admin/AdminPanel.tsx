@@ -5,8 +5,9 @@ import UserList from './UserList'
 import TeamSettings from './TeamSettings'
 import InviteManager from './InviteManager'
 import EventLog from './EventLog'
+import Diagnostics from './Diagnostics'
 
-type Tab = 'overview' | 'users' | 'settings' | 'invites' | 'events'
+type Tab = 'overview' | 'users' | 'settings' | 'invites' | 'events' | 'diagnostics'
 
 interface Props {
   open: boolean
@@ -19,6 +20,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'settings', label: '默认配置' },
   { id: 'invites', label: '邀请码' },
   { id: 'events', label: '事件流水' },
+  { id: 'diagnostics', label: '诊断' },
 ]
 
 export default function AdminPanel({ open, onClose }: Props) {
@@ -51,6 +53,7 @@ export default function AdminPanel({ open, onClose }: Props) {
         {tab === 'settings' && <TeamSettings />}
         {tab === 'invites' && <InviteManager />}
         {tab === 'events' && <EventLog />}
+        {tab === 'diagnostics' && <Diagnostics />}
       </div>
     </PanelShell>
   )

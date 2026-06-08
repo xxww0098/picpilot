@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
-import { removeMultipleTasks, updateTaskInStore, useStore } from '../../store'
+import { removeMultipleTasks, retryTaskInPlace, updateTaskInStore, useStore } from '../../store'
 import { downloadImageIds, formatExportFileTime } from '../../lib/downloadImages'
+import { logger, serializeError } from '../../lib/logger'
 
 export default function InputBarBatchToolbar() {
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -11,6 +12,7 @@ export default function InputBarBatchToolbar() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const setPrompt = useStore((s) => s.setPrompt)
   const showToast = useStore((s) => s.showToast)
 
   const filteredTasks = useMemo(() => {
@@ -35,7 +37,7 @@ export default function InputBarBatchToolbar() {
     } else {
       setSelectedTaskIds(filteredTasks.map((t) => t.id))
     }
-  }, [selectedTaskIds.length, filteredTasks, setSelectedTaskIds])
+  }, [selectedTaskIds.length, filteredTasks, setSelectedTaskIds, clearSelection])
 
   const handleToggleFavorite = useCallback(() => {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
@@ -54,7 +56,7 @@ export default function InputBarBatchToolbar() {
         clearSelection()
       },
     })
-  }, [tasks, selectedTaskIds, setConfirmDialog])
+  }, [tasks, selectedTaskIds, setConfirmDialog, clearSelection])
 
   const handleDeleteSelected = useCallback(() => {
     setConfirmDialog({
@@ -86,11 +88,38 @@ export default function InputBarBatchToolbar() {
         showToast(successCount > 1 ? `下载成功：${successCount} 张图片` : '下载成功', 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '批量下载失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
     clearSelection()
-  }, [tasks, selectedTaskIds, showToast])
+  }, [tasks, selectedTaskIds, showToast, clearSelection])
+
+  const handleCreateBatchDraft = useCallback(() => {
+    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
+    const prompts = selectedTasks
+      .map((task) => task.prompt.trim())
+      .filter(Boolean)
+    if (prompts.length === 0) {
+      showToast('选中的记录没有提示词', 'info')
+      return
+    }
+    setPrompt(prompts.join('\n\n---\n\n'))
+    clearSelection()
+    showToast(`已生成 ${prompts.length} 条批量草稿`, 'success')
+  }, [tasks, selectedTaskIds, setPrompt, showToast, clearSelection])
+
+  const handleRetrySelectedErrors = useCallback(async () => {
+    const errorTasks = tasks.filter((task) => selectedTaskIds.includes(task.id) && task.status === 'error')
+    if (errorTasks.length === 0) {
+      showToast('选中的记录没有失败任务', 'info')
+      return
+    }
+    clearSelection()
+    showToast(`开始恢复 ${errorTasks.length} 个失败任务`, 'info')
+    for (const task of errorTasks) {
+      await retryTaskInPlace(task.id)
+    }
+  }, [tasks, selectedTaskIds, showToast, clearSelection])
 
   if (selectedTaskIds.length === 0) return null
 
@@ -122,6 +151,27 @@ export default function InputBarBatchToolbar() {
               <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
             </svg>
           )}
+        </button>
+        <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1" />
+        <button
+          onClick={handleCreateBatchDraft}
+          className="p-2 text-indigo-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
+          title="生成批量草稿"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <path d="M4 4h16v16H4z" />
+            <path d="M8 8h8M8 12h8M8 16h5" />
+          </svg>
+        </button>
+        <button
+          onClick={() => void handleRetrySelectedErrors()}
+          className="p-2 text-cyan-500 dark:text-cyan-400 hover:text-cyan-600 dark:hover:text-cyan-300 transition-colors"
+          title="恢复失败任务"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <path d="M21 3v6h-6" />
+          </svg>
         </button>
         <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1" />
         <button

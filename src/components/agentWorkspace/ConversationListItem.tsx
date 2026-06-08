@@ -38,7 +38,7 @@ export default function ConversationListItem({
   return (
     <div
       data-agent-conversation-item
-      className="group flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-100 dark:hover:bg-white/[0.04]"
+      className={`group flex items-center gap-2 rounded-lg px-2 py-2 transition-colors ${isActive ? 'bg-gray-200/70 dark:bg-white/[0.09]' : 'hover:bg-gray-100 dark:hover:bg-white/[0.05]'}`}
       onPointerDown={(e) => onPointerDown(item.id, e)}
       onPointerUp={onLongPressClear}
       onPointerCancel={onLongPressClear}
@@ -48,10 +48,10 @@ export default function ConversationListItem({
       }}
     >
       {isEditing ? (
-        <div className="min-w-0 flex-1 flex flex-col justify-center h-[38px]">
+        <div className="min-w-0 flex-1">
           <input
             type="text"
-            className="flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0.5 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
+            className="w-full bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-1 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
             value={editingTitle}
             onChange={(e) => onEditingTitleChange(e.target.value)}
             onKeyDown={onRenameKeyDown}
@@ -61,9 +61,8 @@ export default function ConversationListItem({
           />
         </div>
       ) : (
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.id)}>
-          <div className={`truncate ${isActive ? 'font-semibold text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title}</div>
-          <div className="text-xs text-gray-400">{new Date(item.updatedAt).toLocaleString()}</div>
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.id)} title={item.title || '新对话'}>
+          <span className={`block truncate text-sm ${isActive ? 'font-medium text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title || '新对话'}</span>
         </button>
       )}
       <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${isEditing ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${showActions ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>

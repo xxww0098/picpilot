@@ -1,4 +1,4 @@
-import type { AppSettings, TaskParams } from '../types'
+import type { AppMode, AppSettings, TaskParams } from '../types'
 import { logger, serializeError } from './logger'
 import { encodeBlobAsDataUrl } from './dataUrl'
 
@@ -41,6 +41,7 @@ export interface CallApiOptions {
   params: TaskParams
   telemetry?: {
     actionType?: 'generate' | 'retry_failed_images' | 'auto_retry_failed_images' | 'regenerate_image'
+    appMode?: AppMode
     taskId?: string
     imageIndex?: number
     awaitReport?: boolean
@@ -237,13 +238,13 @@ export async function loggedFetch(
   try {
     const response = await fetch(url, init)
     const elapsedMs = Date.now() - startedAt
-    const detail = { url, status: response.status, statusText: response.statusText, elapsedMs }
+    const detail = { url, status: response.status, statusText: response.statusText, elapsedMs, ...meta }
     if (response.ok) logger.info('api', `← ${context} ${response.status}`, detail)
     else logger.warn('api', `← ${context} ${response.status}`, detail)
     return response
   } catch (err) {
     const label = isApiTimeoutError(err) ? '请求超时' : '网络/请求异常'
-    logger.error('api', `✗ ${context} ${label}`, { url, elapsedMs: Date.now() - startedAt, error: serializeError(err) })
+    logger.error('api', `✗ ${context} ${label}`, { url, elapsedMs: Date.now() - startedAt, ...meta, error: serializeError(err) })
     throw err
   }
 }

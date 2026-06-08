@@ -1,22 +1,47 @@
 import { Hono, type Context, type Next } from 'hono'
 import { jwt as jwtMiddleware, sign as jwtSign } from 'hono/jwt'
-import { Database, type SQLQueryBindings } from 'bun:sqlite'
+import { serve } from '@hono/node-server'
+import bcrypt from 'bcryptjs'
+import Database, { type Database as BetterSqliteDatabase, type Statement } from 'better-sqlite3'
 import sharp from 'sharp'
 import path from 'path'
+import type { Server as HttpServer } from 'http'
+import { fileURLToPath } from 'url'
 import { existsSync, statSync } from 'fs'
-import { unlink, writeFile } from 'fs/promises'
+import { readFile, unlink, writeFile } from 'fs/promises'
 import { createConcurrencyQueue, QueueFullError, ClientAbortError } from './concurrencyQueue.ts'
-import { generateInviteCode, getPositiveIntegerValue, normalizeBatchImageLimit, parseBatchImageLimitPatchValue, normalizeConcurrencyLimit, parseConcurrencyPatchValue, normalizeQueueLimit, parseQueuePatchValue, normalizeGalleryAutoRetryCount, parseGalleryAutoRetryCountPatchValue } from './utils/validation.ts'
+import { getUpstreamHealthReport, readRecentLogNames, readSmallTextFile } from './diagnostics.ts'
+import {
+  generateInviteCode,
+  getPositiveIntegerValue,
+  normalizeBatchImageLimit,
+  parseBatchImageLimitPatchValue,
+  normalizeConcurrencyLimit,
+  parseConcurrencyPatchValue,
+  normalizeQueueLimit,
+  parseQueuePatchValue,
+  normalizeGalleryAutoRetryCount,
+  parseGalleryAutoRetryCountPatchValue,
+  normalizeProxyUserSoftLimit,
+  parseProxyUserSoftLimitPatchValue,
+  normalizeBooleanSetting,
+  parseBooleanPatchValue,
+  normalizeRequestTimeoutSeconds,
+  parseRequestTimeoutSecondsPatchValue,
+} from './utils/validation.ts'
 
 import {
   AVATAR_SIZE,
   AVATARS_DIR,
   API_PROXY_API_KEY,
   API_PROXY_URL,
+  CLIPROXY_LOG_DIR,
   DATA_DIR,
   DB_PATH,
+  DEFAULT_REQUEST_TIMEOUT_SECONDS,
   DEFAULT_GALLERY_AUTO_RETRY_COUNT,
   DEFAULT_MAX_BATCH_IMAGES,
+  DEFAULT_STREAM_FALLBACK_ENABLED,
   EVENT_RETENTION_DAYS,
   INVITE_MAX_BATCH_COUNT,
   INVITE_MAX_USES,
@@ -33,16 +58,35 @@ import {
   PORT,
   PROXY_QUEUE_MAX,
   PROXY_QUEUE_MAX_WAIT_MS,
+  PROXY_USER_SOFT_LIMIT,
   PUBLIC_DIR,
   STATIC_DIR,
   THUMB_LONG_EDGE,
   THUMBS_DIR,
 } from './config.ts'
 
-const db = new Database(DB_PATH)
+type SQLQueryBindings = string | number | bigint | boolean | null | Buffer
+type AppDatabase = BetterSqliteDatabase & {
+  query: (source: string) => Statement
+}
+
+const db = new Database(DB_PATH) as AppDatabase
+db.query = db.prepare.bind(db) as AppDatabase['query']
 db.exec('PRAGMA journal_mode = WAL')
 db.exec('PRAGMA synchronous = NORMAL')
 db.exec('PRAGMA foreign_keys = ON')
+
+function isMainModule(): boolean {
+  return process.argv[1] ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) : false
+}
+
+function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 10)
+}
+
+function verifyPassword(password: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(password, hash)
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -93,6 +137,7 @@ db.exec(`
     user_id           TEXT NOT NULL,
     username          TEXT NOT NULL,
     event_type        TEXT NOT NULL,
+    app_mode          TEXT,
     provider          TEXT,
     api_mode          TEXT,
     model             TEXT,
@@ -191,6 +236,8 @@ ensureColumn('users', 'token_version', 'token_version INTEGER NOT NULL DEFAULT 0
 ensureColumn('request_events', 'action_type', 'action_type TEXT')
 ensureColumn('request_events', 'task_id', 'task_id TEXT')
 ensureColumn('request_events', 'image_index', 'image_index INTEGER')
+ensureColumn('request_events', 'app_mode', 'app_mode TEXT')
+db.exec('CREATE INDEX IF NOT EXISTS idx_events_app_mode_time ON request_events(app_mode, created_at DESC)')
 // 共享画廊「推荐」：管理员可标记，被标记的图缩略图右上角显示点赞图案并在画廊置顶
 ensureColumn('public_images', 'featured', 'featured INTEGER NOT NULL DEFAULT 0')
 
@@ -223,7 +270,7 @@ async function seedAdmins(envValue: string | undefined, isAdmin: boolean) {
       if (isAdmin) db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run(existing.id)
       continue
     }
-    const hash = await Bun.password.hash(password, { algorithm: 'bcrypt', cost: 10 })
+    const hash = await hashPassword(password)
     db.query('INSERT INTO users (id, username, password_hash, is_admin, max_batch_images, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
       crypto.randomUUID(),
       username,
@@ -252,7 +299,7 @@ function purgeOldEvents() {
 }
 purgeOldEvents()
 // 后台定时任务只在作为主进程运行时启动；测试经 app.request 驱动时不挂这些计时器，避免事件循环常驻。
-if (import.meta.main) {
+if (isMainModule()) {
   setInterval(purgeOldEvents, 24 * 60 * 60 * 1000)
 
   // 定期清理过期的登录限速记录，防止内存泄漏
@@ -294,6 +341,9 @@ function getTeamSettingsPayload() {
     // 并发/排队上限优先采用管理端配置，未配置时回退到环境默认值（MAX_CONCURRENT / PROXY_QUEUE_MAX）。
     maxConcurrent: normalizeConcurrencyLimit(settings.maxConcurrent, MAX_CONCURRENT),
     maxQueue: normalizeQueueLimit(settings.maxQueue, PROXY_QUEUE_MAX),
+    proxyUserSoftLimit: normalizeProxyUserSoftLimit(settings.proxyUserSoftLimit, PROXY_USER_SOFT_LIMIT),
+    streamFallbackEnabled: normalizeBooleanSetting(settings.streamFallbackEnabled, DEFAULT_STREAM_FALLBACK_ENABLED),
+    requestTimeoutSeconds: normalizeRequestTimeoutSeconds(settings.requestTimeoutSeconds, DEFAULT_REQUEST_TIMEOUT_SECONDS),
   }
 }
 
@@ -406,9 +456,9 @@ function resolveStaticPath(urlPath: string): string | null {
   return filePath
 }
 
-function staticResponse(filePath: string, cacheControl: string): Response {
+async function staticResponse(filePath: string, cacheControl: string): Promise<Response> {
   const ext = path.extname(filePath).toLowerCase()
-  return new Response(Bun.file(filePath), {
+  return new Response(await readFile(filePath), {
     headers: {
       'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
       'Cache-Control': cacheControl,
@@ -416,7 +466,7 @@ function staticResponse(filePath: string, cacheControl: string): Response {
   })
 }
 
-function serveStaticAsset(c: Context): Response | null {
+async function serveStaticAsset(c: Context): Promise<Response | null> {
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return null
   const filePath = resolveStaticPath(new URL(c.req.url).pathname)
   if (!filePath) return null
@@ -426,9 +476,9 @@ function serveStaticAsset(c: Context): Response | null {
   return staticResponse(filePath, cacheControl)
 }
 
-function serveSpaFallback(): Response {
+async function serveSpaFallback(): Promise<Response> {
   const indexPath = resolveStaticPath('/index.html')
-  if (!indexPath) return new Response('Static build not found. Run `bun run build` first.', { status: 404 })
+  if (!indexPath) return new Response('Static build not found. Run `npm run build` first.', { status: 404 })
   return staticResponse(indexPath, 'no-cache')
 }
 
@@ -516,6 +566,9 @@ function getAuthUserPayload(userId: string) {
     galleryAutoRetryCount: getTeamSettingsPayload().galleryAutoRetryCount,
     maxConcurrent: proxyQueue.limits().maxConcurrent,
     maxQueue: proxyQueue.limits().maxQueue,
+    proxyUserSoftLimit: proxyQueue.limits().perUserSoftLimit,
+    streamFallbackEnabled: getTeamSettingsPayload().streamFallbackEnabled,
+    requestTimeoutSeconds: getTeamSettingsPayload().requestTimeoutSeconds,
     publicGalleryCount: user.public_gallery_count,
     publicStorageBytes,
     publicStorageQuotaBytes: PER_USER_PUBLIC_QUOTA_BYTES,
@@ -614,15 +667,28 @@ const app = new Hono()
 app.use('*', async (c, next) => {
   const pathname = new URL(c.req.url).pathname
   if (pathname.startsWith('/api/') || pathname.startsWith('/api-proxy/')) return next()
-  const response = serveStaticAsset(c)
+  const response = await serveStaticAsset(c)
   if (response) return response
   return next()
+})
+
+// ===== 请求日志中间件：记录所有 API 请求的方法、路径、耗时 =====
+app.use('/api/*', async (c, next) => {
+  const startedAt = Date.now()
+  const { method } = c.req
+  const pathname = new URL(c.req.url).pathname
+  await next()
+  const elapsedMs = Date.now() - startedAt
+  const status = c.res.status
+  const level = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'debug'
+  logger[level]({ scope: 'http', method, path: pathname, status, elapsedMs, ip: getClientIp(c) }, `${method} ${pathname} ${status} ${elapsedMs}ms`)
 })
 
 // ===== Auth =====
 
 app.post('/api/auth/login', async (c) => {
   if (isRateLimited(getClientIp(c))) {
+    logger.warn({ scope: 'auth', ip: getClientIp(c), action: 'login' }, 'Login rate limited')
     return c.json({ error: '登录失败次数过多，请稍后再试。' }, 429)
   }
 
@@ -630,10 +696,12 @@ app.post('/api/auth/login', async (c) => {
   if (!username || !password) return c.json({ error: '请输入用户名和密码。' }, 400)
 
   const user = db.query('SELECT * FROM users WHERE username = ?').get(username) as UserRow | null
-  if (!user || !(await Bun.password.verify(password, user.password_hash))) {
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
+    logger.warn({ scope: 'auth', username, action: 'login', reason: 'invalid_credentials' }, 'Login failed: invalid credentials')
     return c.json({ error: '用户名或密码错误，请重新输入。' }, 401)
   }
   if (user.disabled === 1) {
+    logger.warn({ scope: 'auth', username, action: 'login', reason: 'disabled' }, 'Login failed: account disabled')
     return c.json({ error: ACCOUNT_DISABLED_MESSAGE }, 403)
   }
 
@@ -642,11 +710,13 @@ app.post('/api/auth/login', async (c) => {
   const token = await makeToken(user)
   const profile = getAuthUserPayload(user.id)
   if (!profile) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
+  logger.info({ scope: 'auth', username, userId: user.id, action: 'login' }, 'Login success')
   return c.json({ token, ...profile })
 })
 
 app.post('/api/auth/register', async (c) => {
   if (isRateLimited(getClientIp(c))) {
+    logger.warn({ scope: 'auth', ip: getClientIp(c), action: 'register' }, 'Register rate limited')
     return c.json({ error: '请求过于频繁，请稍后再试。' }, 429)
   }
 
@@ -676,7 +746,7 @@ app.post('/api/auth/register', async (c) => {
 
   const userId = crypto.randomUUID()
   const now = Date.now()
-  const hash = await Bun.password.hash(password, { algorithm: 'bcrypt', cost: 10 })
+  const hash = await hashPassword(password)
   const defaultMaxBatchImages = getDefaultMaxBatchImages()
 
   let inviteExhausted = false
@@ -704,6 +774,7 @@ app.post('/api/auth/register', async (c) => {
   const token = await makeToken({ id: userId, username, is_admin: 0, token_version: 0 })
   const profile = getAuthUserPayload(userId)
   if (!profile) return c.json({ error: '注册失败，请稍后重试。' }, 500)
+  logger.info({ scope: 'auth', username, userId, action: 'register' }, 'Register success')
   return c.json({ token, ...profile })
 })
 
@@ -789,13 +860,13 @@ app.delete('/api/auth/avatar', async (c) => {
 })
 
 app.use('/api/avatars/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
-app.get('/api/avatars/:user_id', (c) => {
+app.get('/api/avatars/:user_id', async (c) => {
   const userId = c.req.param('user_id')
   const row = db.query('SELECT avatar_updated_at FROM users WHERE id = ?').get(userId) as { avatar_updated_at: number | null } | null
   if (!row || row.avatar_updated_at == null) return c.json({ error: '头像不存在。' }, 404)
   const file = path.join(AVATARS_DIR, `${userId}.webp`)
   if (!existsSync(file)) return c.json({ error: '头像文件丢失。' }, 404)
-  return new Response(Bun.file(file), {
+  return new Response(await readFile(file), {
     headers: {
       'Content-Type': 'image/webp',
       'Content-Length': String(statSync(file).size),
@@ -813,6 +884,7 @@ const proxyQueue = createConcurrencyQueue({
   maxConcurrent: initialLimits.maxConcurrent,
   maxQueue: initialLimits.maxQueue,
   maxWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
+  perUserSoftLimit: initialLimits.proxyUserSoftLimit,
 })
 
 // SSE 静默期心跳间隔：上游分片之间的安静期超过此值就注入一行注释，保持 socket 活跃。
@@ -820,7 +892,7 @@ const PROXY_SSE_HEARTBEAT_MS = Math.max(1000, Number(process.env.PROXY_SSE_HEART
 const PROXY_HEARTBEAT_BYTES = new TextEncoder().encode(': ping\n')
 
 // 转发上游响应体。对 SSE 流，在行边界（上一字节为换行）的静默期注入注释行心跳，
-// 规避 Bun idleTimeout（最大 255s）；注释行（: 开头、单换行结尾）会被前端 SSE 解析器忽略，
+  // 规避代理链路静默超时；注释行（: 开头、单换行结尾）会被前端 SSE 解析器忽略，
 // 且不含空行，不会提前终止多行事件。完成 / 取消 / 出错时调用 onSettled 释放并发槽位。
 function createProxyBodyStream(
   upstreamBody: ReadableStream<Uint8Array>,
@@ -891,11 +963,14 @@ app.all('/api-proxy/*', async (c) => {
   try {
     target = resolveApiProxyTarget(c)
   } catch (err) {
+    logger.error({ scope: 'proxy', err: String(err) }, 'API proxy target resolution failed')
     return c.json({ error: err instanceof Error ? err.message : 'API 代理配置无效。' }, 500)
   }
   if (!target) return c.json({ error: '上游 API 地址未配置，请联系管理员。' }, 503)
 
   const payload = c.get('jwtPayload') as { sub: string }
+  const proxyStartedAt = Date.now()
+  logger.info({ scope: 'proxy', userId: payload.sub, method: c.req.method, target: target.href }, 'API proxy request start')
   const maxBatchImages = getUserMaxBatchImages(payload.sub)
   if (maxBatchImages == null) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
 
@@ -910,8 +985,8 @@ app.all('/api-proxy/*', async (c) => {
     }
   }
 
-  // 并发控制：全局上限 MAX_CONCURRENT，超出则进入 FIFO 队列排队等待。
-  // 等待者记录 userId，供 /api/queue/stats 返回当前用户在 FIFO 队列中的位置。
+  // 并发控制：全局上限 MAX_CONCURRENT，超出则进入队列等待。
+  // 等待者记录 userId，供 /api/queue/stats 返回当前用户位置，并在软公平开启时避免单用户长期占满槽位。
   try {
     await proxyQueue.acquire(c.req.raw.signal, undefined, { userId: payload.sub })
   } catch (err) {
@@ -930,7 +1005,7 @@ app.all('/api-proxy/*', async (c) => {
   const release = () => {
     if (released) return
     released = true
-    proxyQueue.release()
+    proxyQueue.release({ userId: payload.sub })
   }
 
   let upstream: Response
@@ -940,11 +1015,8 @@ app.all('/api-proxy/*', async (c) => {
       headers: createApiProxyRequestHeaders(c),
       body: c.req.method === 'POST' ? c.req.raw.body : undefined,
       signal: c.req.raw.signal,
-      // Bun fetch 默认 300s 超时，到 5 分钟整即抛 TimeoutError；而出图（尤其
-      // /images/edits）单次可达 5m40s+，会被这条默认计时器误杀（实测默认 300s、
-      // timeout:false 可放行至 310s+）。关闭它，取消完全交给 signal——客户端断开/
-      // 取消 → 499，前端 profile.timeout(900s) 兜底；前端 Caddyfile 已配 600s 转发超时。
-      timeout: false,
+      // 取消完全交给 signal：客户端断开/取消 -> 499，前端 profile.timeout(900s)
+      // 兜底；前端 Caddyfile 已配 600s 转发超时。
     } as RequestInit)
   } catch (err) {
     release()
@@ -960,6 +1032,7 @@ app.all('/api-proxy/*', async (c) => {
   // 对流式上游而言整个传输周期都不受约束。
   if (!upstream.body) {
     release()
+    logger.info({ scope: 'proxy', userId: payload.sub, target: target.href, status: upstream.status, elapsedMs: Date.now() - proxyStartedAt }, 'API proxy response (no body)')
     return new Response(null, {
       status: upstream.status,
       statusText: upstream.statusText,
@@ -968,6 +1041,7 @@ app.all('/api-proxy/*', async (c) => {
   }
 
   const isSse = (upstream.headers.get('content-type') || '').toLowerCase().includes('text/event-stream')
+  logger.info({ scope: 'proxy', userId: payload.sub, target: target.href, status: upstream.status, isSse, elapsedMs: Date.now() - proxyStartedAt }, 'API proxy response (streaming)')
   const monitoredBody = createProxyBodyStream(upstream.body, isSse, release)
 
   return new Response(monitoredBody, {
@@ -983,9 +1057,18 @@ app.all('/api-proxy/*', async (c) => {
 app.use('/api/queue/*', jwtMiddleware({ secret: JWT_SECRET!, alg: 'HS256' }))
 app.get('/api/queue/stats', (c) => {
   const payload = c.get('jwtPayload') as { sub?: string }
-  const { inflight, queued, myQueued, myNextPosition } = proxyQueue.stats(payload.sub)
-  const { maxConcurrent, maxQueue } = proxyQueue.limits()
-  return c.json({ inflight, queued, maxConcurrent, maxQueue, myQueued: myQueued ?? 0, myNextPosition: myNextPosition ?? null })
+  const { inflight, queued, myInflight, myQueued, myNextPosition } = proxyQueue.stats(payload.sub)
+  const { maxConcurrent, maxQueue, perUserSoftLimit } = proxyQueue.limits()
+  return c.json({
+    inflight,
+    queued,
+    maxConcurrent,
+    maxQueue,
+    proxyUserSoftLimit: perUserSoftLimit,
+    myInflight: myInflight ?? 0,
+    myQueued: myQueued ?? 0,
+    myNextPosition: myNextPosition ?? null,
+  })
 })
 
 // ===== Telemetry =====
@@ -1001,22 +1084,26 @@ app.post('/api/telemetry/event', async (c) => {
     const s = typeof value === 'string' ? value : String(value)
     return s.length > max ? s.slice(0, max) : s
   }
+  const normalizeAppMode = (value: unknown): 'gallery' | 'agent' | 'video' => {
+    return value === 'agent' || value === 'video' || value === 'gallery' ? value : 'gallery'
+  }
 
   const now = Date.now()
   const isSuccess = e.event_type === 'success'
   const isFailure = !isSuccess
+  const appMode = normalizeAppMode(e.app_mode)
 
   db.transaction(() => {
     db.query(`
       INSERT INTO request_events (
-        user_id, username, event_type, provider, api_mode, model, size, quality, n_images,
+        user_id, username, event_type, app_mode, provider, api_mode, model, size, quality, n_images,
         has_input_image, input_image_count, has_mask, prompt, duration_ms, http_status,
         error_type, error_message, error_stack, output_count, output_bytes,
         action_type, task_id, image_index,
         user_agent, ip, client_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      payload.sub, payload.username, clip(e.event_type, 32),
+      payload.sub, payload.username, clip(e.event_type, 32), appMode,
       clip(e.provider, 64), clip(e.api_mode, 32), clip(e.model, 128), clip(e.size, 32), clip(e.quality, 32), e.n_images ?? null,
       e.has_input_image ? 1 : 0, e.input_image_count ?? null, e.has_mask ? 1 : 0,
       clip(e.prompt, 4000), e.duration_ms ?? null, e.http_status ?? null,
@@ -1088,6 +1175,13 @@ app.patch('/api/admin/team-settings', async (c) => {
     hasUpdates = true
   }
 
+  if ('proxyUserSoftLimit' in record) {
+    const val = parseProxyUserSoftLimitPatchValue(record.proxyUserSoftLimit)
+    if (val == null) return c.json({ error: '单用户软上限必须是 0 到 100 之间的数字。' }, 400)
+    settings.proxyUserSoftLimit = val
+    hasUpdates = true
+  }
+
   if ('galleryAutoRetryCount' in record) {
     const val = parseGalleryAutoRetryCountPatchValue(record.galleryAutoRetryCount)
     if (val == null) return c.json({ error: '失败自动重试次数必须是 0 到 5 之间的数字。' }, 400)
@@ -1095,17 +1189,38 @@ app.patch('/api/admin/team-settings', async (c) => {
     hasUpdates = true
   }
 
+  if ('streamFallbackEnabled' in record) {
+    const val = parseBooleanPatchValue(record.streamFallbackEnabled)
+    if (val == null) return c.json({ error: '流式失败回退开关必须是布尔值。' }, 400)
+    settings.streamFallbackEnabled = val
+    hasUpdates = true
+  }
+
+  if ('requestTimeoutSeconds' in record) {
+    const val = parseRequestTimeoutSecondsPatchValue(record.requestTimeoutSeconds)
+    if (val == null) return c.json({ error: '请求超时必须是 30 到 3600 秒之间的数字。' }, 400)
+    settings.requestTimeoutSeconds = val
+    hasUpdates = true
+  }
+
   if (!hasUpdates) return c.json({ error: '没有可更新的字段。' }, 400)
   saveTeamSettingsRecord(settings, payload.sub)
   // 立即把新上限应用到在跑的队列，无需重启 auth 容器。
   const effective = getTeamSettingsPayload()
-  proxyQueue.setLimits({ maxConcurrent: effective.maxConcurrent, maxQueue: effective.maxQueue })
+  proxyQueue.setLimits({
+    maxConcurrent: effective.maxConcurrent,
+    maxQueue: effective.maxQueue,
+    perUserSoftLimit: effective.proxyUserSoftLimit,
+  })
   logger.info({
     scope: 'admin',
     updatedBy: payload.sub,
     maxConcurrent: effective.maxConcurrent,
     maxQueue: effective.maxQueue,
+    proxyUserSoftLimit: effective.proxyUserSoftLimit,
     galleryAutoRetryCount: effective.galleryAutoRetryCount,
+    streamFallbackEnabled: effective.streamFallbackEnabled,
+    requestTimeoutSeconds: effective.requestTimeoutSeconds,
   }, 'Team service limits updated')
   return c.json(effective)
 })
@@ -1158,7 +1273,7 @@ app.patch('/api/admin/users/:id', async (c) => {
   if (typeof body.disabled === 'boolean') { updates.push('disabled = ?'); args.push(body.disabled ? 1 : 0) }
   if (typeof body.password === 'string' && body.password.length >= 6) {
     updates.push('password_hash = ?')
-    args.push(await Bun.password.hash(body.password, { algorithm: 'bcrypt', cost: 10 }))
+    args.push(await hashPassword(body.password))
     // 改密码即令该用户所有旧令牌失效（全设备登出）
     updates.push('token_version = token_version + 1')
   }
@@ -1166,6 +1281,7 @@ app.patch('/api/admin/users/:id', async (c) => {
   args.push(id)
   const result = db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...(args))
   if (result.changes === 0) return c.json({ error: '用户不存在，可能已被删除。' }, 404)
+  logger.info({ scope: 'admin', actor: payload.sub, targetUserId: id, fields: updates.map((u) => u.split(' =')[0]), action: 'update_user' }, 'Admin updated user')
   return c.json({ ok: true })
 })
 
@@ -1179,6 +1295,7 @@ app.delete('/api/admin/users/:id', async (c) => {
 
   const result = db.query('DELETE FROM users WHERE id = ?').run(id)
   if (result.changes === 0) return c.json({ error: '用户不存在，可能已被删除。' }, 404)
+  logger.warn({ scope: 'admin', actor: payload.sub, targetUserId: id, action: 'delete_user' }, 'Admin deleted user')
   return c.json({ ok: true })
 })
 
@@ -1231,6 +1348,7 @@ app.post('/api/admin/invites', async (c) => {
     }
   })()
 
+  logger.info({ scope: 'admin', actor: payload.sub, count: codes.length, maxUses, action: 'create_invites' }, 'Admin created invite codes')
   return c.json({ code: codes[0], codes })
 })
 
@@ -1238,12 +1356,15 @@ app.delete('/api/admin/invites/:code', (c) => {
   const code = c.req.param('code')
   const result = db.query('DELETE FROM invite_codes WHERE code = ?').run(code)
   if (result.changes === 0) return c.json({ error: '邀请码不存在，可能已被吊销。' }, 404)
+  const payload = c.get('jwtPayload') as { sub?: string }
+  logger.info({ scope: 'admin', actor: payload.sub, code, action: 'delete_invite' }, 'Admin deleted invite code')
   return c.json({ ok: true })
 })
 
 app.get('/api/admin/events', (c) => {
   const userId = c.req.query('user_id')
   const eventType = c.req.query('event_type')
+  const appMode = c.req.query('app_mode')
   const errorType = c.req.query('error_type')
   const limit = Math.min(200, Math.max(1, Number(c.req.query('limit') ?? 50)))
   const offset = Math.max(0, Number(c.req.query('offset') ?? 0))
@@ -1254,6 +1375,15 @@ app.get('/api/admin/events', (c) => {
   const args: SQLQueryBindings[] = []
   if (userId) { where.push('user_id = ?'); args.push(userId) }
   if (eventType) { where.push('event_type = ?'); args.push(eventType) }
+  if (appMode) {
+    if (appMode === 'gallery') {
+      where.push('(app_mode = ? OR app_mode IS NULL)')
+      args.push(appMode)
+    } else {
+      where.push('app_mode = ?')
+      args.push(appMode)
+    }
+  }
   if (errorType) { where.push('error_type = ?'); args.push(errorType) }
   if (since) { where.push('created_at >= ?'); args.push(since) }
   if (until) { where.push('created_at <= ?'); args.push(until) }
@@ -1274,6 +1404,7 @@ const EVENT_EXPORT_COLUMNS: Array<{ key: string; label: string }> = [
   { key: 'username', label: '用户名' },
   { key: 'user_id', label: '用户ID' },
   { key: 'event_type', label: '结果' },
+  { key: 'app_mode', label: '模式' },
   { key: 'provider', label: '服务商' },
   { key: 'api_mode', label: '接口模式' },
   { key: 'model', label: '模型' },
@@ -1304,9 +1435,208 @@ function csvEscape(value: unknown): string {
   return s
 }
 
+function normalizeFailureReason(errorType: string | null, httpStatus: number | null, message: string | null): string {
+  const msg = `${errorType ?? ''} ${httpStatus ?? ''} ${message ?? ''}`.toLowerCase()
+  if (/empty_stream|before first payload/.test(msg)) return 'stream_empty'
+  if (/stream disconnected|stream closed before response\.completed|closed before response|connection reset/.test(msg)) return 'stream_disconnected'
+  if (/timeout|timed out|\b408\b/.test(msg)) return 'timeout'
+  if (/rate|quota|limit|too many|429/.test(msg)) return 'rate_or_quota'
+  if (/invalid.*token|token.*invalid|unauthori[sz]ed|\b401\b/.test(msg)) return 'auth_invalid'
+  if (/forbidden|permission|\b403\b/.test(msg)) return 'auth_forbidden'
+  if (/invalid_request|bad request|\b400\b/.test(msg)) return 'invalid_request'
+  if (/\b422\b|unprocessable/.test(msg)) return 'invalid_video_request'
+  if (/failed to fetch|network|cors|跨域|load failed/.test(msg)) return 'network'
+  if (/internal_server_error|server_error|\b5\d\d\b/.test(msg)) return 'upstream_5xx'
+  return errorType || 'unknown'
+}
+
+function parseAdminRange(c: Context, fallbackDays = 7): { since: number; until: number } {
+  const untilRaw = c.req.query('until')
+  const sinceRaw = c.req.query('since')
+  const until = untilRaw ? Number(untilRaw) : Date.now()
+  const since = sinceRaw ? Number(sinceRaw) : until - fallbackDays * 24 * 60 * 60 * 1000
+  return {
+    since: Number.isFinite(since) ? since : Date.now() - fallbackDays * 24 * 60 * 60 * 1000,
+    until: Number.isFinite(until) ? until : Date.now(),
+  }
+}
+
+function buildFailureSummary(range: { since: number; until: number }, appMode?: string | null) {
+  const where: string[] = ['created_at >= ?', 'created_at <= ?']
+  const args: SQLQueryBindings[] = [range.since, range.until]
+  if (appMode) {
+    if (appMode === 'gallery') {
+      where.push('(app_mode = ? OR app_mode IS NULL)')
+      args.push(appMode)
+    } else {
+      where.push('app_mode = ?')
+      args.push(appMode)
+    }
+  }
+  const whereSql = `WHERE ${where.join(' AND ')}`
+
+  const totals = db.query(`
+    SELECT
+      COALESCE(app_mode, 'gallery') AS app_mode,
+      COUNT(*) AS total,
+      SUM(CASE WHEN event_type = 'success' THEN 1 ELSE 0 END) AS success,
+      SUM(CASE WHEN event_type != 'success' THEN 1 ELSE 0 END) AS failure,
+      AVG(duration_ms) AS avg_duration
+    FROM request_events
+    ${whereSql}
+    GROUP BY COALESCE(app_mode, 'gallery')
+    ORDER BY total DESC
+  `).all(...args)
+
+  const failureRows = db.query(`
+    SELECT COALESCE(app_mode, 'gallery') AS app_mode, username, error_type, http_status, error_message, created_at
+    FROM request_events
+    ${whereSql} AND event_type != 'success'
+    ORDER BY created_at DESC
+    LIMIT 5000
+  `).all(...args) as Array<{
+    app_mode: string
+    username: string
+    error_type: string | null
+    http_status: number | null
+    error_message: string | null
+    created_at: number
+  }>
+
+  const reasonMap = new Map<string, {
+    reason: string
+    app_mode: string
+    error_type: string | null
+    http_status: number | null
+    count: number
+    latest_at: number
+    sample_message: string | null
+  }>()
+  const statusMap = new Map<string, { http_status: number | null; count: number }>()
+  const userMap = new Map<string, { username: string; failures: number; latest_at: number }>()
+
+  for (const row of failureRows) {
+    const reason = normalizeFailureReason(row.error_type, row.http_status, row.error_message)
+    const key = `${row.app_mode}\n${reason}\n${row.error_type ?? ''}\n${row.http_status ?? ''}`
+    const current = reasonMap.get(key) ?? {
+      reason,
+      app_mode: row.app_mode,
+      error_type: row.error_type,
+      http_status: row.http_status,
+      count: 0,
+      latest_at: row.created_at,
+      sample_message: row.error_message,
+    }
+    current.count++
+    if (row.created_at > current.latest_at) {
+      current.latest_at = row.created_at
+      current.sample_message = row.error_message
+    }
+    reasonMap.set(key, current)
+
+    const statusKey = row.http_status == null ? 'none' : String(row.http_status)
+    const status = statusMap.get(statusKey) ?? { http_status: row.http_status, count: 0 }
+    status.count++
+    statusMap.set(statusKey, status)
+
+    const user = userMap.get(row.username) ?? { username: row.username, failures: 0, latest_at: row.created_at }
+    user.failures++
+    user.latest_at = Math.max(user.latest_at, row.created_at)
+    userMap.set(row.username, user)
+  }
+
+  return {
+    range,
+    totals,
+    reasons: Array.from(reasonMap.values()).sort((a, b) => b.count - a.count || b.latest_at - a.latest_at).slice(0, 30),
+    statuses: Array.from(statusMap.values()).sort((a, b) => b.count - a.count),
+    users: Array.from(userMap.values()).sort((a, b) => b.failures - a.failures || b.latest_at - a.latest_at).slice(0, 20),
+  }
+}
+
+async function getCaddyPrivacyAudit() {
+  const candidates = [
+    process.env.CADDYFILE_PATH,
+    path.resolve(process.cwd(), 'Caddyfile'),
+    path.resolve(process.cwd(), '..', 'Caddyfile'),
+    '/etc/caddy/Caddyfile',
+  ].filter((item): item is string => Boolean(item))
+
+  for (const filePath of candidates) {
+    const text = await readSmallTextFile(filePath, 128 * 1024)
+    if (!text) continue
+    const required = [
+      'request>headers>Authorization',
+      'request>headers>Proxy-Authorization',
+      'request>headers>X-Picpilot-Authorization',
+      'request>headers>X-PicPilot-Authorization',
+      'request>headers>Cookie',
+    ]
+    const missing = required.filter((field) => !text.includes(field))
+    return {
+      checked: true,
+      path: filePath,
+      redactsAuthHeaders: missing.length === 0,
+      missing,
+    }
+  }
+
+  return {
+    checked: false,
+    path: null,
+    redactsAuthHeaders: null,
+    missing: [],
+    message: '运行环境未暴露 Caddyfile，无法自动确认反代日志脱敏配置。',
+  }
+}
+
+function getRecentSanitizedEvents(limit = 40) {
+  return db.query(`
+    SELECT id, username, event_type, COALESCE(app_mode, 'gallery') AS app_mode,
+           provider, api_mode, model, duration_ms, http_status, error_type, error_message,
+           output_count, output_bytes, action_type, created_at
+    FROM request_events
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit)
+}
+
+async function buildDiagnosticsBundle() {
+  const range = { since: Date.now() - 7 * 24 * 60 * 60 * 1000, until: Date.now() }
+  const upstreamHealth = await getUpstreamHealthReport(CLIPROXY_LOG_DIR)
+  const recentCliproxyErrors = CLIPROXY_LOG_DIR ? await readRecentLogNames(CLIPROXY_LOG_DIR, 20) : []
+  const settings = getTeamSettingsPayload()
+  return {
+    generatedAt: Date.now(),
+    runtime: {
+      dataDir: DATA_DIR,
+      dbPath: DB_PATH,
+      apiProxyConfigured: Boolean(API_PROXY_URL),
+      cliproxyLogDirConfigured: Boolean(CLIPROXY_LOG_DIR),
+      eventRetentionDays: EVENT_RETENTION_DAYS,
+    },
+    teamSettings: settings,
+    queue: {
+      ...proxyQueue.stats(),
+      ...proxyQueue.limits(),
+      maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
+    },
+    failureSummary: buildFailureSummary(range),
+    upstreamHealth,
+    recentCliproxyErrors,
+    recentEvents: getRecentSanitizedEvents(40),
+    privacy: {
+      diagnosticsExcludesPrompt: true,
+      diagnosticsExcludesIpAndUserAgent: true,
+      caddy: await getCaddyPrivacyAudit(),
+    },
+  }
+}
+
 app.get('/api/admin/events/export', (c) => {
   const userId = c.req.query('user_id')
   const eventType = c.req.query('event_type')
+  const appMode = c.req.query('app_mode')
   const errorType = c.req.query('error_type')
   const sinceRaw = c.req.query('since')
   const untilRaw = c.req.query('until')
@@ -1327,6 +1657,15 @@ app.get('/api/admin/events/export', (c) => {
   const args: SQLQueryBindings[] = [since, until]
   if (userId) { where.push('user_id = ?'); args.push(userId) }
   if (eventType) { where.push('event_type = ?'); args.push(eventType) }
+  if (appMode) {
+    if (appMode === 'gallery') {
+      where.push('(app_mode = ? OR app_mode IS NULL)')
+      args.push(appMode)
+    } else {
+      where.push('app_mode = ?')
+      args.push(appMode)
+    }
+  }
   if (errorType) { where.push('error_type = ?'); args.push(errorType) }
   const whereSql = `WHERE ${where.join(' AND ')}`
 
@@ -1384,6 +1723,33 @@ app.get('/api/admin/overview', (c) => {
   `).all(sevenDaysAgo)
 
   return c.json({ totals, errors, providers })
+})
+
+app.get('/api/admin/failure-summary', (c) => {
+  const range = parseAdminRange(c, 7)
+  const appMode = c.req.query('app_mode') || null
+  return c.json(buildFailureSummary(range, appMode))
+})
+
+app.get('/api/admin/upstream-health', async (c) => {
+  return c.json(await getUpstreamHealthReport(CLIPROXY_LOG_DIR))
+})
+
+app.get('/api/admin/diagnostics', async (c) => {
+  return c.json(await buildDiagnosticsBundle())
+})
+
+app.get('/api/admin/diagnostics/export', async () => {
+  const bundle = await buildDiagnosticsBundle()
+  const date = new Date(bundle.generatedAt).toISOString().replace(/[:.]/g, '-')
+  const body = JSON.stringify(bundle, null, 2)
+  return new Response(body, {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="picpilot-diagnostics-${date}.json"`,
+      'Cache-Control': 'no-store',
+    },
+  })
 })
 
 app.post('/api/admin/gallery/:id/revoke', async (c) => {
@@ -1583,7 +1949,7 @@ app.post('/api/gallery', async (c) => {
 
   // body.prompt 已在上面的类型守卫里证明是 string，但该窄化无法带进事务闭包，先在此处提取。
   const promptText = body.prompt.slice(0, 4000)
-  // 配额二次校验 + 三条写库放进同一个同步事务：bun:sqlite 事务同步执行、SQLite 写事务串行化，
+  // 配额二次校验 + 三条写库放进同一个同步事务：better-sqlite3 事务同步执行、SQLite 写事务串行化，
   // 事务内重读 public_storage_bytes 即为序列化点，杜绝「两请求都通过预检后双双提交」的超额竞态。
   let quotaExceeded = false
   try {
@@ -1617,6 +1983,7 @@ app.post('/api/gallery', async (c) => {
     return c.json({ error: '公开图片失败，请稍后重试。' }, 500)
   }
 
+  logger.info({ scope: 'gallery', userId: payload.sub, imageId: id, size: totalBytes, originals: originals.length, action: 'publish' }, 'Gallery image published')
   return c.json({ id, width: main.width, height: main.height, size: totalBytes, originals: originals.length })
 })
 
@@ -1683,11 +2050,12 @@ app.delete('/api/gallery/:id', async (c) => {
   // 返回删除后的占用 / 张数，前端据此本地更新，避免再发一轮 /api/me 全量刷新
   const storageBytes = (db.query('SELECT public_storage_bytes AS bytes FROM users WHERE id = ?').get(img.user_id) as { bytes: number } | null)?.bytes ?? 0
   const galleryCount = (db.query('SELECT COUNT(*) AS n FROM public_images WHERE user_id = ?').get(img.user_id) as { n: number }).n
+  logger.info({ scope: 'gallery', userId: payload.sub, imageId: id, action: 'delete' }, 'Gallery image deleted')
   return c.json({ ok: true, storageBytes, galleryCount })
 })
 
 // 鉴权后流式返回公开图（原图或缩略图）
-app.get('/api/gallery/image/:id', (c) => {
+app.get('/api/gallery/image/:id', async (c) => {
   const id = c.req.param('id')
   const isThumb = c.req.query('thumb') === '1'
   const exists = db.query('SELECT 1 FROM public_images WHERE id = ? UNION ALL SELECT 1 FROM public_image_originals WHERE id = ? LIMIT 1').get(id, id)
@@ -1696,8 +2064,7 @@ app.get('/api/gallery/image/:id', (c) => {
   const file = path.join(isThumb ? THUMBS_DIR : PUBLIC_DIR, `${id}.webp`)
   if (!existsSync(file)) return c.json({ error: '图片文件丢失，请联系管理员检查服务器存储。' }, 404)
 
-  // Bun.file 直接当 Response body，零拷贝
-  return new Response(Bun.file(file), {
+  return new Response(await readFile(file), {
     headers: {
       'Content-Type': 'image/webp',
       'Content-Length': String(statSync(file).size),
@@ -1706,7 +2073,7 @@ app.get('/api/gallery/image/:id', (c) => {
   })
 })
 
-app.notFound((c) => {
+app.notFound(async (c) => {
   const pathname = new URL(c.req.url).pathname
   if (pathname.startsWith('/api/')) return c.json({ error: '接口不存在。' }, 404)
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return c.text('Not Found', 404)
@@ -1715,19 +2082,19 @@ app.notFound((c) => {
 
 // ===== boot =====
 
-// 仅作为主进程（bun run index.ts）启动时才监听端口；测试 import 本模块拿到 { app, db }
+// 仅作为主进程（npm start / tsx index.ts）启动时才监听端口；测试 import 本模块拿到 { app, db }
 // 用 app.request(...) 在进程内驱动，不会占用端口。
-if (import.meta.main) {
-  const server = Bun.serve({
+if (isMainModule()) {
+  const server = serve({
     fetch: app.fetch,
     port: PORT,
     // 图像生成 / Agent 的流式响应在分片之间可能出现较长静默（上游 cliproxyapi 代理的 CLI 后端
-    // 在生成大图时会安静一段时间）。Bun 默认 10s 空闲超时会在静默期直接断开 socket，导致前端
-    // fetch 抛出 "network error"。上调到 Bun 允许的最大值 255s，由 Caddy 的 600s 读写超时兜底。
-    idleTimeout: 255,
-  })
+    // 在生成大图时会安静一段时间）。Node 服务端超时交给 Caddy 600s 读写超时和前端请求超时兜底。
+  }) as HttpServer
+  server.requestTimeout = 0
+  server.timeout = 0
 
-  logger.info({ scope: 'server', url: server.url.href.replace(/\/$/, '') }, 'picpilot ready')
+  logger.info({ scope: 'server', url: `http://localhost:${PORT}` }, 'picpilot ready')
   logger.info({
     scope: 'server',
     port: PORT,
@@ -1738,8 +2105,12 @@ if (import.meta.main) {
     maxConcurrent: MAX_CONCURRENT,
     maxQueue: PROXY_QUEUE_MAX,
     maxQueueWaitMs: PROXY_QUEUE_MAX_WAIT_MS,
+    proxyUserSoftLimit: PROXY_USER_SOFT_LIMIT,
     defaultMaxBatchImages: DEFAULT_MAX_BATCH_IMAGES,
     defaultGalleryAutoRetryCount: DEFAULT_GALLERY_AUTO_RETRY_COUNT,
+    defaultStreamFallbackEnabled: DEFAULT_STREAM_FALLBACK_ENABLED,
+    defaultRequestTimeoutSeconds: DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    cliproxyLogDir: CLIPROXY_LOG_DIR || null,
   }, 'Runtime configuration')
 }
 

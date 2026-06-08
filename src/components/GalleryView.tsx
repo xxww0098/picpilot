@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthProvider";
+import { logger, serializeError } from "../lib/logger";
 import {
     deleteGalleryImage,
     fetchGalleryBlob,
@@ -87,7 +88,7 @@ function AuthImage({
             })
             .catch((err) => {
                 if (aborted) return;
-                console.error("[AuthImage] fetch failed:", src, err);
+                logger.error('gallery', 'AuthImage fetch 失败', { src, error: serializeError(err) });
                 setStatus("error");
             });
         // 离开视口范围 / 切换 src / 卸载时：中止并释放 blob，回到占位
@@ -163,7 +164,7 @@ function AuthImage({
             decoding="async"
             className={className}
             onError={() => {
-                console.error("[AuthImage] <img> load failed:", src);
+                logger.error('gallery', 'AuthImage img load 失败', { src });
                 setStatus("error");
             }}
             onLoad={() => setStatus("loaded")}

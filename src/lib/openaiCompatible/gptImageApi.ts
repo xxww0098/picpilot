@@ -102,6 +102,7 @@ export async function callGptImagesApiSingle(opts: CallApiOptions, profile: ApiP
         body: formData,
         signal: controller.signal,
       }, {
+        appMode: opts.telemetry?.appMode ?? 'gallery',
         provider: profile.provider,
         model: profile.model,
         codexCli: profile.codexCli,
@@ -148,6 +149,7 @@ export async function callGptImagesApiSingle(opts: CallApiOptions, profile: ApiP
         body: JSON.stringify(body),
         signal: controller.signal,
       }, {
+        appMode: opts.telemetry?.appMode ?? 'gallery',
         provider: profile.provider,
         model: profile.model,
         codexCli: profile.codexCli,

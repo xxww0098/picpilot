@@ -3,7 +3,7 @@ import pino from 'pino'
 
 type CommandResult = ReturnType<typeof spawnSync>
 
-const bunCommand = process.platform === 'win32' ? 'bun.cmd' : 'bun'
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const PRODUCT = 'picpilot'
 const logger = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -45,20 +45,20 @@ if (!nodeVersion) {
   process.exit(1)
 }
 
-const bunVersion = readCommandOutput(bunCommand, ['-v'])
-if (!bunVersion) {
-  logger.error({ scope: 'runtime' }, 'Bun is not installed')
+const npmVersion = readCommandOutput(npmCommand, ['-v'])
+if (!npmVersion) {
+  logger.error({ scope: 'runtime' }, 'npm is not installed')
   process.exit(1)
 }
 
-logger.info({ mode: 'local-hono', bun: bunVersion, node: nodeVersion }, 'Starting local picpilot')
+logger.info({ mode: 'local-hono', npm: npmVersion, node: nodeVersion }, 'Starting local picpilot')
 
 logger.info({ step: '1/3' }, 'Installing dependencies')
-run(bunCommand, ['install'], 'bun install')
-run(bunCommand, ['install'], 'bun install server', 'server')
+run(npmCommand, ['install'], 'npm install')
+run(npmCommand, ['install'], 'npm install server', 'server')
 
 logger.info({ step: '2/3' }, 'Building frontend')
-run(bunCommand, ['run', 'build'], 'bun run build')
+run(npmCommand, ['run', 'build'], 'npm run build')
 
 const authPort = process.env.AUTH_PORT ?? '3001'
 const localEnv = {
@@ -71,5 +71,5 @@ const localEnv = {
 
 logger.info({ step: '3/3', url: `http://localhost:${authPort}` }, 'Starting Hono server')
 if (!process.env.ADMIN_USERS) logger.warn({ username: 'admin', password: 'admin' }, 'Using default local admin')
-const result = spawnSync(bunCommand, ['run', 'index.ts'], { stdio: 'inherit', cwd: 'server', env: localEnv })
-ensureSuccess(result, 'bun run server')
+const result = spawnSync(npmCommand, ['start'], { stdio: 'inherit', cwd: 'server', env: localEnv })
+ensureSuccess(result, 'npm start server')

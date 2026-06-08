@@ -1,5 +1,17 @@
 {
 	auto_https off
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Proxy-Authorization delete
+				request>headers>X-Picpilot-Authorization delete
+				request>headers>X-PicPilot-Authorization delete
+				request>headers>Cookie delete
+			}
+		}
+	}
 }
 
 :80 {

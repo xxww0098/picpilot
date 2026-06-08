@@ -245,26 +245,39 @@ export default function TaskGrid() {
   }, [clearSelection, isMac])
 
   if (!filteredTasks.length) {
+    const isVideo = appMode === 'video'
+    const isFiltered = Boolean(searchQuery || filterFavorite)
     return (
-      <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
-          <p className="text-sm">没有找到匹配的记录</p>
+      <div className="flex flex-col items-center justify-center px-6 py-14 text-center sm:py-24">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+          {isFiltered ? (
+            <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+            </svg>
+          ) : (
+            <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          )}
+        </div>
+        {isFiltered ? (
+          <>
+            <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">没有匹配的记录</h2>
+            <p className="mt-1.5 max-w-xs text-sm text-[hsl(var(--muted-foreground))]">试试调整搜索词或筛选条件。</p>
+          </>
         ) : (
           <>
-            <svg
-              className="w-16 h-16 mx-auto mb-4 text-gray-200 dark:text-gray-700"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <p className="text-sm">{appMode === 'video' ? '输入提示词开始生成视频' : '输入提示词开始生成图片'}</p>
+            <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">{isVideo ? '还没有视频' : '还没有图片'}</h2>
+            <p className="mt-1.5 max-w-[18rem] text-sm leading-relaxed text-[hsl(var(--muted-foreground))] sm:max-w-sm">
+              {isVideo ? (
+                '在下方输入框描述你想要的视频即可开始生成。'
+              ) : (
+                <>
+                  <span className="sm:hidden">在下方输入提示词即可开始生成。</span>
+                  <span className="hidden sm:inline">在下方输入框描述你想要的画面即可开始生成，支持输入 @ 引用参考图，或从「提示词模板」快速起步。</span>
+                </>
+              )}
+            </p>
           </>
         )}
       </div>

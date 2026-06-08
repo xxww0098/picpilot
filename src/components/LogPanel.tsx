@@ -6,6 +6,7 @@ import {
   formatLogsAsText,
   getLogEntries,
   subscribeLogs,
+  type LogArea,
   type LogEntry,
   type LogLevel,
 } from '../lib/logger'
@@ -14,12 +15,20 @@ import ModalShell from './ModalShell'
 import { CloseIcon, CopyIcon, DownloadIcon, TrashIcon } from './icons'
 
 const LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
+const AREAS: LogArea[] = ['gallery', 'agent', 'video', 'system']
 
 const LEVEL_META: Record<LogLevel, { label: string; text: string; badge: string }> = {
   debug: { label: '调试', text: 'text-gray-500 dark:text-gray-400', badge: 'bg-gray-400/15 text-gray-500 dark:text-gray-400' },
   info: { label: '信息', text: 'text-sky-600 dark:text-sky-400', badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-400' },
   warn: { label: '警告', text: 'text-amber-600 dark:text-amber-400', badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
   error: { label: '错误', text: 'text-red-600 dark:text-red-400', badge: 'bg-red-500/15 text-red-600 dark:text-red-400' },
+}
+
+const AREA_META: Record<LogArea, { label: string; badge: string }> = {
+  gallery: { label: '画廊', badge: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' },
+  agent: { label: 'Agent', badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-400' },
+  video: { label: 'Video', badge: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  system: { label: '系统', badge: 'bg-gray-500/15 text-gray-600 dark:text-gray-400' },
 }
 
 function formatTime(time: number): string {
@@ -52,6 +61,7 @@ function exportFileName(): string {
 function LogRow({ entry }: { entry: LogEntry }) {
   const [expanded, setExpanded] = useState(false)
   const meta = LEVEL_META[entry.level]
+  const areaMeta = AREA_META[entry.area]
   const hasData = entry.data !== undefined
   const dataText = useMemo(() => (hasData ? JSON.stringify(entry.data, null, 2) : ''), [entry.data, hasData])
 
@@ -64,6 +74,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
       >
         <span className="shrink-0 tabular-nums text-gray-400 dark:text-gray-500">{formatTime(entry.time)}</span>
         <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold ${meta.badge}`}>{meta.label}</span>
+        <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold ${areaMeta.badge}`}>{areaMeta.label}</span>
         <span className="shrink-0 text-gray-400 dark:text-gray-500">[{entry.scope}]</span>
         <span className={`min-w-0 flex-1 whitespace-pre-wrap break-words ${meta.text}`}>{entry.message}</span>
         {hasData && (
@@ -88,6 +99,7 @@ export default function LogPanel() {
   const modalRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [enabledLevels, setEnabledLevels] = useState<Set<LogLevel>>(() => new Set(LEVELS))
+  const [activeArea, setActiveArea] = useState<LogArea | 'all'>('all')
   const [activeScope, setActiveScope] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
@@ -104,15 +116,22 @@ export default function LogPanel() {
     return counts
   }, [entries])
 
+  const areaCounts = useMemo(() => {
+    const counts: Record<LogArea, number> = { gallery: 0, agent: 0, video: 0, system: 0 }
+    for (const entry of entries) counts[entry.area]++
+    return counts
+  }, [entries])
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase()
     return entries.filter((entry) => {
       if (!enabledLevels.has(entry.level)) return false
+      if (activeArea !== 'all' && entry.area !== activeArea) return false
       if (activeScope !== 'all' && entry.scope !== activeScope) return false
       if (needle && !buildSearchText(entry).includes(needle)) return false
       return true
     })
-  }, [entries, enabledLevels, activeScope, search])
+  }, [entries, enabledLevels, activeArea, activeScope, search])
 
   useEffect(() => {
     if (!open || !autoScroll) return
@@ -223,6 +242,28 @@ export default function LogPanel() {
             </label>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveArea('all')}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${activeArea === 'all' ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.04] dark:text-gray-400'}`}
+            >
+              全部区域
+            </button>
+            {AREAS.map((area) => {
+              const active = activeArea === area
+              const meta = AREA_META[area]
+              return (
+                <button
+                  key={area}
+                  type="button"
+                  onClick={() => setActiveArea(area)}
+                  className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${active ? meta.badge : 'bg-gray-100 text-gray-500 dark:bg-white/[0.04] dark:text-gray-400'}`}
+                >
+                  {meta.label} {areaCounts[area]}
+                </button>
+              )
+            })}
+            <span className="mx-1 h-4 w-px bg-gray-200 dark:bg-white/10" />
             {LEVELS.map((level) => {
               const active = enabledLevels.has(level)
               const meta = LEVEL_META[level]

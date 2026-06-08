@@ -11,6 +11,7 @@
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogArea = 'gallery' | 'agent' | 'video' | 'system'
 
 export interface LogEntry {
   /** 自增序号，作为 React key */
@@ -18,6 +19,8 @@ export interface LogEntry {
   /** 记录时间（Date.now()） */
   time: number
   level: LogLevel
+  /** 产品区域：用于把日志按画廊 / Agent / Video / 系统切开 */
+  area: LogArea
   /** 来源域，例如 'api' | 'task' | 'db' | 'global' */
   scope: string
   message: string
@@ -143,6 +146,30 @@ function safeStringify(value: unknown, space = 0): string {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeLogArea(value: unknown): LogArea | null {
+  if (value === 'gallery' || value === 'agent' || value === 'video' || value === 'system') return value
+  return null
+}
+
+function inferLogArea(scope: string, data: unknown): LogArea {
+  const directScope = normalizeLogArea(scope)
+  if (directScope) return directScope
+
+  if (isRecord(data)) {
+    const dataArea = normalizeLogArea(data.area) ?? normalizeLogArea(data.appMode) ?? normalizeLogArea(data.sourceMode)
+    if (dataArea) return dataArea
+    if (data.mediaType === 'video') return 'video'
+    if (data.agentConversationId || data.agentRoundId || data.agentMessageId || data.agentToolCallId) return 'agent'
+  }
+
+  if (scope === 'api' || scope === 'task') return 'gallery'
+  return 'system'
+}
+
 function consoleMethod(level: LogLevel): (...args: unknown[]) => void {
   switch (level) {
     case 'debug':
@@ -158,7 +185,7 @@ function consoleMethod(level: LogLevel): (...args: unknown[]) => void {
 
 function mirrorToConsole(entry: LogEntry): void {
   const time = new Date(entry.time).toISOString().slice(11, 23)
-  const label = `[${time}][${entry.scope}] ${entry.message}`
+  const label = `[${time}][${entry.area}/${entry.scope}] ${entry.message}`
   const log = consoleMethod(entry.level)
   if (entry.data === undefined) log(label)
   else log(label, entry.data)
@@ -174,6 +201,7 @@ function record(level: LogLevel, scope: string, message: string, data?: unknown)
     id: ++seq,
     time: Date.now(),
     level,
+    area: inferLogArea(scope, data),
     scope,
     message,
     data: data === undefined ? undefined : sanitize(data),
@@ -210,7 +238,7 @@ export function clearLogs(): void {
 
 export function formatLogEntryAsText(entry: LogEntry): string {
   const ts = new Date(entry.time).toISOString()
-  const head = `${ts} ${entry.level.toUpperCase().padEnd(5)} [${entry.scope}] ${entry.message}`
+  const head = `${ts} ${entry.level.toUpperCase().padEnd(5)} [${entry.area}/${entry.scope}] ${entry.message}`
   if (entry.data === undefined) return head
   return `${head}\n${safeStringify(entry.data, 2)}`
 }

@@ -7,9 +7,18 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 
 const EVENT_ACTION_LABELS: Record<string, string> = {
   generate: '普通生成',
+  agent_message: 'Agent 对话',
+  generate_video: '视频生成',
   retry_failed_images: '重试失败图片',
   auto_retry_failed_images: '自动重试失败图片',
   regenerate_image: '单张重新生成',
+}
+
+const APP_MODE_LABELS: Record<string, string> = {
+  gallery: '画廊',
+  agent: 'Agent',
+  video: 'Video',
+  workflow: '工作流',
 }
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -36,6 +45,21 @@ const HTTP_STATUS_LABELS: Record<number, string> = {
   502: '502 上游请求失败',
   503: '503 服务不可用',
   504: '504 网关超时',
+}
+
+const FAILURE_REASON_LABELS: Record<string, string> = {
+  stream_empty: '流式空响应',
+  stream_disconnected: '流式中断',
+  timeout: '请求超时',
+  rate_or_quota: '额度或限流',
+  auth_invalid: '登录态失效',
+  auth_forbidden: '账号权限不足',
+  invalid_request: '请求参数无效',
+  invalid_video_request: '视频参数无效',
+  network: '网络或跨域',
+  upstream_5xx: '上游 5xx',
+  server_error: '服务端错误',
+  unknown: '未知错误',
 }
 
 const PARAM_VALUE_LABELS: Record<string, Record<string, string>> = {
@@ -84,6 +108,11 @@ export function getEventActionLabel(value: string | null | undefined): string {
   return EVENT_ACTION_LABELS[value] ?? value
 }
 
+export function getAppModeLabel(value: string | null | undefined): string {
+  if (!value) return '画廊'
+  return APP_MODE_LABELS[value] ?? value
+}
+
 export function getErrorTypeLabel(value: string | null | undefined): string {
   if (!value) return '—'
   return ERROR_TYPE_LABELS[value] ?? value
@@ -92,6 +121,7 @@ export function getErrorTypeLabel(value: string | null | undefined): string {
 export function getApiModeLabel(value: string | null | undefined): string {
   if (value === 'images') return 'Images API（图像接口）'
   if (value === 'responses') return 'Responses API（对话接口）'
+  if (value === 'videos') return 'Videos API（视频接口）'
   return value || '—'
 }
 
@@ -105,6 +135,11 @@ export function getProviderDisplayName(value: string | null | undefined): string
 export function getHttpStatusLabel(status: number | null | undefined): string {
   if (status == null) return '—'
   return HTTP_STATUS_LABELS[status] ?? String(status)
+}
+
+export function getFailureReasonLabel(value: string | null | undefined): string {
+  if (!value) return '—'
+  return FAILURE_REASON_LABELS[value] ?? value
 }
 
 export function getParamValueLabel(paramKey: string, value: string | number | null | undefined): string {

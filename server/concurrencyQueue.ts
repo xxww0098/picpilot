@@ -31,11 +31,15 @@ export interface ConcurrencyQueueOptions {
   maxQueue: number
   /** 默认排队等待上限（ms）；<=0 表示不限时。acquire 可单独覆盖 */
   maxWaitMs: number
+  /** 单用户在途软上限；0 表示关闭。 */
+  perUserSoftLimit?: number
 }
 
 export interface ConcurrencyQueueStats {
   inflight: number
   queued: number
+  /** 当前用户在途请求数；未传 userId 时不返回。 */
+  myInflight?: number
   /** 当前用户排队中的请求数；未传 userId 时不返回。 */
   myQueued?: number
   /** 当前用户第一个等待请求在 FIFO 队列中的 1-based 位置；未排队为 null。 */
@@ -50,7 +54,7 @@ export interface ConcurrencyQueue {
    */
   acquire(signal: AbortSignal, maxWaitMs?: number, meta?: { userId?: string | null }): Promise<void>
   /** 释放一个并发槽位并唤醒队首等待者。 */
-  release(): void
+  release(meta?: { userId?: string | null }): void
   /** 当前在途数与排队数，用于日志/调试。 */
   stats(userId?: string | null): ConcurrencyQueueStats
   /**
@@ -59,9 +63,9 @@ export interface ConcurrencyQueue {
    * 降低只影响后续放行判断，不会中断已在途的请求。
    * 调小 maxQueue 不会踢出已在队列里的等待者，只对后续 acquire 生效。
    */
-  setLimits(limits: { maxConcurrent?: number; maxQueue?: number }): void
+  setLimits(limits: { maxConcurrent?: number; maxQueue?: number; perUserSoftLimit?: number }): void
   /** 当前生效上限。 */
-  limits(): { maxConcurrent: number; maxQueue: number }
+  limits(): { maxConcurrent: number; maxQueue: number; perUserSoftLimit: number }
 }
 
 interface SlotWaiter {
@@ -73,19 +77,64 @@ interface SlotWaiter {
 export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): ConcurrencyQueue {
   let maxConcurrent = Math.max(1, opts.maxConcurrent)
   let maxQueue = Math.max(0, opts.maxQueue)
+  let perUserSoftLimit = Math.max(0, Math.trunc(opts.perUserSoftLimit ?? 0))
   const defaultWaitMs = Math.max(0, opts.maxWaitMs)
 
   let inflight = 0
   const waiters: SlotWaiter[] = []
+  const inflightByUser = new Map<string, number>()
+  const inflightUsers: Array<string | null> = []
+
+  function normalizeUserId(userId?: string | null): string | null {
+    return typeof userId === 'string' && userId ? userId : null
+  }
+
+  function incrementUserInflight(userId: string | null) {
+    inflightUsers.push(userId)
+    if (!userId) return
+    inflightByUser.set(userId, (inflightByUser.get(userId) ?? 0) + 1)
+  }
+
+  function decrementUserInflight(userId: string | null | undefined) {
+    let resolvedUserId = userId
+    if (resolvedUserId === undefined) {
+      resolvedUserId = inflightUsers.shift() ?? null
+    } else {
+      const idx = inflightUsers.indexOf(resolvedUserId)
+      if (idx >= 0) inflightUsers.splice(idx, 1)
+      else inflightUsers.shift()
+    }
+    userId = resolvedUserId
+    if (!userId) return
+    const next = (inflightByUser.get(userId) ?? 0) - 1
+    if (next > 0) inflightByUser.set(userId, next)
+    else inflightByUser.delete(userId)
+  }
+
+  function isUserOverSoftLimit(userId: string | null): boolean {
+    return Boolean(userId && perUserSoftLimit > 0 && (inflightByUser.get(userId) ?? 0) >= perUserSoftLimit)
+  }
+
+  function findDispatchIndex(): number {
+    if (waiters.length === 0) return -1
+    if (perUserSoftLimit <= 0) return 0
+    const first = waiters[0]
+    if (!first || !isUserOverSoftLimit(first.userId)) return 0
+
+    const eligibleIndex = waiters.findIndex((waiter) => !isUserOverSoftLimit(waiter.userId))
+    return eligibleIndex >= 0 ? eligibleIndex : 0
+  }
 
   function acquire(
     signal: AbortSignal,
     maxWaitMs: number = defaultWaitMs,
     meta?: { userId?: string | null },
   ): Promise<void> {
+    const userId = normalizeUserId(meta?.userId)
     // 有空位且没有排队者：直接占位放行
     if (inflight < maxConcurrent && waiters.length === 0) {
       inflight++
+      incrementUserInflight(userId)
       return Promise.resolve()
     }
     if (waiters.length >= maxQueue) {
@@ -97,10 +146,9 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
 
     return new Promise<void>((resolve, reject) => {
       let settled = false
-      const userId = typeof meta?.userId === 'string' && meta.userId ? meta.userId : null
       const waiter: SlotWaiter = {
         userId,
-        resolve: () => finish(() => { inflight++; resolve() }),
+        resolve: () => finish(() => { inflight++; incrementUserInflight(userId); resolve() }),
         reject: (err) => finish(() => reject(err)),
       }
       const timer = maxWaitMs > 0
@@ -122,27 +170,33 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
   }
 
   // 在有空位时按 FIFO 唤醒队首等待者；resolve 内部会 inflight++。
+  // 当单用户软上限启用时，如果队首用户已占太多在途请求，且后方有未超限用户，则临时跳过队首。
   function pump(): void {
     while (waiters.length > 0 && inflight < maxConcurrent) {
-      const waiter = waiters.shift()
+      const idx = findDispatchIndex()
+      const waiter = idx >= 0 ? waiters.splice(idx, 1)[0] : undefined
       if (waiter) waiter.resolve()
     }
   }
 
-  function release(): void {
+  function release(meta?: { userId?: string | null }): void {
     // 防御：每个成功的 acquire 只应 release 一次（handler 侧有 released 守卫保证），
     // 正常路径不会越界；这里兜底，绝不让 inflight 变负而破坏后续放行判断。
     if (inflight <= 0) return
     inflight--
+    decrementUserInflight(meta ? normalizeUserId(meta.userId) : undefined)
     pump()
   }
 
-  function setLimits(limits: { maxConcurrent?: number; maxQueue?: number }): void {
+  function setLimits(limits: { maxConcurrent?: number; maxQueue?: number; perUserSoftLimit?: number }): void {
     if (typeof limits.maxConcurrent === 'number' && Number.isFinite(limits.maxConcurrent)) {
       maxConcurrent = Math.max(1, Math.trunc(limits.maxConcurrent))
     }
     if (typeof limits.maxQueue === 'number' && Number.isFinite(limits.maxQueue)) {
       maxQueue = Math.max(0, Math.trunc(limits.maxQueue))
+    }
+    if (typeof limits.perUserSoftLimit === 'number' && Number.isFinite(limits.perUserSoftLimit)) {
+      perUserSoftLimit = Math.max(0, Math.trunc(limits.perUserSoftLimit))
     }
     // 提高并发上限后可能腾出空位，立即唤醒等待者。
     pump()
@@ -150,7 +204,7 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
 
   function stats(userId?: string | null): ConcurrencyQueueStats {
     const base = { inflight, queued: waiters.length }
-    const targetUserId = typeof userId === 'string' && userId ? userId : null
+    const targetUserId = normalizeUserId(userId)
     if (!targetUserId) return base
 
     let myQueued = 0
@@ -160,7 +214,7 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
       myQueued++
       if (myNextPosition == null) myNextPosition = index + 1
     })
-    return { ...base, myQueued, myNextPosition }
+    return { ...base, myInflight: inflightByUser.get(targetUserId) ?? 0, myQueued, myNextPosition }
   }
 
   return {
@@ -168,6 +222,6 @@ export function createConcurrencyQueue(opts: ConcurrencyQueueOptions): Concurren
     release,
     stats,
     setLimits,
-    limits: () => ({ maxConcurrent, maxQueue }),
+    limits: () => ({ maxConcurrent, maxQueue, perUserSoftLimit }),
   }
 }

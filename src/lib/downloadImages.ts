@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import { ensureImageCached } from '../store'
+import { logger, serializeError } from './logger'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -36,7 +37,7 @@ export async function downloadImageIds(imageIds: string[], fileNameBase = 'image
       successCount++
       if (multiple) await delay(100)
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '单张图片下载失败', { imageId: imageIds[index], error: serializeError(err) })
       failCount++
     }
   }
@@ -64,7 +65,7 @@ export async function downloadImagesAsZip(
         zip.file(`${order}.${getBlobExtension(blob)}`, blob)
         successCount++
       } catch (err) {
-        console.error('[downloadImagesAsZip] failed:', imageIds[i], err)
+        logger.error('ui', 'ZIP 批量下载图片失败', { imageId: imageIds[i], error: serializeError(err) })
         failCount++
       } finally {
         done++

@@ -38,6 +38,19 @@ export function parseQueuePatchValue(value: unknown): number | null {
   return Math.trunc(numeric)
 }
 
+// 单用户软上限：0 表示关闭；>0 时，队首用户已占满该上限且后方有其他用户等待时，优先放行后方用户。
+export function normalizeProxyUserSoftLimit(value: unknown, fallback = 0): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(0, Math.min(100, Math.trunc(numeric)))
+}
+
+export function parseProxyUserSoftLimitPatchValue(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) return null
+  return Math.trunc(numeric)
+}
+
 // 画廊批量卡片失败自动补重试次数。范围 0-5，0 表示关闭。
 export function normalizeGalleryAutoRetryCount(value: unknown, fallback = 1): number {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -48,6 +61,44 @@ export function normalizeGalleryAutoRetryCount(value: unknown, fallback = 1): nu
 export function parseGalleryAutoRetryCountPatchValue(value: unknown): number | null {
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric) || numeric < 0 || numeric > 5) return null
+  return Math.trunc(numeric)
+}
+
+export function normalizeBooleanSetting(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  }
+  if (typeof value === 'number') {
+    if (value === 1) return true
+    if (value === 0) return false
+  }
+  return fallback
+}
+
+export function parseBooleanPatchValue(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number' && (value === 0 || value === 1)) return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  }
+  return null
+}
+
+// 请求超时统一配置：图片、Agent、视频长轮询都可能超过 5 分钟，默认 900s；范围 30s-3600s。
+export function normalizeRequestTimeoutSeconds(value: unknown, fallback = 900): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(30, Math.min(3600, Math.trunc(numeric)))
+}
+
+export function parseRequestTimeoutSecondsPatchValue(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < 30 || numeric > 3600) return null
   return Math.trunc(numeric)
 }
 

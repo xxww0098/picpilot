@@ -4,6 +4,7 @@ import { formatBytes, formatTimestamp } from '../../lib/format'
 import {
   getEventActionLabel,
   getApiModeLabel,
+  getAppModeLabel,
   getErrorTypeLabel,
   getEventTypeLabel,
   getHttpStatusLabel,
@@ -55,6 +56,7 @@ function formatEventDetailText(event: AdminEventRow): string {
     `时间：${formatTimestamp(event.created_at)}`,
     `用户：${event.username}`,
     `结果：${getEventTypeLabel(event.event_type)}`,
+    `模式：${getAppModeLabel(event.app_mode)}`,
     `操作：${getEventActionLabel(event.action_type)}`,
     `任务 ID：${event.task_id ?? '—'}`,
     `图片序号：${event.image_index == null ? '—' : event.image_index + 1}`,
@@ -84,6 +86,7 @@ function formatEventDetailText(event: AdminEventRow): string {
 
 export default function EventLog() {
   const [page, setPage] = useState(0)
+  const [appMode, setAppMode] = useState('')
   const [eventType, setEventType] = useState('')
   const [errorType, setErrorType] = useState('')
   const [day, setDay] = useState<string>(todayString())
@@ -95,6 +98,7 @@ export default function EventLog() {
 
   const { data, loading, error } = useAsyncQuery(async () => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) })
+    if (appMode) params.set('app_mode', appMode)
     if (eventType) params.set('event_type', eventType)
     if (errorType) params.set('error_type', errorType)
     if (range) {
@@ -102,7 +106,7 @@ export default function EventLog() {
       params.set('until', String(range.until))
     }
     return fetchAdminEvents(params)
-  }, [page, eventType, errorType, day])
+  }, [page, appMode, eventType, errorType, day])
 
   const events = data?.events ?? []
   const total = data?.total ?? 0
@@ -126,6 +130,16 @@ export default function EventLog() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={appMode}
+          onChange={(e) => { setPage(0); setAppMode(e.target.value) }}
+          className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
+        >
+          <option value="">所有模式</option>
+          <option value="gallery">画廊</option>
+          <option value="agent">Agent</option>
+          <option value="video">Video</option>
+        </select>
         <select
           value={eventType}
           onChange={(e) => { setPage(0); setEventType(e.target.value) }}
@@ -190,6 +204,7 @@ export default function EventLog() {
               <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
                 <th className="py-2 pr-3">时间</th>
                 <th className="py-2 pr-3">用户</th>
+                <th className="py-2 pr-3">模式</th>
                 <th className="py-2 pr-3">结果</th>
                 <th className="py-2 pr-3">操作</th>
                 <th className="py-2 pr-3">服务商</th>
@@ -201,12 +216,13 @@ export default function EventLog() {
             </thead>
             <tbody>
               {events.length === 0 && (
-                <tr><td colSpan={9} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
+                <tr><td colSpan={10} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
               )}
               {events.map((e) => (
                 <tr key={e.id} className="border-b border-[hsl(var(--border))] last:border-0">
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatTimestamp(e.created_at)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--foreground))]">{e.username}</td>
+                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getAppModeLabel(e.app_mode)}</td>
                   <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{getEventTypeLabel(e.event_type)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getEventActionLabel(e.action_type)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getProviderDisplayName(e.provider)}</td>
@@ -247,6 +263,7 @@ export default function EventLog() {
         <ExportDialog
           defaultFrom={day || todayString()}
           defaultTo={day || todayString()}
+          appMode={appMode}
           eventType={eventType}
           errorType={errorType}
           onClose={() => setExportOpen(false)}
@@ -277,6 +294,7 @@ export default function EventLog() {
             <dl className="grid grid-cols-3 gap-y-2 text-sm">
               <Field label="时间">{formatTimestamp(detail.created_at)}</Field>
               <Field label="用户">{detail.username}</Field>
+              <Field label="模式">{getAppModeLabel(detail.app_mode)}</Field>
               <Field label="结果" valueClass={eventTypeColor(detail.event_type)}>{getEventTypeLabel(detail.event_type)}</Field>
               <Field label="操作">{getEventActionLabel(detail.action_type)}</Field>
               <Field label="任务 ID">{detail.task_id ?? '—'}</Field>
@@ -334,12 +352,14 @@ export default function EventLog() {
 function ExportDialog({
   defaultFrom,
   defaultTo,
+  appMode,
   eventType,
   errorType,
   onClose,
 }: {
   defaultFrom: string
   defaultTo: string
+  appMode: string
   eventType: string
   errorType: string
   onClose: () => void
@@ -365,6 +385,7 @@ function ExportDialog({
         since: String(range.since),
         until: String(range.until),
       })
+      if (appMode) params.set('app_mode', appMode)
       if (eventType) params.set('event_type', eventType)
       if (errorType) params.set('error_type', errorType)
       await downloadAdminEventsCsv(params)
@@ -415,7 +436,7 @@ function ExportDialog({
       </div>
       {!invalid && (
         <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">
-          共 {rangeDays} 天{eventType || errorType ? '（沿用当前筛选）' : ''}。
+          共 {rangeDays} 天{appMode || eventType || errorType ? '（沿用当前筛选）' : ''}。
         </p>
       )}
       {tooWide && (

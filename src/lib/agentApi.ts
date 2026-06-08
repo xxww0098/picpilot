@@ -1,10 +1,13 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
-import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, normalizeSettings } from './apiProfiles'
+import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, getActiveApiProfile, normalizeSettings } from './apiProfiles'
 import { chatModelSupportsHostedImageTool, getAgentImageEngine } from './chatModels'
 import { callImageApi } from './api'
 import { getStoredAuthToken } from './auth'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { logger, serializeError } from './logger'
+import { classifyError, reportEvent } from './telemetry'
+import { applyTeamRuntimeSettings } from './runtimeTeamSettings'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -618,6 +621,12 @@ export async function callAgentResponsesApi(opts: {
   profile: ApiProfile
   params: TaskParams
   input: unknown
+  telemetry?: {
+    prompt?: string
+    roundId?: string
+    inputImageCount?: number
+    hasMask?: boolean
+  }
   maskDataUrl?: string
   signal?: AbortSignal
   onTextDelta?: (delta: string) => void
@@ -626,10 +635,14 @@ export async function callAgentResponsesApi(opts: {
   onImagePartialImage?: (event: { toolCallId: string; image: string; partialImageIndex?: number; outputIndex?: number }) => void | Promise<void>
   onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
 }): Promise<AgentApiResult> {
-  const { settings, profile, params, input, maskDataUrl, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted } = opts
+  const settings = applyTeamRuntimeSettings(opts.settings)
+  const profile = { ...opts.profile, timeout: getActiveApiProfile(settings).timeout }
+  const { params, input, maskDataUrl, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy()
+  const model = resolveAgentModel(profile, settings)
+  const startedAt = Date.now()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
@@ -638,14 +651,25 @@ export async function callAgentResponsesApi(opts: {
 
   try {
     const body: Record<string, unknown> = {
-      model: resolveAgentModel(profile, settings),
-      instructions: createAgentInstructions(settings, chatModelSupportsHostedImageTool(resolveAgentModel(profile, settings))),
+      model,
+      instructions: createAgentInstructions(settings, chatModelSupportsHostedImageTool(model)),
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
     }
     if (profile.streamImages) {
       body.stream = true
     }
+
+    logger.info('api', 'Agent Responses API 调用开始', {
+      appMode: 'agent',
+      provider: profile.provider,
+      model,
+      apiMode: 'responses',
+      apiProxy: useApiProxy,
+      inputImages: opts.telemetry?.inputImageCount ?? 0,
+      mask: Boolean(opts.telemetry?.hasMask ?? maskDataUrl),
+      stream: Boolean(profile.streamImages),
+    })
 
     const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
       method: 'POST',
@@ -659,19 +683,77 @@ export async function callAgentResponsesApi(opts: {
       throw new Error(await getApiErrorMessage(response))
     }
 
+    let result: AgentApiResult
     if (profile.streamImages && isEventStreamResponse(response)) {
-      return parseAgentStreamResponse(response, mime, controller.signal, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted)
+      result = await parseAgentStreamResponse(response, mime, controller.signal, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted)
+    } else {
+      const payload = await response.json() as ResponsesApiResponse
+      throwIfAborted(controller.signal, signal)
+      result = {
+        responseId: payload.id,
+        text: extractText(payload),
+        images: extractImages(payload, mime),
+        outputItems: payload.output,
+        rawResponsePayload: JSON.stringify(payload, null, 2),
+      }
     }
 
-    const payload = await response.json() as ResponsesApiResponse
-    throwIfAborted(controller.signal, signal)
-    return {
-      responseId: payload.id,
-      text: extractText(payload),
-      images: extractImages(payload, mime),
-      outputItems: payload.output,
-      rawResponsePayload: JSON.stringify(payload, null, 2),
-    }
+    const elapsedMs = Date.now() - startedAt
+    const outputItemCount = result.outputItems?.length ?? 0
+    logger.info('api', 'Agent Responses API 调用成功', {
+      appMode: 'agent',
+      provider: profile.provider,
+      model,
+      outputItems: outputItemCount,
+      images: result.images.length,
+      textChars: result.text.length,
+      elapsedMs,
+    })
+    void reportEvent({
+      event_type: 'success',
+      app_mode: 'agent',
+      provider: profile.provider,
+      api_mode: 'responses',
+      model,
+      prompt: opts.telemetry?.prompt,
+      action_type: 'agent_message',
+      task_id: opts.telemetry?.roundId,
+      has_input_image: (opts.telemetry?.inputImageCount ?? 0) > 0,
+      input_image_count: opts.telemetry?.inputImageCount ?? 0,
+      has_mask: Boolean(opts.telemetry?.hasMask ?? maskDataUrl),
+      duration_ms: elapsedMs,
+      output_count: result.images.length,
+    })
+    return result
+  } catch (err) {
+    const elapsedMs = Date.now() - startedAt
+    logger.error('api', 'Agent Responses API 调用失败', {
+      appMode: 'agent',
+      provider: profile.provider,
+      model,
+      elapsedMs,
+      error: serializeError(err),
+    })
+    const cls = classifyError(err)
+    void reportEvent({
+      event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
+      app_mode: 'agent',
+      provider: profile.provider,
+      api_mode: 'responses',
+      model,
+      prompt: opts.telemetry?.prompt,
+      action_type: 'agent_message',
+      task_id: opts.telemetry?.roundId,
+      has_input_image: (opts.telemetry?.inputImageCount ?? 0) > 0,
+      input_image_count: opts.telemetry?.inputImageCount ?? 0,
+      has_mask: Boolean(opts.telemetry?.hasMask ?? maskDataUrl),
+      duration_ms: elapsedMs,
+      http_status: cls.http_status,
+      error_type: cls.error_type,
+      error_message: err instanceof Error ? err.message : String(err),
+      error_stack: err instanceof Error ? err.stack : undefined,
+    })
+    throw err
   } finally {
     clearTimeout(timeoutId)
     signal?.removeEventListener('abort', abortFromCaller)
@@ -685,7 +767,9 @@ export async function callAgentConversationTitleApi(opts: {
   imageDataUrls?: string[]
   signal?: AbortSignal
 }): Promise<string> {
-  const { profile, prompt, imageDataUrls, signal } = opts
+  const settings = applyTeamRuntimeSettings(opts.settings)
+  const profile = { ...opts.profile, timeout: getActiveApiProfile(settings).timeout }
+  const { prompt, imageDataUrls, signal } = opts
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy()
   const controller = new AbortController()
@@ -694,6 +778,7 @@ export async function callAgentConversationTitleApi(opts: {
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
+  const startedAt = Date.now()
   try {
     const content: Array<Record<string, string>> = [
       { type: 'input_text', text: `The following is the first message the user sent in a conversation. Generate a title for this conversation.\n\n${prompt}` },
@@ -702,12 +787,13 @@ export async function callAgentConversationTitleApi(opts: {
       content.push({ type: 'input_image', image_url: dataUrl })
     }
 
+    logger.info('api', 'Agent 会话标题生成开始', { provider: profile.provider, model: resolveAgentModel(profile, settings) })
     const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
       method: 'POST',
       headers: createHeaders(profile, useApiProxy),
       cache: 'no-store',
       body: JSON.stringify({
-        model: resolveAgentModel(profile, opts.settings),
+        model: resolveAgentModel(profile, settings),
         instructions: AGENT_TITLE_INSTRUCTIONS,
         input: [{ role: 'user', content }],
         max_output_tokens: 32,
@@ -716,11 +802,15 @@ export async function callAgentConversationTitleApi(opts: {
     })
 
     if (!response.ok) {
-      throw new Error(await getApiErrorMessage(response))
+      const errorMsg = await getApiErrorMessage(response)
+      logger.error('api', `Agent 会话标题生成失败 (HTTP ${response.status})`, { elapsedMs: Date.now() - startedAt, error: errorMsg })
+      throw new Error(errorMsg)
     }
 
     const payload = await response.json() as ResponsesApiResponse
-    return parseAgentConversationTitleXml(extractText(payload))
+    const title = parseAgentConversationTitleXml(extractText(payload))
+    logger.info('api', 'Agent 会话标题生成成功', { elapsedMs: Date.now() - startedAt, title })
+    return title
   } finally {
     clearTimeout(timeoutId)
     signal?.removeEventListener('abort', abortFromCaller)
@@ -789,6 +879,10 @@ async function generateBatchImageViaImagesApi(opts: {
       settings: imageSettings,
       prompt,
       params,
+      telemetry: {
+        actionType: 'generate',
+        appMode: 'agent',
+      },
       inputImageDataUrls: referenceImageDataUrls,
       onPartialImage: onPartialImage
         ? (partial) => { void onPartialImage({ image: partial.image, partialImageIndex: partial.partialImageIndex }) }
@@ -807,6 +901,7 @@ async function generateBatchImageViaImagesApi(opts: {
     await onImageToolCompleted?.(image)
     return { batchItemId, image, error: null }
   } catch (err) {
+    logger.error('api', 'Batch 图片生成失败 (Images API fallback)', { batchItemId, error: serializeError(err) })
     return { batchItemId, image: null, error: err instanceof Error ? err.message : String(err) }
   }
 }
@@ -824,10 +919,13 @@ export async function callBatchImageSingle(opts: {
   onPartialImage?: (event: { image: string; partialImageIndex?: number }) => void | Promise<void>
   onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
 }): Promise<BatchImageCallResult> {
-  const { settings, profile, params, batchItemId, prompt, referenceImageDataUrls, referenceIds, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
+  const settings = applyTeamRuntimeSettings(opts.settings)
+  const profile = { ...opts.profile, timeout: getActiveApiProfile(settings).timeout }
+  const { params, batchItemId, prompt, referenceImageDataUrls, referenceIds, signal, onImageToolStarted, onPartialImage, onImageToolCompleted } = opts
 
   // 对话模型不支持托管 image_generation 工具（grok）→ 改用 Images API（grok-imagine-image 等）实际出图。
   if (!chatModelSupportsHostedImageTool(resolveAgentModel(profile, settings))) {
+    logger.info('api', 'Batch 图片生成 (Images API fallback)', { batchItemId, model: resolveAgentModel(profile, settings) })
     return generateBatchImageViaImagesApi({
       settings,
       engine: getAgentImageEngine(resolveAgentModel(profile, settings)),
@@ -852,7 +950,9 @@ export async function callBatchImageSingle(opts: {
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
+  const startedAt = Date.now()
   try {
+    logger.info('api', 'Batch 图片生成开始 (Responses API)', { batchItemId, model: resolveAgentModel(profile, settings), hasReferences: referenceImageDataUrls.length > 0 })
     // Build input: reference id mapping + prompt-rewrite guard + reference images.
     const referenceMapping = referenceImageDataUrls.length > 0
       ? `Attached reference images correspond to these ids, in order: ${(referenceIds ?? []).map((id) => `<ref id="${id}" />`).join(', ') || 'reference images'}.`
@@ -959,6 +1059,7 @@ export async function callBatchImageSingle(opts: {
         }
       }, [controller.signal, signal])
 
+      logger.info('api', 'Batch 图片生成完成 (streaming)', { batchItemId, elapsedMs: Date.now() - startedAt, hasImage: !!completedImage })
       return {
         batchItemId,
         image: completedImage,
@@ -972,6 +1073,7 @@ export async function callBatchImageSingle(opts: {
     const images = extractImages(payload, mime)
     const image = images[0] ?? null
     if (image) await onImageToolCompleted?.(image)
+    logger.info('api', 'Batch 图片生成完成 (non-streaming)', { batchItemId, elapsedMs: Date.now() - startedAt, hasImage: !!image })
     return {
       batchItemId,
       image,
@@ -980,8 +1082,10 @@ export async function callBatchImageSingle(opts: {
     }
   } catch (err) {
     if (controller.signal.aborted || signal?.aborted) {
+      logger.info('api', 'Batch 图片生成取消', { batchItemId, elapsedMs: Date.now() - startedAt })
       return { batchItemId, image: null, error: '请求已取消' }
     }
+    logger.error('api', 'Batch 图片生成失败', { batchItemId, elapsedMs: Date.now() - startedAt, error: serializeError(err) })
     return { batchItemId, image: null, error: err instanceof Error ? err.message : String(err) }
   } finally {
     clearTimeout(timeoutId)

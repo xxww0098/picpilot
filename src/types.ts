@@ -1,7 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent' | 'video'
+export type AppMode = 'gallery' | 'agent' | 'video' | 'workflow'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 /** 多张参考图的提交模式：each=每张各生成（N→N）；merge=合成为一次请求（N→1） */
 export type MultiImageMode = 'each' | 'merge'
@@ -205,7 +205,7 @@ export interface TaskRecord {
   elapsed: number | null
   /** 是否收藏 */
   isFavorite?: boolean
-  /** 来源模式：画廊 / Agent */
+  /** 来源模式：画廊 / Agent / Video */
   sourceMode?: AppMode
   /** Agent 对话 ID */
   agentConversationId?: string

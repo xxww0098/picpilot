@@ -60,6 +60,8 @@ showAppToast('邀请链接已复制', 'success')
 
 **并发经验值（2026-06-04 日志）**：6 个 Plus 账号共享 PicPilot + Codex/Responses 流量时，`/v1/images/*` 成功请求 p50≈73s、p90≈186s；同一账号同时承载 3+ 请求时成功率明显下降。默认建议 `MAX_CONCURRENT_PROXY_REQUESTS=5`、`PROXY_QUEUE_MAX=10`、`PROXY_QUEUE_MAX_WAIT_MS=240000`，即 6 个 Plus 账号允许 PicPilot 使用 5 个并发、保留 1 个上游余量。前端批量 fan-out 不写死并发数：提交前读取 `/api/queue/stats`，按当前 `maxConcurrent - inflight` 动态拆分；已有排队时降为 1。
 
+**按账号数缩放（降低失败率）**：并发上限大致取「Plus 账号数 - 1」（每账号约 1 个在途、留 1 个余量），队列上限取并发的 ~2 倍。例：**11 个 Plus 账号 → `MAX_CONCURRENT_PROXY_REQUESTS=10`、`PROXY_QUEUE_MAX=20`**。提高并发能消除大部分「队满 429」，并把请求摊到更多账号（每账号约 1 并发，远低于 3+ 掉成功率的阈值）。server-go 新增 `UPSTREAM_MAX_RETRIES`（默认 2，范围 0-5）：**异步任务路径**对 5xx/429/网络错误做指数退避重试,服务端完成、客户端无感——压测在 30% 上游失败率下异步成功率由 70% 提升到 100%。同步代理路径(画廊当前走的)不做服务端重试(流式不便),其瞬时失败由前端 `galleryAutoRetryCount`(默认 1,可调高)兜底。
+
 **公平性（已知行为）**：全局队列是严格 FIFO、不区分用户。某用户（尤其 Responses/codexCli/streaming 等 fan-out 模式下一次 n=N 提交会被拆成 N 个请求）可能一次性占满 inflight + 队列，使他人排队到 `PROXY_QUEUE_MAX_WAIT_MS` 超时而 429。小团队可接受；若出现饿死，再考虑给 `acquire` 加 `userKey` 做单用户软上限（勿上 round-robin 公平队列）。
 
 **批量上限**：`users.max_batch_images` 列仍在但已休眠——批量上限统一取**团队默认**（`defaultMaxBatchImages`，管理端 `团队设置` 配置），无 per-user 覆盖。真正在所有模式下一致生效的是**客户端 clamp**（`src/lib/paramCompatibility.ts`）；服务端 `estimateRequestedImageCount` 的 429 只是「尽力而为」兜底，且只覆盖 `/images/generations` 的 JSON 请求（edits / Responses / fan-out 会绕过）。

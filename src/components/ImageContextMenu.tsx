@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useStore, addImageFromUrl, ensureImageCached } from '../store'
+import { logger, serializeError } from '../lib/logger'
 import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
@@ -89,7 +90,7 @@ export default function ImageContextMenu() {
       await copyImageSourceToClipboard(getOriginalImageSrc())
       showToast('图片已复制', 'success')
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '复制图片失败', { error: serializeError(err) })
       showToast(getClipboardFailureMessage('复制失败', err), 'error')
     }
   }
@@ -122,7 +123,7 @@ export default function ImageContextMenu() {
         showToast('下载成功', 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '下载图片失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
   }
@@ -156,7 +157,7 @@ export default function ImageContextMenu() {
         showToast(result.successCount > 1 ? `下载成功：${result.successCount} 张图片` : '下载成功', 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '下载图片失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
   }
@@ -177,7 +178,7 @@ export default function ImageContextMenu() {
       setMaskEditorImageId(null)
       showToast('已加入参考图', 'success')
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '加入参考图失败', { error: serializeError(err) })
       showToast(`加入参考图失败：${getUserFacingErrorMessage(err, '图片无法作为参考图添加')}`, 'error')
     }
   }

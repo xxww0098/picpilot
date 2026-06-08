@@ -1,4 +1,5 @@
 import { AUTH_TOKEN_KEY } from './auth'
+import type { AppMode } from '../types'
 
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'
 
@@ -6,6 +7,7 @@ export type TelemetryEventType = 'success' | 'failure' | 'timeout' | 'cancelled'
 
 export interface TelemetryEvent {
   event_type: TelemetryEventType
+  app_mode?: AppMode
   provider?: string
   api_mode?: string
   model?: string

@@ -35,6 +35,9 @@ export interface AdminTeamSettings {
   galleryAutoRetryCount: number
   maxConcurrent: number
   maxQueue: number
+  proxyUserSoftLimit: number
+  streamFallbackEnabled: boolean
+  requestTimeoutSeconds: number
 }
 
 export interface AdminInviteRedemption {
@@ -60,6 +63,7 @@ export interface AdminEventRow {
   user_id: string
   username: string
   event_type: string
+  app_mode: string | null
   provider: string | null
   api_mode: string | null
   model: string | null
@@ -85,6 +89,51 @@ export interface AdminEventRow {
   created_at: number
 }
 
+export interface AdminFailureSummary {
+  range: { since: number; until: number }
+  totals: Array<{
+    app_mode: string
+    total: number
+    success: number
+    failure: number
+    avg_duration: number | null
+  }>
+  reasons: Array<{
+    reason: string
+    app_mode: string
+    error_type: string | null
+    http_status: number | null
+    count: number
+    latest_at: number
+    sample_message: string | null
+  }>
+  statuses: Array<{ http_status: number | null; count: number }>
+  users: Array<{ username: string; failures: number; latest_at: number }>
+}
+
+export interface AdminUpstreamHealth {
+  available: boolean
+  logDir: string | null
+  message?: string
+  scannedBytes: number
+  generatedAt: number
+  accounts: Array<{
+    accountKey: string
+    label: string
+    provider: string
+    total: number
+    success: number
+    failure: number
+    failureRate: number
+    avgDurationMs: number | null
+    lastSeenAt: number | null
+    models: string[]
+    routes: Array<{ route: string; total: number; failure: number }>
+    status: 'healthy' | 'watch' | 'isolate'
+    recommendation: string
+  }>
+}
+
 export function fetchAdminOverview() {
   return authJson<AdminOverviewData>('/api/admin/overview', undefined, '加载失败')
 }
@@ -97,7 +146,15 @@ export function fetchAdminTeamSettings() {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', undefined, '加载失败')
 }
 
-export function patchAdminTeamSettings(body: { defaultMaxBatchImages?: number; galleryAutoRetryCount?: number; maxConcurrent?: number; maxQueue?: number }) {
+export function patchAdminTeamSettings(body: {
+  defaultMaxBatchImages?: number
+  galleryAutoRetryCount?: number
+  maxConcurrent?: number
+  maxQueue?: number
+  proxyUserSoftLimit?: number
+  streamFallbackEnabled?: boolean
+  requestTimeoutSeconds?: number
+}) {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -135,6 +192,33 @@ export function deleteAdminInvite(code: string) {
 
 export function fetchAdminEvents(params: URLSearchParams) {
   return authJson<{ events: AdminEventRow[]; total: number }>(`/api/admin/events?${params}`, undefined, '加载失败')
+}
+
+export function fetchAdminFailureSummary(params = new URLSearchParams()) {
+  const query = params.toString()
+  return authJson<AdminFailureSummary>(`/api/admin/failure-summary${query ? `?${query}` : ''}`, undefined, '加载失败')
+}
+
+export function fetchAdminUpstreamHealth() {
+  return authJson<AdminUpstreamHealth>('/api/admin/upstream-health', undefined, '加载失败')
+}
+
+export async function downloadAdminDiagnostics(): Promise<void> {
+  const res = await authFetch('/api/admin/diagnostics/export')
+  if (!res.ok) throw new Error(await readErrorMessage(res, '导出诊断包失败'))
+  const blob = await res.blob()
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const match = disposition.match(/filename="?([^"]+)"?/i)
+  const filename = match?.[1] ?? `picpilot-diagnostics-${new Date().toISOString().slice(0, 10)}.json`
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 export async function downloadAdminEventsCsv(params: URLSearchParams): Promise<void> {

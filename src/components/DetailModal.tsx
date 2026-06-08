@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTaskInPlace, retryFailedImages, regenerateTaskImage } from '../store'
+import { logger, serializeError } from '../lib/logger'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { runWithConcurrency } from '../lib/runWithConcurrency'
@@ -357,7 +358,7 @@ export default function DetailModal() {
       await copyImageSourceToClipboard(src)
       showToast('参考图已复制', 'success')
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '复制参考图失败', { error: serializeError(err) })
       showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')
     }
   }
@@ -383,7 +384,7 @@ export default function DetailModal() {
         showToast('下载成功', 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '下载失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
   }
@@ -406,7 +407,7 @@ export default function DetailModal() {
         showToast(result.successCount > 1 ? `下载成功：${result.successCount} 张图片` : '下载成功', 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '下载失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
   }
@@ -424,7 +425,7 @@ export default function DetailModal() {
         showToast(`下载成功：${result.successCount} 张中间步骤图`, 'success')
       }
     } catch (err) {
-      console.error(err)
+      logger.error('ui', '下载失败', { error: serializeError(err) })
       showToast('下载失败', 'error')
     }
   }

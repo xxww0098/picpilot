@@ -1,13 +1,13 @@
 # ---- Build stage ----
-FROM --platform=$BUILDPLATFORM oven/bun:1.3.14-alpine AS build
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 
 WORKDIR /app
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
-RUN bun run build
+RUN npm run build
 
 # ---- Production stage ----
 FROM caddy:2-alpine

@@ -30,8 +30,10 @@ services:
 
   auth:
     build:
-      context: ../server
+      context: ../server-go
       dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${PICPILOT_VERSION:-dev}
     container_name: picpilot-auth
     restart: unless-stopped
     environment:
@@ -41,13 +43,18 @@ services:
       - API_PROXY_API_KEY=${API_PROXY_API_KEY:-}
       - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cli-proxy-api:8317}
       - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY:-}
+      - CLIPROXY_LOG_DIR=/cliproxy-logs
       - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
       - PROXY_QUEUE_MAX=${PROXY_QUEUE_MAX:-10}
       - PROXY_QUEUE_MAX_WAIT_MS=${PROXY_QUEUE_MAX_WAIT_MS:-240000}
+      - PROXY_USER_SOFT_LIMIT=${PROXY_USER_SOFT_LIMIT:-3}
+      - REQUEST_TIMEOUT_SECONDS=${REQUEST_TIMEOUT_SECONDS:-900}
+      - STREAM_FALLBACK_ENABLED=${STREAM_FALLBACK_ENABLED:-true}
       - DATA_DIR=/data
       - DB_PATH=/data/auth.db
     volumes:
       - auth_data:/data
+      - ./cliproxy/logs:/cliproxy-logs:ro
     expose:
       - "3001"
     networks:

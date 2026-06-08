@@ -39,6 +39,7 @@ export type UseInputBarPromptEditorOptions = {
   onSubmit: () => void
   maskDraft: unknown
   maskPreviewUrl: string
+  promptPlaceholder?: string
 }
 
 export function useInputBarPromptEditor({
@@ -53,6 +54,7 @@ export function useInputBarPromptEditor({
   onSubmit,
   maskDraft,
   maskPreviewUrl,
+  promptPlaceholder = PROMPT_PLACEHOLDER,
 }: UseInputBarPromptEditorOptions) {
   const textareaRef = useRef<HTMLDivElement>(null)
   const prevHeightRef = useRef(42)
@@ -393,7 +395,7 @@ export function useInputBarPromptEditor({
     isUserInputRef,
     syncPromptFromContentEditable,
     isSingleLine,
-    promptPlaceholder: PROMPT_PLACEHOLDER,
+    promptPlaceholder,
     showAtImageMenu,
     atImageOptions,
     atImageMenuIndex,

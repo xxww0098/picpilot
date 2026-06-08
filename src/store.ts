@@ -68,6 +68,7 @@ import {
   type TimeoutStreamingHintProfile,
 } from './lib/taskErrorHints'
 import { fileToDataUrl, readBlobAsDataUrl } from './lib/dataUrl'
+import { preprocessImageFile } from './lib/imagePreprocess'
 import {
   bindAgentOrchestrator,
   scrubAgentOutputPayloadsForDeletedTasks,
@@ -91,6 +92,7 @@ import {
   scheduleThumbnailBackfill,
 } from './store/imageCache'
 import { generateVideo } from './lib/videoApi'
+import { applyTeamRuntimeSettings, isTeamStreamFallbackEnabled } from './lib/runtimeTeamSettings'
 
 export { getErrorToastMessage } from './lib/errorToast'
 export { migratePersistedState } from './lib/agentPersistence'
@@ -252,7 +254,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'video' ? persisted.appMode : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'video' || persisted.appMode === 'workflow' ? persisted.appMode : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -580,6 +582,14 @@ function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages
   }
 }
 
+function splitBatchPromptDraft(prompt: string): string[] {
+  const parts = prompt
+    .split(/\n\s*---+\s*\n/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  return parts.length > 1 ? parts : [prompt.trim()].filter(Boolean)
+}
+
 function isEmptyAgentInputDraft(draft: AgentInputDraft) {
   return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId
 }
@@ -667,7 +677,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery' || appMode === 'video') {
+        if (appMode === 'gallery' || appMode === 'video' || appMode === 'workflow') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -1244,15 +1254,17 @@ function getTaskApiProfileName(task: TaskRecord) {
   return task.apiProfileName || task.apiModel || '未知配置'
 }
 
-function shouldRetryRegenerateWithoutStream(err: unknown, profile: ApiProfile): boolean {
+function shouldRetryWithoutImageStreaming(err: unknown, profile: ApiProfile, signal?: AbortSignal): boolean {
+  if (!isTeamStreamFallbackEnabled()) return false
   if (profile.provider !== 'openai' || profile.streamImages !== true) return false
+  if (signal?.aborted) return false
   if (isApiTimeoutError(err)) return false
 
   if (err instanceof TypeError) return true
   if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
 
   const message = err instanceof Error ? err.message : String(err)
-  return /empty_stream|upstream stream closed before first payload|internal_server_error|server_error|\bHTTP 5\d\d\b/i.test(message)
+  return /empty_stream|upstream stream closed before first payload|stream disconnected before completion|stream closed before response\.completed|internal_server_error|server_error|\bHTTP (408|5\d\d)\b/i.test(message)
 }
 
 function createSettingsWithoutImageStreaming(settings: AppSettings, profile: ApiProfile): AppSettings {
@@ -1261,6 +1273,37 @@ function createSettingsWithoutImageStreaming(settings: AppSettings, profile: Api
     streamImages: false,
     streamPartialImages: 0,
   })
+}
+
+interface ImageStreamFallbackContext {
+  profile: ApiProfile
+  appMode: AppMode
+  taskId?: string
+  notify?: () => void
+  detail?: Record<string, unknown>
+}
+
+async function callImageApiWithStreamFallback(opts: CallApiOptions, context: ImageStreamFallbackContext): Promise<CallApiResult> {
+  try {
+    return await callImageApi(opts)
+  } catch (err) {
+    if (!shouldRetryWithoutImageStreaming(err, context.profile, opts.signal)) throw err
+
+    logger.warn('task', '图像流式响应断开，关闭流式后自动重试', {
+      appMode: context.appMode,
+      taskId: context.taskId,
+      provider: context.profile.provider,
+      profileName: context.profile.name,
+      model: context.profile.model,
+      ...context.detail,
+      error: serializeError(err),
+    })
+    context.notify?.()
+    return callImageApi({
+      ...opts,
+      settings: createSettingsWithoutImageStreaming(opts.settings, context.profile),
+    })
+  }
 }
 
 function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
@@ -1478,11 +1521,11 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; multiImageMode?: MultiImageMode } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { appMode, settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
-  const normalizedSettings = normalizeSettings(settings)
-  let activeProfile = getActiveApiProfile(settings)
+  const normalizedSettings = applyTeamRuntimeSettings(normalizeSettings(settings))
+  let activeProfile = getActiveApiProfile(normalizedSettings)
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
@@ -1564,6 +1607,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const trimmedPrompt = prompt.trim()
+  const promptDrafts = appMode === 'gallery' ? splitBatchPromptDraft(trimmedPrompt) : [trimmedPrompt]
   const createdAt = Date.now()
   // 多图模式：each=每张参考图各生成一组（N 张输入 → N 组结果）；merge=合成为一次请求（N→1）。
   // 有遮罩时只能合成（遮罩针对单张目标图）；单张/无图时两种模式等价。
@@ -1571,9 +1615,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const effectiveMode = options.multiImageMode ?? normalizedSettings.multiImageMode
   const perInputImage = effectiveMode === 'each' && !maskDraft && orderedInputImages.length >= 2
 
-  const makeTask = (inputImageIds: string[], taskMaskImageId: string | null, taskMaskTargetImageId: string | null, isPerInputImage: boolean): TaskRecord => ({
+  const makeTask = (promptText: string, inputImageIds: string[], taskMaskImageId: string | null, taskMaskTargetImageId: string | null, isPerInputImage: boolean): TaskRecord => ({
     id: genId(),
-    prompt: trimmedPrompt,
+    prompt: promptText,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -1593,15 +1637,19 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   })
 
   // perInputImage 时无遮罩（!maskDraft 守卫），故 maskImageId/maskTargetImageId 此时本就为 null。
-  const newTasks: TaskRecord[] = [
-    makeTask(orderedInputImages.map((i) => i.id), maskImageId, maskTargetImageId, perInputImage),
-  ]
+  const newTasks: TaskRecord[] = promptDrafts.map((promptText) =>
+    makeTask(promptText, orderedInputImages.map((i) => i.id), maskImageId, maskTargetImageId, perInputImage),
+  )
 
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([...newTasks, ...latestTasks])
   await Promise.all(newTasks.map((t) => putTask(t)))
   useStore.getState().showToast(
-    perInputImage ? `已提交：将为 ${orderedInputImages.length} 张参考图各生成一组` : '任务已提交',
+    promptDrafts.length > 1
+      ? `已提交 ${promptDrafts.length} 条批量草稿`
+      : perInputImage
+      ? `已提交：将为 ${orderedInputImages.length} 张参考图各生成一组`
+      : '任务已提交',
     'success',
   )
 
@@ -1726,7 +1774,7 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
     if (currentIds.includes(imgId)) return
     updateTaskInStore(taskId, { streamPartialImageIds: [...currentIds, imgId] })
   } catch (err) {
-    console.error(err)
+    logger.error('task', '流式部分图片处理出错', { taskId, error: serializeError(err) })
   }
 }
 
@@ -1749,6 +1797,17 @@ function getGalleryAutoRetryCount(): number {
   return Number.isFinite(count) ? Math.max(0, Math.min(5, Math.trunc(count))) : 1
 }
 
+type TaskAppModeSource = Pick<
+  TaskRecord,
+  'mediaType' | 'sourceMode' | 'agentConversationId' | 'agentRoundId' | 'agentMessageId' | 'agentToolCallId'
+>
+
+function getTaskAppMode(task: TaskAppModeSource): AppMode {
+  if (task.mediaType === 'video' || task.sourceMode === 'video') return 'video'
+  if (task.sourceMode === 'agent' || task.agentConversationId || task.agentRoundId || task.agentMessageId || task.agentToolCallId) return 'agent'
+  return 'gallery'
+}
+
 // 多图「每张」合并卡的执行：按每张输入图各发一次请求，汇总成一个 CallApiResult。
 // 输出顺序 = 输入图顺序；图片/实际参数/改写提示词按输出顺序对齐；任一输入失败计入 failedCount（每输入占 perInputCount 张）。
 // 流式预览槽位按 inputIndex * perInputCount 偏移，避免不同输入的中间帧互相覆盖。
@@ -1757,18 +1816,29 @@ async function callImageApiPerInput(
   inputDataUrls: string[],
   perInputCount: number,
   onPartialImage?: CallApiOptions['onPartialImage'],
+  streamFallback?: ImageStreamFallbackContext,
 ): Promise<CallApiResult> {
   const results = await settleWithConcurrency(
     inputDataUrls,
     baseOpts.fanoutConcurrency ?? getImageApiFanoutConcurrency(),
-    (dataUrl, inputIndex) =>
-      callImageApi({
+    (dataUrl, inputIndex) => {
+      const opts: CallApiOptions = {
         ...baseOpts,
         inputImageDataUrls: [dataUrl],
         onPartialImage: onPartialImage
           ? (partial) => onPartialImage({ ...partial, requestIndex: inputIndex * perInputCount + (partial.requestIndex ?? 0) })
           : undefined,
-      }),
+      }
+      return streamFallback
+        ? callImageApiWithStreamFallback(opts, {
+            ...streamFallback,
+            detail: {
+              ...streamFallback.detail,
+              inputIndex,
+            },
+          })
+        : callImageApi(opts)
+    },
   )
   const fulfilled = results.filter((r): r is PromiseFulfilledResult<CallApiResult> => r.status === 'fulfilled').map((r) => r.value)
   if (fulfilled.length === 0) {
@@ -1882,11 +1952,20 @@ export async function submitVideoTask() {
 async function executeVideoTask(taskId: string) {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task) return
+  const appMode = getTaskAppMode(task)
 
   const abortController = new AbortController()
   taskAbortControllers.set(taskId, abortController)
 
   try {
+    logger.info('task', '视频任务开始执行', {
+      appMode,
+      taskId,
+      model: task.apiModel,
+      inputImages: task.inputImageIds.length,
+      durationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+    })
+
     const inputDataUrls = await Promise.all(
       (task.inputImageIds || []).slice(0, 1).map(async (imgId) => {
         const dataUrl = await ensureImageCached(imgId)
@@ -1895,11 +1974,12 @@ async function executeVideoTask(taskId: string) {
       }),
     )
     const result = await generateVideo({
-      settings: useStore.getState().settings,
+      settings: applyTeamRuntimeSettings(useStore.getState().settings),
       model: DEFAULT_VIDEO_MODEL,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       imageDataUrl: inputDataUrls[0],
       durationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+      pollTimeoutMs: Math.max(30, getCachedAuthUser()?.requestTimeoutSeconds ?? 900) * 1000,
       signal: abortController.signal,
     })
 
@@ -1928,9 +2008,16 @@ async function executeVideoTask(taskId: string) {
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
     })
+    logger.info('task', '视频任务完成', {
+      appMode,
+      taskId,
+      model: task.apiModel,
+      elapsedMs: Date.now() - task.createdAt,
+    })
     useStore.getState().showToast('视频生成完成', 'success')
   } catch (err) {
     logger.error('task', '视频任务执行失败', {
+      appMode,
       taskId,
       model: task.apiModel,
       elapsedMs: Date.now() - task.createdAt,
@@ -1971,6 +2058,7 @@ async function executeTask(taskId: string) {
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
   const taskProvider = task.apiProvider ?? activeProfile.provider
+  const appMode = getTaskAppMode(task)
   let customTaskInfo: { taskId: string } | null = task.customTaskId
     ? { taskId: task.customTaskId }
     : null
@@ -1998,6 +2086,7 @@ async function executeTask(taskId: string) {
     }
 
     logger.info('task', '任务开始执行', {
+      appMode,
       taskId,
       provider: taskProvider,
       profileName: activeProfile.name,
@@ -2015,6 +2104,21 @@ async function executeTask(taskId: string) {
       useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
       void persistTaskStreamPartialImage(taskId, partial.image)
     }
+    let streamFallbackNotified = false
+    const notifyStreamFallback = () => {
+      if (streamFallbackNotified) return
+      streamFallbackNotified = true
+      useStore.getState().showToast('上游流式响应断开，正在关闭流式自动重试', 'info')
+    }
+    const streamFallback: ImageStreamFallbackContext = {
+      profile: activeProfile,
+      appMode,
+      taskId,
+      notify: notifyStreamFallback,
+      detail: {
+        action: 'generate',
+      },
+    }
     // 「每张」合并卡：按每张输入图各发一次请求，结果汇总到本卡（≥2 张输入才扇出；异步自定义服务商不走此路）。
     const usePerInput = Boolean(task.perInputImage) && inputDataUrls.length > 1
     const result = usePerInput
@@ -2024,17 +2128,28 @@ async function executeTask(taskId: string) {
             // 每次请求只带 1 张输入图，提示词 @图N 按单图解析，与旧的「每张一卡」行为一致
             prompt: replaceImageMentionsForApi(task.prompt, 1),
             params: task.params,
+            telemetry: {
+              actionType: 'generate',
+              appMode,
+              taskId,
+            },
             signal: abortController.signal,
             fanoutConcurrency,
           },
           inputDataUrls,
           task.params.n > 0 ? task.params.n : 1,
           onPartialImage,
+          streamFallback,
         )
-      : await callImageApi({
+      : await callImageApiWithStreamFallback({
           settings: requestSettings,
           prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
           params: task.params,
+          telemetry: {
+            actionType: 'generate',
+            appMode,
+            taskId,
+          },
           inputImageDataUrls: inputDataUrls,
           maskDataUrl,
           onCustomTaskEnqueued: (request) => {
@@ -2047,7 +2162,7 @@ async function executeTask(taskId: string) {
           onPartialImage,
           signal: abortController.signal,
           fanoutConcurrency,
-        })
+        }, streamFallback)
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') {
@@ -2115,6 +2230,7 @@ async function executeTask(taskId: string) {
     void deleteUnreferencedImageIds(partialImageIdsToClean)
 
     logger.info('task', '任务完成', {
+      appMode,
       taskId,
       provider: taskProvider,
       images: outputIds.length,
@@ -2141,6 +2257,7 @@ async function executeTask(taskId: string) {
   } catch (err) {
     clearOpenAIWatchdogTimer(taskId)
     logger.error('task', '任务执行失败', {
+      appMode,
       taskId,
       provider: task.apiProvider,
       model: task.apiModel,
@@ -2273,6 +2390,7 @@ export async function retryTask(task: TaskRecord) {
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
+    sourceMode: task.mediaType === 'video' ? 'video' : task.sourceMode,
     ...(task.perInputImage ? { perInputImage: true } : {}),
   }
 
@@ -2371,7 +2489,13 @@ async function autoRetryFailedImages(taskId: string, maxAttempts: number): Promi
     } catch (err) {
       const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
       const message = getUserFacingErrorMessage(err, '自动重试失败', { apiUpstream: !isNetworkOrTimeout })
-      logger.error('task', '自动重试失败图片出错', { taskId, attempt, error: serializeError(err) })
+      const task = useStore.getState().tasks.find((t) => t.id === taskId)
+      logger.error('task', '自动重试失败图片出错', {
+        appMode: task ? getTaskAppMode(task) : 'gallery',
+        taskId,
+        attempt,
+        error: serializeError(err),
+      })
       useStore.getState().showToast(`自动重试失败：${message}`, 'error')
       return
     }
@@ -2402,6 +2526,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     const state = useStore.getState()
     const task = state.tasks.find((t) => t.id === taskId)
     if (!task) return null
+    const appMode = getTaskAppMode(task)
     const failedCount = task.failedImageCount ?? 0
     if (failedCount <= 0) return null
 
@@ -2438,6 +2563,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
         state.showToast(`这组图片已有 ${task.outputImages.length} 张，已达到或超过目标数量 ${targetOutputCount} 张`, 'info')
       }
       logger.warn('task', '重试失败图片跳过：当前输出已达到目标数量', {
+        appMode,
         taskId,
         failedCount,
         targetOutputCount,
@@ -2470,6 +2596,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     }
 
     logger.info('task', '重试失败图片', {
+      appMode,
       taskId,
       retryCount: requestCount,
       failedCount,
@@ -2479,18 +2606,28 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     })
 
     const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
-    const result = await callImageApi({
+    const result = await callImageApiWithStreamFallback({
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: { ...task.params, n: requestCount },
       telemetry: {
         actionType: options.silent ? 'auto_retry_failed_images' : 'retry_failed_images',
+        appMode,
         taskId,
         awaitReport: true,
       },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
       fanoutConcurrency,
+    }, {
+      profile,
+      appMode,
+      taskId,
+      notify: options.silent ? undefined : () => state.showToast('上游流式响应断开，正在关闭流式重试失败图片', 'info'),
+      detail: {
+        action: options.silent ? 'auto_retry_failed_images' : 'retry_failed_images',
+        retryCount: requestCount,
+      },
     })
 
     const latest = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -2513,6 +2650,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     })
 
     logger.info('task', '重试失败图片完成', {
+      appMode,
       taskId,
       added: newIds.length,
       stillFailed,
@@ -2533,7 +2671,8 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     if (options.silent) throw err
     const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
     const message = getUserFacingErrorMessage(err, '重试失败', { apiUpstream: !isNetworkOrTimeout })
-    logger.error('task', '重试失败图片出错', { taskId, error: serializeError(err) })
+    const task = useStore.getState().tasks.find((t) => t.id === taskId)
+    logger.error('task', '重试失败图片出错', { appMode: task ? getTaskAppMode(task) : 'gallery', taskId, error: serializeError(err) })
     useStore.getState().showToast(`重试失败：${message}`, 'error')
     return null
   } finally {
@@ -2549,6 +2688,7 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
   const state = useStore.getState()
   const task = state.tasks.find((t) => t.id === taskId)
   if (!task) return
+  const appMode = getTaskAppMode(task)
 
   if (task.mediaType === 'video' || task.status !== 'done') {
     state.showToast('当前记录不能重新生成单张图片', 'error')
@@ -2627,6 +2767,7 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     }
 
     logger.info('task', '单张图片重新生成开始', {
+      appMode,
       taskId,
       imageIndex,
       provider: taskProvider,
@@ -2639,44 +2780,34 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     const fanoutConcurrency = await resolveImageApiFanoutConcurrency()
     const promptForApi = replaceImageMentionsForApi(task.prompt, promptImageCount)
     const requestParams = { ...task.params, n: 1 }
-    const callRegenerateApi = async (settingsForAttempt: AppSettings): Promise<CallApiResult> => {
-      customTaskInfo = null
-      return callImageApi({
-        settings: settingsForAttempt,
-        prompt: promptForApi,
-        params: requestParams,
-        telemetry: {
-          actionType: 'regenerate_image',
-          taskId,
-          imageIndex,
-          awaitReport: true,
-        },
-        inputImageDataUrls: inputDataUrls,
-        maskDataUrl,
-        onCustomTaskEnqueued: (request) => {
-          customTaskInfo = request
-        },
-        fanoutConcurrency,
-      })
-    }
-
-    let result: CallApiResult
-    try {
-      result = await callRegenerateApi(requestSettings)
-    } catch (err) {
-      if (!shouldRetryRegenerateWithoutStream(err, activeProfile)) throw err
-
-      logger.warn('task', '单张图片重新生成流式失败，关闭流式后自动重试', {
+    customTaskInfo = null
+    const result = await callImageApiWithStreamFallback({
+      settings: requestSettings,
+      prompt: promptForApi,
+      params: requestParams,
+      telemetry: {
+        actionType: 'regenerate_image',
+        appMode,
         taskId,
         imageIndex,
-        provider: activeProfile.provider,
-        profileName: activeProfile.name,
-        model: activeProfile.model,
-        error: serializeError(err),
-      })
-      state.showToast(`上游流式响应断开，正在关闭流式重试第 ${imageIndex + 1} 张图片`, 'info')
-      result = await callRegenerateApi(createSettingsWithoutImageStreaming(settings, activeProfile))
-    }
+        awaitReport: true,
+      },
+      inputImageDataUrls: inputDataUrls,
+      maskDataUrl,
+      onCustomTaskEnqueued: (request) => {
+        customTaskInfo = request
+      },
+      fanoutConcurrency,
+    }, {
+      profile: activeProfile,
+      appMode,
+      taskId,
+      notify: () => state.showToast(`上游流式响应断开，正在关闭流式重试第 ${imageIndex + 1} 张图片`, 'info'),
+      detail: {
+        action: 'regenerate_image',
+        imageIndex,
+      },
+    })
 
     const replacementImage = result.images[0]
     if (!replacementImage) throw new Error('接口没有返回可替换的图片')
@@ -2722,12 +2853,13 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     })
     await deleteUnreferencedImageIds([oldImageId])
 
-    logger.info('task', '单张图片重新生成完成', { taskId, imageIndex, oldImageId, newImageId })
+    logger.info('task', '单张图片重新生成完成', { appMode, taskId, imageIndex, oldImageId, newImageId })
     state.showToast(`已重新生成第 ${imageIndex + 1} 张图片`, 'success')
   } catch (err) {
     const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
     const message = getUserFacingErrorMessage(err, '重新生成失败', { apiUpstream: !isNetworkOrTimeout })
     logger.error('task', '单张图片重新生成失败', {
+      appMode,
       taskId,
       imageIndex,
       provider: task.apiProvider,
@@ -2827,6 +2959,35 @@ export async function editOutputs(task: TaskRecord) {
     }
   }
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
+}
+
+/** 将任务输出作为画廊参考图继续编辑。 */
+export async function sendTaskOutputsToGallery(task: TaskRecord) {
+  const { setAppMode, setInputImages, setPrompt, setParams, clearMaskDraft, showToast } = useStore.getState()
+  if (!task.outputImages?.length) {
+    showToast('该任务没有可发送到画廊的图片', 'info')
+    return
+  }
+
+  const imgs: InputImage[] = []
+  for (const imgId of task.outputImages) {
+    const dataUrl = await ensureImageCached(imgId)
+    if (dataUrl) imgs.push({ id: imgId, dataUrl })
+  }
+  if (imgs.length === 0) {
+    showToast('输出图片已不存在', 'error')
+    return
+  }
+
+  setAppMode('gallery')
+  clearMaskDraft()
+  setInputImages(imgs)
+  setPrompt(task.prompt)
+  setParams(normalizeParamsForSettings(task.params, normalizeSettings(useStore.getState().settings), {
+    hasInputImages: imgs.length > 0,
+    maxOutputImages: getCachedAuthUser()?.maxBatchImages,
+  }))
+  showToast(`已发送 ${imgs.length} 张图到画廊输入区`, 'success')
 }
 
 /** 删除多条任务 */
@@ -3277,7 +3438,7 @@ export async function addImageFromFile(file: File): Promise<void> {
 
 export async function createInputImageFromFile(file: File): Promise<InputImage | null> {
   if (!file.type.startsWith('image/')) return null
-  const dataUrl = await fileToDataUrl(file)
+  const { dataUrl } = await preprocessImageFile(file).catch(async () => ({ dataUrl: await fileToDataUrl(file), resized: false }))
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
   return { id, dataUrl }

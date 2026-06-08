@@ -1,4 +1,5 @@
 import { authFetch } from './auth'
+import { logger, serializeError } from './logger'
 import { getUserFacingErrorMessage } from './userFacingText'
 
 export async function readErrorMessage(res: Response, fallback = '请求失败'): Promise<string> {
@@ -19,10 +20,25 @@ export async function readErrorMessage(res: Response, fallback = '请求失败')
 }
 
 export async function readJson<T>(res: Response, fallback = '请求失败'): Promise<T> {
-  if (!res.ok) throw new Error(await readErrorMessage(res, fallback))
+  if (!res.ok) {
+    const msg = await readErrorMessage(res, fallback)
+    logger.warn('api', `readJson: HTTP ${res.status}`, { status: res.status, message: msg })
+    throw new Error(msg)
+  }
   return res.json() as Promise<T>
 }
 
 export async function authJson<T>(input: RequestInfo | URL, init?: RequestInit, fallback = '请求失败'): Promise<T> {
-  return readJson<T>(await authFetch(input, init), fallback)
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const method = init?.method ?? 'GET'
+  const startedAt = Date.now()
+  try {
+    const res = await authFetch(input, init)
+    const result = await readJson<T>(res, fallback)
+    logger.debug('api', `← ${method} ${url} ${res.status}`, { elapsedMs: Date.now() - startedAt })
+    return result
+  } catch (err) {
+    logger.error('api', `✗ ${method} ${url}`, { elapsedMs: Date.now() - startedAt, error: serializeError(err) })
+    throw err
+  }
 }

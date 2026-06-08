@@ -26,6 +26,7 @@ import { getUserFacingErrorMessage } from './userFacingText'
 import { storeImage } from './db'
 import { cacheImage, ensureImageCached } from '../store/imageCache'
 import { getCachedAuthUser } from './auth'
+import { logger, serializeError } from './logger'
 import {
   createAgentConversationTitle,
   getActiveAgentRounds,
@@ -768,6 +769,16 @@ export async function submitAgentMessage() {
     }
   })
 
+  logger.info('agent', 'Agent 用户消息已提交', {
+    appMode: 'agent',
+    conversationId: conversation.id,
+    roundId,
+    inputImages: inputImageIds.length,
+    mask: Boolean(maskImageId),
+    promptChars: trimmedPrompt.length,
+    editing: Boolean(editingRound),
+  })
+
   state.setPrompt('')
   state.clearInputImages()
   state.clearMaskDraft()
@@ -915,6 +926,17 @@ async function executeAgentRound(
     const round = conversation.rounds.find((item) => item.id === roundId)
     const userMessage = round ? conversation.messages.find((message) => message.id === round.userMessageId) : null
     if (!round || !userMessage) return
+    logger.info('agent', 'Agent 轮次开始执行', {
+      appMode: 'agent',
+      conversationId,
+      roundId,
+      agentModel: requestSettings.agentModel,
+      imageProvider: agentImageProvider,
+      imageModel: agentImageModel,
+      inputImages: round.inputImageIds.length,
+      mask: Boolean(round.maskImageId),
+      promptChars: userMessage.content.length,
+    })
     const maskDataUrl = round.maskImageId ? await ensureImageCached(round.maskImageId) : undefined
     if (round.maskImageId && !maskDataUrl) throw new Error('遮罩图片已不存在')
 
@@ -1208,6 +1230,12 @@ async function executeAgentRound(
         profile: agentProfile,
         params,
         input: apiInputForTurn,
+        telemetry: {
+          prompt: userMessage.content,
+          roundId,
+          inputImageCount: round.inputImageIds.length,
+          hasMask: Boolean(round.maskImageId),
+        },
         maskDataUrl,
         signal: controller.signal,
         onTextDelta: shouldStreamAssistantMessage
@@ -1459,6 +1487,16 @@ async function executeAgentRound(
         : [...current.messages, assistantMessage],
     }))
 
+    logger.info('agent', 'Agent 轮次完成', {
+      appMode: 'agent',
+      conversationId,
+      roundId,
+      outputTasks: taskIds.length,
+      outputImages: outputIds.length,
+      textChars: finalContent.length,
+      toolCallsUsed,
+      elapsedMs: Date.now() - startedAt,
+    })
     getState().showToast(outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复', 'success')
   } catch (err) {
     if (controller.signal.aborted) {
@@ -1479,6 +1517,13 @@ async function executeAgentRound(
     }
     const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
     message = getUserFacingErrorMessage(message, 'Agent 请求失败', { apiUpstream: !isNetworkOrTimeout })
+    logger.error('agent', 'Agent 轮次失败', {
+      appMode: 'agent',
+      conversationId,
+      roundId,
+      elapsedMs: Date.now() - startedAt,
+      error: serializeError(err),
+    })
 
     updateAgentConversation(conversationId, (current) => {
       const failedRound = current.rounds.find((round) => round.id === roundId)

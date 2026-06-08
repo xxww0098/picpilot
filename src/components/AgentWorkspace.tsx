@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
+import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, sendTaskOutputsToGallery, updateTaskInStore, useStore } from '../store'
+import { logger, serializeError } from '../lib/logger'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
@@ -10,6 +11,7 @@ import MarkdownRenderer from './MarkdownRenderer'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
 import AgentActionButton from './agentWorkspace/AgentActionButton'
 import ConversationListItem from './agentWorkspace/ConversationListItem'
+import { groupConversationsByTime } from '../lib/agentConversationGroups'
 import { ChatImageThumb, AgentStreamingCursor, AgentWebSearchInlineStatus, AgentWebSearchStatusLines } from './agentWorkspace/messageParts'
 
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
@@ -712,18 +714,26 @@ export default function AgentWorkspace() {
         <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
       
-      {/* Left Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 lg:hidden ${!sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="pl-[max(1rem,env(safe-area-inset-left))] flex h-full min-h-0 w-full flex-col">
-          <div className="safe-area-top shrink-0">
+      {/* Left Sidebar — mobile: overlay drawer; desktop: persistent ChatGPT-style history panel */}
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 ${!sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'} lg:sticky lg:top-16 lg:z-auto lg:h-[calc(100vh-5rem)] lg:w-[17rem] lg:max-w-none lg:translate-x-0 lg:rounded-2xl lg:border lg:border-[hsl(var(--border))] lg:bg-[hsl(var(--sidebar))] lg:shadow-none lg:backdrop-blur-none`}>
+        <div className="pl-[max(1rem,env(safe-area-inset-left))] lg:pl-0 flex h-full min-h-0 w-full flex-col">
+          {/* Mobile header: collapse + new chat */}
+          <div className="safe-area-top shrink-0 lg:hidden">
             <div className="flex h-14 items-center justify-between gap-2 px-4">
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
+              <button type="button" onClick={() => setSidebarCollapsed(true)} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
                 <SidebarLeftIcon className="w-5 h-5" />
               </button>
-              <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 lg:hover:bg-gray-100 lg:dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
+              <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="新对话">
                 <EditIcon className="w-5 h-5" />
               </button>
             </div>
+          </div>
+          {/* Desktop: full-width New chat button */}
+          <div className="hidden lg:block px-3 pt-3 pb-1">
+            <button type="button" onClick={createConversation} className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-200 dark:hover:bg-white/[0.09]">
+              <EditIcon className="h-4 w-4" />
+              新对话
+            </button>
           </div>
           <div className="shrink-0 px-4 pb-3">
             <input
@@ -738,24 +748,29 @@ export default function AgentWorkspace() {
           {filteredConversations.length === 0 && (
             <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
           )}
-          {filteredConversations.map((item) => (
-            <ConversationListItem
-              key={item.id}
-              item={item}
-              isGeneratingTitle={Boolean(agentGeneratingTitleIds[item.id])}
-              isEditing={agentEditingConversationId === item.id}
-              isActive={item.id === activeConversationId}
-              showActions={conversationActionsId === item.id}
-              editingTitle={editingConversationTitle}
-              onPointerDown={handleConversationPointerDown}
-              onLongPressClear={clearConversationLongPressTimer}
-              onSelect={handleConversationSelect}
-              onEditingTitleChange={setEditingConversationTitle}
-              onRenameKeyDown={handleRenameKeyDown}
-              onConfirmRename={confirmRenameConversation}
-              onStartRename={startRenameConversation}
-              onDelete={handleDeleteConversation}
-            />
+          {groupConversationsByTime(filteredConversations).map((group) => (
+            <div key={group.label}>
+              <div className="mt-3 mb-1 px-2 text-xs font-medium text-gray-400 dark:text-gray-500">{group.label}</div>
+              {group.items.map((item) => (
+                <ConversationListItem
+                  key={item.id}
+                  item={item}
+                  isGeneratingTitle={Boolean(agentGeneratingTitleIds[item.id])}
+                  isEditing={agentEditingConversationId === item.id}
+                  isActive={item.id === activeConversationId}
+                  showActions={conversationActionsId === item.id}
+                  editingTitle={editingConversationTitle}
+                  onPointerDown={handleConversationPointerDown}
+                  onLongPressClear={clearConversationLongPressTimer}
+                  onSelect={handleConversationSelect}
+                  onEditingTitleChange={setEditingConversationTitle}
+                  onRenameKeyDown={handleRenameKeyDown}
+                  onConfirmRename={confirmRenameConversation}
+                  onStartRename={startRenameConversation}
+                  onDelete={handleDeleteConversation}
+                />
+              ))}
+            </div>
           ))}
         </div>
         </div>
@@ -766,14 +781,27 @@ export default function AgentWorkspace() {
         {/* Mobile Header Toggles */}
         <div className={`sticky top-0 z-20 lg:hidden overflow-hidden transition-all duration-300 ease-in-out ${mobileTopBarVisible ? 'max-h-16 opacity-100 mb-2' : 'max-h-0 opacity-0 mb-0 pointer-events-none'}`}>
           <div
-            className="flex h-14 items-center justify-between border-b border-gray-200 bg-white/80 px-2 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/80"
+            className="grid h-14 grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] items-center border-b border-gray-200 bg-white/80 px-2 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/80"
             onTouchStart={handleHeaderTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
-            <button type="button" onClick={() => setSidebarCollapsed(false)} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="展开对话列表">
-              <SidebarLeftIcon className="w-5 h-5" />
-            </button>
+            <div className="flex min-w-0 items-center gap-1">
+              <button type="button" onClick={() => setSidebarCollapsed(false)} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200" title="展开对话列表">
+                <SidebarLeftIcon className="w-5 h-5" />
+              </button>
+              {!agentMobileHeaderVisible && (
+                <button
+                  type="button"
+                  onClick={() => setAgentMobileHeaderVisible(true)}
+                  className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200"
+                  aria-label="显示主导航"
+                  title="显示主导航"
+                >
+                  <ChevronDownIcon className="h-5 w-5" />
+                </button>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -782,13 +810,15 @@ export default function AgentWorkspace() {
                   useStore.getState().setAgentEditingConversationId(conversation.id)
                 }
               }}
-              className="text-sm font-semibold text-gray-700 dark:text-gray-300 truncate flex-1 text-center px-2 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition-colors"
+              className="min-w-0 truncate rounded px-2 text-center text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.04]"
             >
               {conversation?.title || 'Agent'}
             </button>
-            <button type="button" onClick={createConversation} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
-              <EditIcon className="w-5 h-5" />
-            </button>
+            <div className="flex min-w-0 justify-end">
+              <button type="button" onClick={createConversation} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200" title="新对话">
+                <EditIcon className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -800,17 +830,24 @@ export default function AgentWorkspace() {
           onTouchEnd={handleTouchEnd}
         >
           {!conversation ? (
-            <div className="py-20 text-center text-gray-400">
-              <p className="mb-3">还没有 Agent 对话</p>
-              <button type="button" onClick={createConversation} className="rounded-lg bg-blue-500 px-4 py-2 text-white hover:bg-blue-600 transition-colors">创建对话</button>
+            <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+                <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.96 7.96 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+              </div>
+              <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">还没有 Agent 对话</h2>
+              <p className="mb-4 mt-1.5 max-w-sm text-sm text-[hsl(var(--muted-foreground))]">创建一个对话，开始与 Agent 多轮生成、编辑图片。</p>
+              <button type="button" onClick={createConversation} className="rounded-lg bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity hover:opacity-90">创建对话</button>
             </div>
           ) : (
             (() => {
               if (activeMessages.length === 0) {
                 return (
-                  <div className="py-20 text-center text-gray-400">
-                    <p className="mb-2">开始新的 Agent 对话</p>
-                    <p className="text-xs">在底部输入框发送消息即可创建第一轮对话。</p>
+                  <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
+                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+                      <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.96 7.96 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                    </div>
+                    <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">开始新的 Agent 对话</h2>
+                    <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[hsl(var(--muted-foreground))]">在下方输入框发送消息即可创建第一轮对话，Agent 会按需调用图像工具。</p>
                   </div>
                 )
               }
@@ -928,6 +965,15 @@ export default function AgentWorkspace() {
                                     onEditOutputs={() => editOutputs(block.task)}
                                     onDelete={() => setConfirmDialog({ title: '删除记录', message: '确定要删除这条记录吗？', action: () => removeTask(block.task) })}
                                   />
+                                  {block.task.outputImages.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void sendTaskOutputsToGallery(block.task)}
+                                      className="mt-2 w-full rounded-lg border border-gray-200/70 bg-white/70 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
+                                    >
+                                      发送到画廊继续编辑
+                                    </button>
+                                  )}
                                 </div>
                               )
                             }) : isStreamingAssistant ? <AgentStreamingCursor /> : null}
@@ -1012,9 +1058,9 @@ export default function AgentWorkspace() {
                                  } else {
                                    useStore.getState().showToast(successCount > 1 ? '下载成功：' + successCount + ' 张图片' : '下载成功', 'success');
                                  }
-                               } catch (err) {
-                                 console.error(err);
-                                 useStore.getState().showToast('下载失败', 'error');
+                                } catch (err) {
+                                  logger.error('agent', 'Agent 消息下载失败', { error: serializeError(err) });
+                                  useStore.getState().showToast('下载失败', 'error');
                                }
                              }}>
                                <DownloadIcon className="w-4 h-4" />
@@ -1085,15 +1131,15 @@ export default function AgentWorkspace() {
           <div ref={bottomSentinelRef} aria-hidden="true" />
         </div>
 
-        <button
-          onClick={scrollToAgentBottom}
-          className={`fixed bottom-[calc(var(--input-bar-clearance,12rem)+1.5rem)] left-1/2 -translate-x-1/2 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 backdrop-blur shadow-[0_2px_12px_rgba(0,0,0,0.1)] border border-gray-200/50 text-gray-500 transition-all duration-300 hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-800/90 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200 ${
-            !isScrolledToBottom && activeMessages.length > 0 ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'
-          }`}
-          aria-label="滚动到底部"
-        >
-          <ArrowDownIcon className="h-5 w-5" />
-        </button>
+        {!isScrolledToBottom && activeMessages.length > 0 && (
+          <button
+            onClick={scrollToAgentBottom}
+            className="fixed bottom-[calc(var(--input-bar-clearance,12rem)+1.5rem)] left-1/2 z-30 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-gray-200/50 bg-white/90 text-gray-500 shadow-[0_2px_12px_rgba(0,0,0,0.1)] backdrop-blur transition-all duration-300 hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-800/90 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            aria-label="滚动到底部"
+          >
+            <ArrowDownIcon className="h-5 w-5" />
+          </button>
+        )}
       </section>
     </main>
   )

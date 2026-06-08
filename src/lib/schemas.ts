@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 // 仅用于「不可信边界」的薄校验层：只验证结构/形状，不做深层语义。
 // 字段的强制/兜底仍由 apiProfiles.ts 的 normalize* 负责。这里不替代它们。
@@ -7,13 +7,13 @@ import { z } from 'zod'
 // 未知字段保留（loose），仅用于安全地读取 reason / actor 等已知字段，替代不安全的 as 断言。
 // 每个字段单独 .catch(undefined)：某个字段类型不符时只丢弃该字段，不让整条 metadata
 // 解析失败，从而保留原先「逐字段 typeof 检查」的宽容度（如 reason 是数字但 actor 合法时仍显示 actor）。
-export const galleryRevokedMetaSchema = z.looseObject({
+export const galleryRevokedMetaSchema = z.object({
   image_id: z.string().optional().catch(undefined),
   prompt_excerpt: z.string().optional().catch(undefined),
   reason: z.string().nullish().catch(undefined),
   actor_display_name: z.string().nullish().catch(undefined),
   actor_username: z.string().nullish().catch(undefined),
-})
+}).passthrough()
 
 export type GalleryRevokedMetaParsed = z.infer<typeof galleryRevokedMetaSchema>
 

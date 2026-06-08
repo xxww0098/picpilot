@@ -1,4 +1,4 @@
-import type { ApiProfile, CustomProviderDefinition, CustomProviderPollMapping, CustomProviderResultMapping, CustomProviderSubmitMapping, TaskParams } from '../../types'
+import type { ApiProfile, AppMode, CustomProviderDefinition, CustomProviderPollMapping, CustomProviderResultMapping, CustomProviderSubmitMapping, TaskParams } from '../../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from '../canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../devProxy'
 import {
@@ -201,6 +201,7 @@ async function submitCustomRequest(mapping: CustomProviderSubmitMapping, opts: C
     body,
     signal: controller.signal,
   }, {
+    appMode: opts.telemetry?.appMode ?? 'gallery',
     provider: profile.provider,
     contentType,
     apiProxy: useApiProxy,
@@ -216,6 +217,7 @@ async function pollCustomTaskResult(
   taskId: string,
   mime: string,
   signal?: AbortSignal,
+  appMode: AppMode = 'gallery',
 ): Promise<CallApiResult> {
   const proxyConfig = readClientDevProxyConfig()
   const requestHeaders = createRequestHeaders(profile)
@@ -238,7 +240,7 @@ async function pollCustomTaskResult(
         headers: requestHeaders,
         cache: 'no-store',
         signal,
-      }, { provider: profile.provider, taskId })
+      }, { appMode, provider: profile.provider, taskId })
 
       if (!taskResponse.ok) {
         if (isRetryablePollingStatus(taskResponse.status)) continue
@@ -280,6 +282,7 @@ export async function getCustomQueuedImageResult(
 
 export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider: CustomProviderDefinition): Promise<CallApiResult> {
   const { params, inputImageDataUrls } = opts
+  const appMode = opts.telemetry?.appMode ?? 'gallery'
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const controller = new AbortController()
@@ -313,7 +316,7 @@ export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiP
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal)
+    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal, appMode)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
     opts.signal?.removeEventListener('abort', abortFromCaller)

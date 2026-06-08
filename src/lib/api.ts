@@ -4,14 +4,19 @@ import type { CallApiOptions, CallApiResult } from './imageApiShared'
 import { getDataUrlDecodedByteSize } from './imageApiShared'
 import { logger, serializeError } from './logger'
 import { classifyError, reportEvent } from './telemetry'
+import { applyTeamRuntimeSettings } from './runtimeTeamSettings'
 
 export type { CallApiOptions, CallApiResult } from './imageApiShared'
 
 export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
-  const profile = getActiveApiProfile(opts.settings)
+  const effectiveSettings = applyTeamRuntimeSettings(opts.settings)
+  const profile = getActiveApiProfile(effectiveSettings)
+  const effectiveOpts = { ...opts, settings: effectiveSettings }
   const startedAt = Date.now()
+  const appMode = opts.telemetry?.appMode ?? 'gallery'
   const baseEvent = {
     provider: profile.provider,
+    app_mode: appMode,
     api_mode: profile.apiMode,
     model: profile.model,
     size: opts.params.size,
@@ -26,6 +31,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     image_index: opts.telemetry?.imageIndex,
   }
   logger.info('api', '图像 API 调用开始', {
+    appMode,
     provider: profile.provider,
     profileName: profile.name,
     baseUrl: profile.baseUrl,
@@ -41,9 +47,10 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
   })
 
   try {
-    const result = await callOpenAICompatibleImageApi(opts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
+    const result = await callOpenAICompatibleImageApi(effectiveOpts, profile, getCustomProviderDefinition(effectiveSettings, profile.provider))
     const elapsedMs = Date.now() - startedAt
     logger.info('api', '图像 API 调用成功', {
+      appMode,
       provider: profile.provider,
       model: profile.model,
       images: result.images.length,
@@ -63,6 +70,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
   } catch (err) {
     const elapsedMs = Date.now() - startedAt
     logger.error('api', '图像 API 调用失败', {
+      appMode,
       provider: profile.provider,
       model: profile.model,
       apiMode: profile.apiMode,

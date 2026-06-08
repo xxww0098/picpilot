@@ -1,5 +1,17 @@
 {
 	email 970685525@qq.com
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Proxy-Authorization delete
+				request>headers>X-Picpilot-Authorization delete
+				request>headers>X-PicPilot-Authorization delete
+				request>headers>Cookie delete
+			}
+		}
+	}
 }
 
 image.xxww.online {

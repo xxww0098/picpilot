@@ -287,6 +287,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       body: JSON.stringify(body),
       signal: controller.signal,
     }, {
+      appMode: opts.telemetry?.appMode ?? 'gallery',
       provider: profile.provider,
       model: profile.model,
       codexCli: profile.codexCli,

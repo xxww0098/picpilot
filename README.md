@@ -5,8 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Bun](https://img.shields.io/badge/Bun-1.3-fbf0df?style=flat-square&logo=bun&logoColor=black)](https://bun.sh/)
-[![Hono](https://img.shields.io/badge/Hono-E36002?style=flat-square&logo=hono&logoColor=white)](https://hono.dev/)
+[![Node.js](https://img.shields.io/badge/Node.js-20+-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
+[![chi](https://img.shields.io/badge/chi-5.3-111827?style=flat-square)](https://go-chi.io/)
 [![PWA](https://img.shields.io/badge/PWA-ready-5A0FC8?style=flat-square&logo=pwa&logoColor=white)](#-核心特性)
 
 **面向电商商品图的自托管 AI 图片生成与编辑工作台**
@@ -123,27 +124,27 @@
 **1. 登录 Cloudflare**
 
 ```bash
-bunx wrangler login
+npx wrangler login
 ```
 
 **2. 部署到 Workers**
 
 ```bash
-bun run deploy:cf
+npm run deploy:cf
 ```
 
-部署脚本会先执行 `bun run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
+部署脚本会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
 
 **导入默认自定义服务商配置**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需在页面启动后自动导入自定义服务商配置，请在构建前将 `VITE_DEFAULT_API_URL` 设为 `.json` 配置 URL 或带 `settings` 参数的分享 URL 后再部署。
 
 ```bash
-VITE_DEFAULT_API_URL=https://example.com/picpilot-provider.json bun run deploy:cf
+VITE_DEFAULT_API_URL=https://example.com/picpilot-provider.json npm run deploy:cf
 ```
 
 PowerShell 示例：
 
 ```powershell
-$env:VITE_DEFAULT_API_URL="https://example.com/picpilot-provider.json"; bun run deploy:cf
+$env:VITE_DEFAULT_API_URL="https://example.com/picpilot-provider.json"; npm run deploy:cf
 ```
 
 > 普通 API 地址不会写入前端配置；真实上游地址与 Key 始终由服务端 `API_PROXY_URL` / `API_PROXY_API_KEY` 决定。
@@ -296,7 +297,7 @@ curl -X POST http://localhost:3001/api/auth/login \
   -d '{"username":"admin","password":"your-password"}'
 
 # 验证 CLIProxyAPI 连通性（如果部署了）
-docker compose exec auth bun -e "
+docker compose exec auth node -e "
   const r = await fetch('http://cli-proxy-api:8317/v1/models', {
     headers: { authorization: 'Bearer ' + process.env.API_PROXY_API_KEY }
   });
@@ -313,19 +314,19 @@ docker compose exec auth bun -e "
 
 **1. 环境准备与启动**
 
-本项目完全使用 Bun 驱动。你可以在项目根目录新建 `.env.local` 文件，用 `VITE_DEFAULT_API_URL` 配置默认导入的自定义服务商 JSON 或分享 URL。前端热更新开发可运行：
+本项目使用 Node.js / npm 驱动。你可以在项目根目录新建 `.env.local` 文件，用 `VITE_DEFAULT_API_URL` 配置默认导入的自定义服务商 JSON 或分享 URL。前端热更新开发可运行：
 
 **导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 设为 `.json` 配置 URL 或带 `settings` 参数的分享 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置。普通 API 地址不会写入前端配置。
 
 ```bash
-bun install
-bun run dev
+npm install
+npm run dev
 ```
 
 如果需要一键执行“安装依赖 -> 构建 -> 预览静态产物”，可运行：
 
 ```bash
-bun run start:local
+npm run start:local
 ```
 
 `start:local` 会构建前端产物，然后启动单个 Hono 应用服务：Hono 同时负责 `/api/*` 接口和 `dist/` 静态文件，因此访问 `http://localhost:3001` 会显示登录界面。默认本地管理员为 `admin` / `admin`；如需自定义，可在启动前设置 `ADMIN_USERS="用户名:密码"` 和 `JWT_SECRET="长随机字符串"`。
@@ -338,14 +339,14 @@ bun run start:local
 cp dev-proxy.config.example.json dev-proxy.config.json
 ```
 
-修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址（OpenAI 兼容接口需要填到 `/v1` 版本前缀）。重启开发服务器后，所有 `/api-proxy/...` 请求会被转发到该 `target`。仅 `bun run dev` 阶段生效，不影响构建产物。
+修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址（OpenAI 兼容接口需要填到 `/v1` 版本前缀）。重启开发服务器后，所有 `/api-proxy/...` 请求会被转发到该 `target`。仅 `npm run dev` 阶段生效，不影响构建产物。
 
 **3. 本地故障模拟 API (可选)**
 
 如果需要复现图片 URL 跨域、接口返回结构异常、原始响应查看等问题，可启动内置模拟服务：
 
 ```powershell
-bun run mock:api
+npm run mock:api
 ```
 
 使用方式见 [本地故障模拟 API](docs/mock-image-api.md)。
@@ -353,10 +354,10 @@ bun run mock:api
 **4. 构建静态产物**
 
 ```bash
-bun run build
+npm run build
 ```
 
-构建会先执行前端、Node 配置脚本和 Service Worker 的 TypeScript 检查；如需连同服务端一起检查，可运行 `bun run typecheck:all`。构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如 Caddy、GitHub Pages、Netlify 等）。
+构建会先执行前端、Node 配置脚本和 Service Worker 的 TypeScript 检查；如需连同服务端一起检查，可运行 `npm run typecheck:all`。构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如 Caddy、GitHub Pages、Netlify 等）。
 
 </details>
 
@@ -446,9 +447,9 @@ JSON 结构示例：
   <a href="https://zod.dev/"><img src="https://img.shields.io/badge/Zod-3E67B1?style=for-the-badge&logo=zod&logoColor=white" alt="Zod" /></a>
   <br><br>
   <b>后端</b><br>
-  <a href="https://bun.sh/"><img src="https://img.shields.io/badge/Bun-000000?style=for-the-badge&logo=bun&logoColor=white" alt="Bun" /></a>
-  <a href="https://hono.dev/"><img src="https://img.shields.io/badge/Hono-E36002?style=for-the-badge&logo=hono&logoColor=white" alt="Hono" /></a>
-  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite_(bun:sqlite)-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" /></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" /></a>
+  <a href="https://go-chi.io/"><img src="https://img.shields.io/badge/chi-5.3-111827?style=for-the-badge&logoColor=white" alt="chi" /></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite" /></a>
   <a href="https://sharp.pixelplumbing.com/"><img src="https://img.shields.io/badge/sharp-99CC00?style=for-the-badge&logoColor=white" alt="sharp" /></a>
   <br>
   <br>

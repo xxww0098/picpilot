@@ -10,27 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run test
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
 
   server:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v5
         with:
-          bun-version: latest
-      # 根依赖提供 tsc / eslint，server 依赖提供 hono/sharp/pino + 类型
-      - run: bun install --frozen-lockfile
-      - name: Install server deps
-        working-directory: server
-        run: bun install --frozen-lockfile
-      - run: bun run typecheck:server
-      - name: Server tests
-        working-directory: server
-        run: bun test
+          go-version-file: server-go/go.mod
+          cache-dependency-path: server-go/go.sum
+      - name: Go server tests
+        working-directory: server-go
+        run: go test ./...

@@ -1,3 +1,4 @@
+import { logger, serializeError } from './logger'
 import { getUserFacingErrorMessage } from './userFacingText'
 
 export const AUTH_TOKEN_KEY = 'auth_token'
@@ -50,6 +51,9 @@ export interface AuthUser {
   galleryAutoRetryCount: number
   maxConcurrent: number
   maxQueue: number
+  proxyUserSoftLimit: number
+  streamFallbackEnabled: boolean
+  requestTimeoutSeconds: number
   publicGalleryCount: number
   publicStorageBytes: number
   publicStorageQuotaBytes: number
@@ -78,6 +82,9 @@ function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
     galleryAutoRetryCount: Number(data.galleryAutoRetryCount ?? 1),
     maxConcurrent: Number(data.maxConcurrent ?? 5),
     maxQueue: Number(data.maxQueue ?? 50),
+    proxyUserSoftLimit: Number(data.proxyUserSoftLimit ?? 0),
+    streamFallbackEnabled: data.streamFallbackEnabled !== false,
+    requestTimeoutSeconds: Number(data.requestTimeoutSeconds ?? 900),
     publicGalleryCount: Number(data.publicGalleryCount ?? 0),
     publicStorageBytes: Number(data.publicStorageBytes ?? 0),
     publicStorageQuotaBytes: Number(data.publicStorageQuotaBytes ?? 0),
@@ -91,16 +98,22 @@ export async function fetchCurrentUser(): Promise<AuthUser | null | undefined> {
     const res = await fetch('/api/auth/me', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-    if (res.status === 404) return undefined
+    if (res.status === 404) {
+      logger.debug('auth', 'fetchCurrentUser: auth server not configured (404)')
+      return undefined
+    }
     if (!res.ok) {
+      logger.warn('auth', `fetchCurrentUser: HTTP ${res.status}`, { status: res.status })
       cachedAuthUser = null
       return null
     }
     const data = (await res.json()) as Partial<AuthUser>
     const user = normalizeAuthUser(data)
     cachedAuthUser = user
+    logger.info('auth', 'fetchCurrentUser: success', { username: user.username, isAdmin: user.isAdmin })
     return user
-  } catch {
+  } catch (err) {
+    logger.error('auth', 'fetchCurrentUser: network error', { error: serializeError(err) })
     return undefined
   }
 }
@@ -108,6 +121,7 @@ export async function fetchCurrentUser(): Promise<AuthUser | null | undefined> {
 type AuthResponse = { token: string } & AuthUser
 
 export async function login(username: string, password: string): Promise<AuthUser> {
+  logger.info('auth', 'login: attempting', { username })
   const res = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -115,15 +129,18 @@ export async function login(username: string, password: string): Promise<AuthUse
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
+    logger.warn('auth', `login: failed (HTTP ${res.status})`, { username, status: res.status })
     throw new Error(getUserFacingErrorMessage(data.error ?? '登录失败', '登录失败', res.status))
   }
   const data = (await res.json()) as AuthResponse
   localStorage.setItem(TOKEN_KEY, data.token)
   cachedAuthUser = normalizeAuthUser(data)
+  logger.info('auth', 'login: success', { username: cachedAuthUser.username, isAdmin: cachedAuthUser.isAdmin })
   return cachedAuthUser
 }
 
 export async function register(invite: string, username: string, password: string): Promise<AuthUser> {
+  logger.info('auth', 'register: attempting', { username })
   const res = await fetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -131,15 +148,18 @@ export async function register(invite: string, username: string, password: strin
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
+    logger.warn('auth', `register: failed (HTTP ${res.status})`, { username, status: res.status })
     throw new Error(getUserFacingErrorMessage(data.error ?? '注册失败', '注册失败', res.status))
   }
   const data = (await res.json()) as AuthResponse
   localStorage.setItem(TOKEN_KEY, data.token)
   cachedAuthUser = normalizeAuthUser(data)
+  logger.info('auth', 'register: success', { username: cachedAuthUser.username })
   return cachedAuthUser
 }
 
 export async function updateDisplayName(displayName: string): Promise<AuthUser> {
+  logger.info('auth', 'updateDisplayName: attempting')
   const res = await authFetch('/api/auth/profile', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -147,13 +167,16 @@ export async function updateDisplayName(displayName: string): Promise<AuthUser> 
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
+    logger.warn('auth', `updateDisplayName: failed (HTTP ${res.status})`, { status: res.status })
     throw new Error(getUserFacingErrorMessage(data.error ?? '更新显示名失败', '更新显示名失败', res.status))
   }
   cachedAuthUser = normalizeAuthUser((await res.json()) as Partial<AuthUser>)
+  logger.info('auth', 'updateDisplayName: success', { displayName: cachedAuthUser.displayName })
   return cachedAuthUser
 }
 
 export async function uploadAvatar(imageBase64: string): Promise<{ avatarUpdatedAt: number }> {
+  logger.info('auth', 'uploadAvatar: attempting')
   const res = await authFetch('/api/auth/avatar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -161,23 +184,32 @@ export async function uploadAvatar(imageBase64: string): Promise<{ avatarUpdated
   })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
+    logger.warn('auth', `uploadAvatar: failed (HTTP ${res.status})`, { status: res.status })
     throw new Error(getUserFacingErrorMessage(data.error ?? '上传头像失败', '上传头像失败', res.status))
   }
-  return (await res.json()) as { avatarUpdatedAt: number }
+  const result = (await res.json()) as { avatarUpdatedAt: number }
+  logger.info('auth', 'uploadAvatar: success')
+  return result
 }
 
 export async function deleteAvatar(): Promise<void> {
+  logger.info('auth', 'deleteAvatar: attempting')
   const res = await authFetch('/api/auth/avatar', { method: 'DELETE' })
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string }
+    logger.warn('auth', `deleteAvatar: failed (HTTP ${res.status})`, { status: res.status })
     throw new Error(getUserFacingErrorMessage(data.error ?? '删除头像失败', '删除头像失败', res.status))
   }
+  logger.info('auth', 'deleteAvatar: success')
 }
 
 export async function fetchAvatarBlob(userId: string): Promise<Blob | null> {
   const res = await authFetch(`/api/avatars/${encodeURIComponent(userId)}`)
   if (res.status === 404) return null
-  if (!res.ok) throw new Error('加载头像失败')
+  if (!res.ok) {
+    logger.warn('auth', `fetchAvatarBlob: failed (HTTP ${res.status})`, { userId, status: res.status })
+    throw new Error('加载头像失败')
+  }
   return res.blob()
 }
 
@@ -192,13 +224,24 @@ export async function refreshAuthToken(): Promise<'refreshed' | 'invalid' | 'ski
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
-    if (res.status === 401 || res.status === 403) return 'invalid'
-    if (!res.ok) return 'skip'
+    if (res.status === 401 || res.status === 403) {
+      logger.warn('auth', `refreshAuthToken: session invalid (HTTP ${res.status})`, { status: res.status })
+      return 'invalid'
+    }
+    if (!res.ok) {
+      logger.debug('auth', `refreshAuthToken: skip (HTTP ${res.status})`, { status: res.status })
+      return 'skip'
+    }
     const data = (await res.json()) as { token?: string }
-    if (!data.token) return 'skip'
+    if (!data.token) {
+      logger.debug('auth', 'refreshAuthToken: skip (no token in response)')
+      return 'skip'
+    }
     localStorage.setItem(TOKEN_KEY, data.token)
+    logger.debug('auth', 'refreshAuthToken: refreshed')
     return 'refreshed'
-  } catch {
+  } catch (err) {
+    logger.debug('auth', 'refreshAuthToken: skip (network error)', { error: serializeError(err) })
     return 'skip'
   }
 }
@@ -214,8 +257,12 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
   const token = getStoredToken()
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const method = init?.method ?? 'GET'
+  logger.debug('auth', `→ ${method} ${url}`)
   const res = await fetch(input, { ...init, headers })
   if (res.status === 401) {
+    logger.warn('auth', `authFetch: 401 → logout`, { url, method })
     logout()
     window.location.reload()
   }

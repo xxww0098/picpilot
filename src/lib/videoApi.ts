@@ -9,6 +9,8 @@ import type { AppSettings } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getStoredAuthToken } from './auth'
 import { getApiErrorMessage } from './imageApiShared'
+import { logger, serializeError } from './logger'
+import { classifyError, reportEvent } from './telemetry'
 
 export interface VideoGenerationResult {
   /** 生成的视频远端地址（mp4）。由调用方抓取后缓存到 IndexedDB。 */
@@ -146,6 +148,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGenerationResult> {
   const { model, prompt, imageDataUrl, durationSeconds, signal, onStatus } = opts
+  const startedAt = Date.now()
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   const pollTimeoutMs = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
   const proxyConfig = readClientDevProxyConfig()
@@ -156,53 +159,115 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGe
   if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) submitBody.duration = durationSeconds
   if (imageDataUrl) submitBody.image = { url: imageDataUrl }
 
-  const submitResp = await fetch(buildApiUrl('', 'videos/generations', proxyConfig, useApiProxy), {
-    method: 'POST',
-    headers,
-    cache: 'no-store',
-    body: JSON.stringify(submitBody),
-    signal,
+  logger.info('api', '视频 API 调用开始', {
+    appMode: 'video',
+    provider: 'xAI',
+    model,
+    apiMode: 'videos',
+    apiProxy: useApiProxy,
+    hasInputImage: Boolean(imageDataUrl),
+    durationSeconds,
+    promptChars: prompt.length,
   })
-  if (!submitResp.ok) throw new Error(await getApiErrorMessage(submitResp, 'Videos /videos/generations'))
-  const submitPayload = await readVideoJsonPayload(submitResp, 'Videos /videos/generations')
 
-  // 同步直返（部分实现可能直接给出 url）→ 立即返回
-  const immediateUrl = extractVideoUrl(submitPayload)
-  if (immediateUrl) {
-    return { videoUrl: immediateUrl, posterUrl: extractVideoPosterUrl(submitPayload), rawPayload: JSON.stringify(submitPayload) }
-  }
-
-  const taskId = extractVideoTaskId(submitPayload)
-  if (!taskId) throw new Error('视频任务提交后未返回任务 id，无法轮询结果。')
-
-  const deadline = Date.now() + pollTimeoutMs
-  // 注：不用 Date.now() 做随机/缓存，仅作超时判断（轮询本就是运行期行为）。
-  for (;;) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    await sleep(pollIntervalMs, signal)
-
-    const pollResp = await fetch(buildApiUrl('', `videos/${encodeURIComponent(taskId)}`, proxyConfig, useApiProxy), {
-      method: 'GET',
+  try {
+    const submitResp = await fetch(buildApiUrl('', 'videos/generations', proxyConfig, useApiProxy), {
+      method: 'POST',
       headers,
       cache: 'no-store',
+      body: JSON.stringify(submitBody),
       signal,
     })
-    if (!pollResp.ok) throw new Error(await getApiErrorMessage(pollResp, 'Videos /videos/{id}'))
-    const pollPayload = await readVideoJsonPayload(pollResp, 'Videos /videos/{id}')
+    if (!submitResp.ok) throw new Error(await getApiErrorMessage(submitResp, 'Videos /videos/generations'))
+    const submitPayload = await readVideoJsonPayload(submitResp, 'Videos /videos/generations')
 
-    const status = extractVideoStatus(pollPayload)
-    if (status) onStatus?.(status)
-    const cls = classifyVideoStatus(status)
+    const finishSuccess = (payload: unknown, videoUrl: string): VideoGenerationResult => {
+      const elapsedMs = Date.now() - startedAt
+      logger.info('api', '视频 API 调用成功', {
+        appMode: 'video',
+        provider: 'xAI',
+        model,
+        elapsedMs,
+      })
+      void reportEvent({
+        event_type: 'success',
+        app_mode: 'video',
+        provider: 'xAI',
+        api_mode: 'videos',
+        model,
+        prompt,
+        action_type: 'generate_video',
+        has_input_image: Boolean(imageDataUrl),
+        input_image_count: imageDataUrl ? 1 : 0,
+        duration_ms: elapsedMs,
+        output_count: 1,
+      })
+      return { videoUrl, posterUrl: extractVideoPosterUrl(payload), rawPayload: JSON.stringify(payload) }
+    }
 
-    // 即便状态字段缺失，只要拿到了 url 也视为完成。
-    const url = extractVideoUrl(pollPayload)
-    if (cls === 'done' || url) {
-      if (!url) throw new Error('视频生成完成但未返回视频地址。')
-      return { videoUrl: url, posterUrl: extractVideoPosterUrl(pollPayload), rawPayload: JSON.stringify(pollPayload) }
+    // 同步直返（部分实现可能直接给出 url）→ 立即返回
+    const immediateUrl = extractVideoUrl(submitPayload)
+    if (immediateUrl) return finishSuccess(submitPayload, immediateUrl)
+
+    const taskId = extractVideoTaskId(submitPayload)
+    if (!taskId) throw new Error('视频任务提交后未返回任务 id，无法轮询结果。')
+
+    const deadline = Date.now() + pollTimeoutMs
+    // 注：不用 Date.now() 做随机/缓存，仅作超时判断（轮询本就是运行期行为）。
+    for (;;) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      await sleep(pollIntervalMs, signal)
+
+      const pollResp = await fetch(buildApiUrl('', `videos/${encodeURIComponent(taskId)}`, proxyConfig, useApiProxy), {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+        signal,
+      })
+      if (!pollResp.ok) throw new Error(await getApiErrorMessage(pollResp, 'Videos /videos/{id}'))
+      const pollPayload = await readVideoJsonPayload(pollResp, 'Videos /videos/{id}')
+
+      const status = extractVideoStatus(pollPayload)
+      if (status) onStatus?.(status)
+      const cls = classifyVideoStatus(status)
+
+      // 即便状态字段缺失，只要拿到了 url 也视为完成。
+      const url = extractVideoUrl(pollPayload)
+      if (cls === 'done' || url) {
+        if (!url) throw new Error('视频生成完成但未返回视频地址。')
+        return finishSuccess(pollPayload, url)
+      }
+      if (cls === 'failed') {
+        throw new Error(extractVideoError(pollPayload) || '视频生成失败。')
+      }
+      if (Date.now() > deadline) throw new Error('视频生成超时，请稍后在画廊查看或重试。')
     }
-    if (cls === 'failed') {
-      throw new Error(extractVideoError(pollPayload) || '视频生成失败。')
-    }
-    if (Date.now() > deadline) throw new Error('视频生成超时，请稍后在画廊查看或重试。')
+  } catch (err) {
+    const elapsedMs = Date.now() - startedAt
+    logger.error('api', '视频 API 调用失败', {
+      appMode: 'video',
+      provider: 'xAI',
+      model,
+      elapsedMs,
+      error: serializeError(err),
+    })
+    const cls = classifyError(err)
+    void reportEvent({
+      event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
+      app_mode: 'video',
+      provider: 'xAI',
+      api_mode: 'videos',
+      model,
+      prompt,
+      action_type: 'generate_video',
+      has_input_image: Boolean(imageDataUrl),
+      input_image_count: imageDataUrl ? 1 : 0,
+      duration_ms: elapsedMs,
+      http_status: cls.http_status,
+      error_type: cls.error_type,
+      error_message: err instanceof Error ? err.message : String(err),
+      error_stack: err instanceof Error ? err.stack : undefined,
+    })
+    throw err
   }
 }

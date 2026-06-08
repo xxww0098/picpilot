@@ -3,20 +3,25 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if ! command -v bun >/dev/null 2>&1; then
-  echo "错误: 未找到 Bun，请先安装 Bun。" >&2
+if ! command -v node >/dev/null 2>&1; then
+  echo "错误: 未找到 Node.js，请先安装 Node.js。" >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "错误: 未找到 npm，请先安装 npm。" >&2
   exit 1
 fi
 
 if [ ! -d node_modules ]; then
   echo ">>> 首次启动，正在安装依赖..."
-  bun install
+  npm install
 fi
 
 ensure_server_deps() {
   if [ ! -d server/node_modules ]; then
     echo ">>> 首次启动鉴权服务，正在安装服务端依赖..."
-    bun install --cwd server
+    npm install --prefix server
   fi
 }
 
@@ -36,13 +41,13 @@ start_dev() {
       JWT_SECRET="${JWT_SECRET:-local-dev-jwt-secret-change-before-deploy}" \
       ADMIN_USERS="${ADMIN_USERS:-admin:admin}" \
       LOG_PRETTY="${LOG_PRETTY:-1}" \
-      bun run index.ts
+      npm start
   ) &
 
   local auth_pid=$!
   trap 'kill "$auth_pid" 2>/dev/null || true' EXIT INT TERM
 
-  LOCAL_AUTH_PROXY_URL="$auth_url" bun run dev "$@"
+  LOCAL_AUTH_PROXY_URL="$auth_url" npm run dev -- "$@"
 }
 
 COMMAND="${1:-start}"
@@ -54,27 +59,27 @@ case "$COMMAND" in
     ;;
   start|local)
     echo ">>> 启动 picpilot 本地完整模式..."
-    bun run start:local "$@"
+    npm run start:local -- "$@"
     ;;
   build)
     echo ">>> 构建 picpilot..."
-    bun run build "$@"
+    npm run build -- "$@"
     ;;
   preview)
     echo ">>> 预览 picpilot 构建产物..."
-    bun run preview "$@"
+    npm run preview -- "$@"
     ;;
   test)
     echo ">>> 运行测试..."
-    bun run test "$@"
+    npm test -- "$@"
     ;;
   typecheck)
     echo ">>> 运行类型检查..."
-    bun run typecheck "$@"
+    npm run typecheck -- "$@"
     ;;
   install)
     echo ">>> 安装依赖..."
-    bun install "$@"
+    npm install "$@"
     ;;
   -h|--help|help)
     cat <<'EOF'

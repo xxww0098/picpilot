@@ -9,12 +9,14 @@ import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HistoryModal from './HistoryModal'
-import { BellIcon, DownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, MoreIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
+import { BellIcon, ChevronDownIcon, DownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, MoreIcon, PhotoIcon, SettingsIcon, TerminalIcon, WrenchIcon } from './icons'
 import { useAuth } from '../contexts/AuthProvider'
 import { useNotificationUnread } from '../hooks/useNotificationUnread'
 import { openConfirmDialog, showAppToast } from '../lib/dialog'
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import { downloadImagesAsZip, formatExportFileTime } from '../lib/downloadImages'
+import type { AppMode } from '../types'
+import { useIsMobile } from '../hooks/useIsMobile'
 import UserMenu from './UserMenu'
 
 const HelpModal = lazy(() => import('./HelpModal'))
@@ -33,6 +35,7 @@ export default function Header() {
   const agentConversations = useStore((s) => s.agentConversations)
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
   const activeConversation = agentConversations.find((item) => item.id === activeAgentConversationId)
+  const isMobile = useIsMobile()
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
   const [downloadingGallery, setDownloadingGallery] = useState(false)
@@ -54,6 +57,7 @@ export default function Header() {
   const showChatPicker = appMode === 'agent'
   // 顶栏模型开关占一行/一段，移动端占位高度需相应调整。
   const showAnyPicker = showImagePicker || showChatPicker
+  const mobileAgentHeaderHidden = isMobile && appMode === 'agent' && !agentMobileHeaderVisible
   const handleModelChange = useCallback((model: string) => {
     const option = IMAGE_MODELS.find((item) => item.id === model)
     const provider = option?.provider === 'xAI' ? 'xAI' : 'openai'
@@ -168,7 +172,12 @@ export default function Header() {
 
   return (
     <>
-      <header data-no-drag-select className={`safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'}`}>
+      <header
+        data-no-drag-select
+        aria-hidden={mobileAgentHeaderHidden ? true : undefined}
+        inert={mobileAgentHeaderHidden ? true : undefined}
+        className={`safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'}`}
+      >
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between relative">
           <div className="flex-1 min-w-0 pr-2 flex items-center gap-2">
             <h1 className="inline-flex items-center gap-2 relative mr-2">
@@ -196,7 +205,7 @@ export default function Header() {
                 </a>
               )}
             </h1>
-            {appMode === 'agent' && <div className="hidden sm:flex items-center gap-1 relative">
+            {appMode === 'agent' && <div className="hidden sm:flex lg:hidden items-center gap-1 relative">
               <button
                 ref={historyButtonRef}
                 type="button"
@@ -223,7 +232,7 @@ export default function Header() {
             </div>}
           </div>
           {appMode === 'agent' && activeConversation && (
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden sm:flex max-w-[30%]">
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden sm:flex lg:hidden max-w-[30%]">
               <button
                 type="button"
                 onClick={() => {
@@ -255,21 +264,28 @@ export default function Header() {
               onClick={() => setAppMode('gallery')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              gallery
+              画廊
             </button>
             <button
               type="button"
               onClick={() => setAppMode('agent')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              agent
+              对话
             </button>
             <button
               type="button"
               onClick={() => setAppMode('video')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'video' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              video
+              视频
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppMode('workflow')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'workflow' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+            >
+              工作流
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -326,45 +342,24 @@ export default function Header() {
             )}
           </div>
         </div>
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode !== 'agent' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-28 opacity-100 pb-2'}`}>
-          {showImagePicker && (
-            <div className="flex justify-center mb-2 mx-2">
-              <ModelPicker model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
-            </div>
-          )}
-          {showChatPicker && (
-            <div className="flex justify-center mb-2 mx-2">
-              <ModelPicker model={settings.agentModel} options={CHAT_MODELS} onChange={handleAgentModelChange} ariaLabel="对话模型" />
-            </div>
-          )}
-          <div className="grid grid-cols-3 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
-            <button
-              type="button"
-              onClick={() => setAppMode('gallery')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              gallery
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              agent
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('video')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'video' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              video
-            </button>
+          <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode !== 'agent' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-28 opacity-100 pb-2'}`}>
+          <div className="mx-2 flex items-center gap-2">
+            <MobileViewSelect mode={appMode} onChange={setAppMode} />
+            {showImagePicker && (
+              <MobileModelSelect model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
+            )}
+            {showChatPicker && (
+              <MobileModelSelect model={settings.agentModel} options={CHAT_MODELS} onChange={handleAgentModelChange} ariaLabel="对话模型" />
+            )}
           </div>
         </div>
       </header>
       
       {/* Hint for sliding down */}
-      <div className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out sm:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}>
+      <div
+        aria-hidden={appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? undefined : true}
+        className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out sm:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}
+      >
         <div className="bg-black/60 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-b-xl shadow-lg">
           列表顶部下拉展示顶栏
         </div>
@@ -373,15 +368,11 @@ export default function Header() {
       <div className={`safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
         <div className="safe-header-inner" />
         <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode !== 'agent' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-28 pb-2'}`}>
-          {showAnyPicker && (
-            <div className="flex justify-center mb-2 mx-2">
-              <div className="inline-flex items-center gap-1 rounded-xl border border-transparent p-1">
-                <div className="px-3 py-1.5 text-sm">占位</div>
-              </div>
-            </div>
-          )}
-          <div className="p-1">
-            <div className="py-1.5 text-sm">占位</div>
+          <div className="mx-2 flex items-center gap-2">
+            <div className="min-w-0 flex-1 rounded-xl border border-transparent px-3 py-1.5 text-sm">占位</div>
+            {showAnyPicker && (
+              <div className="min-w-0 flex-1 rounded-xl border border-transparent px-3 py-1.5 text-sm">占位</div>
+            )}
           </div>
         </div>
       </div>
@@ -418,6 +409,75 @@ export default function Header() {
         </Suspense>
       )}
     </>
+  )
+}
+
+const MOBILE_VIEW_OPTIONS: { value: AppMode; label: string }[] = [
+  { value: 'gallery', label: '画廊' },
+  { value: 'agent', label: '对话' },
+  { value: 'video', label: '视频' },
+  { value: 'workflow', label: '工作流' },
+]
+
+function MobileViewSelect({
+  mode,
+  onChange,
+}: {
+  mode: AppMode
+  onChange: (mode: AppMode) => void
+}) {
+  return (
+    <label className="relative min-w-0 flex-1">
+      <span className="sr-only">视图</span>
+      <select
+        value={mode}
+        onChange={(event) => onChange(event.target.value as AppMode)}
+        aria-label="视图"
+        className="h-[2.375rem] w-full appearance-none truncate rounded-xl border border-gray-200 bg-white px-3 pr-7 text-sm font-medium text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+      >
+        {MOBILE_VIEW_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+    </label>
+  )
+}
+
+function MobileModelSelect({
+  model,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  model: string
+  options: { id: string; label: string; provider: string }[]
+  onChange: (model: string) => void
+  ariaLabel: string
+}) {
+  const allOptions = options.some((option) => option.id === model)
+    ? options
+    : [...options, { id: model, label: model, provider: '自定义' }]
+
+  return (
+    <label className="relative min-w-0 flex-1">
+      <span className="sr-only">{ariaLabel}</span>
+      <select
+        value={model}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={ariaLabel}
+        className="h-[2.375rem] w-full appearance-none truncate rounded-xl border border-gray-200 bg-white px-3 pr-7 text-xs font-medium text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+      >
+        {allOptions.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+    </label>
   )
 }
 

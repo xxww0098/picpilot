@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import type { Components, StreamdownTranslations } from 'streamdown'
+import { logger, serializeError } from '../lib/logger'
 
 type MarkdownRendererProps = {
   content: string
@@ -70,7 +71,7 @@ function loadMarkdownRenderer() {
   streamdownPromise ??= import('streamdown')
     .then((module) => ({ type: 'modern' as const, Component: module.Streamdown }))
     .catch((error) => {
-      console.error('Streamdown failed to load:', error)
+      logger.error('system', 'Streamdown 加载失败', { error: serializeError(error) })
       return { type: 'plain' as const }
     })
 

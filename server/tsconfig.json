@@ -18,7 +18,7 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
 
-    "types": ["bun"]
+    "types": ["node"]
   },
-  "include": ["index.ts"]
+  "include": ["*.ts", "utils/**/*.ts"]
 }

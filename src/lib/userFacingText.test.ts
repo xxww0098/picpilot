@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getApiModeLabel,
+  getAppModeLabel,
   getErrorTypeLabel,
   getEventActionLabel,
   getEventTypeLabel,
@@ -14,7 +15,10 @@ describe('userFacingText', () => {
   it('translates internal status fields', () => {
     expect(getEventTypeLabel('success')).toBe('成功')
     expect(getEventActionLabel('regenerate_image')).toBe('单张重新生成')
+    expect(getEventActionLabel('agent_message')).toBe('Agent 对话')
+    expect(getAppModeLabel('video')).toBe('Video')
     expect(getErrorTypeLabel('rate_limit')).toBe('额度或限流')
+    expect(getApiModeLabel('videos')).toBe('Videos API（视频接口）')
     expect(getApiModeLabel('responses')).toBe('Responses API（对话接口）')
     expect(getProviderDisplayName('openai')).toBe('OpenAI 兼容')
     expect(getHttpStatusLabel(429)).toBe('429 额度或频率限制')

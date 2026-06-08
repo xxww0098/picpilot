@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test'
+import { expect, test } from 'vitest'
 import {
   createConcurrencyQueue,
   QueueFullError,
@@ -53,20 +53,40 @@ test('按用户返回当前 FIFO 排队位置', async () => {
   await tick()
 
   expect(q.stats()).toEqual({ inflight: 1, queued: 3 })
-  expect(q.stats('user-b')).toEqual({ inflight: 1, queued: 3, myQueued: 1, myNextPosition: 1 })
-  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 3, myQueued: 2, myNextPosition: 2 })
-  expect(q.stats('nobody')).toEqual({ inflight: 1, queued: 3, myQueued: 0, myNextPosition: null })
+  expect(q.stats('user-b')).toEqual({ inflight: 1, queued: 3, myInflight: 0, myQueued: 1, myNextPosition: 1 })
+  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 3, myInflight: 0, myQueued: 2, myNextPosition: 2 })
+  expect(q.stats('nobody')).toEqual({ inflight: 1, queued: 3, myInflight: 0, myQueued: 0, myNextPosition: null })
 
   q.release()
   await b
-  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 2, myQueued: 2, myNextPosition: 1 })
+  expect(q.stats('user-a')).toEqual({ inflight: 1, queued: 2, myInflight: 0, myQueued: 2, myNextPosition: 1 })
 
   q.release()
   await a1
   q.release()
   await a2
   q.release()
-  expect(q.stats('user-a')).toEqual({ inflight: 0, queued: 0, myQueued: 0, myNextPosition: null })
+  expect(q.stats('user-a')).toEqual({ inflight: 0, queued: 0, myInflight: 0, myQueued: 0, myNextPosition: null })
+})
+
+test('单用户软上限开启时，队首用户已超限则放行后方其他用户', async () => {
+  const q = createConcurrencyQueue({ maxConcurrent: 2, maxQueue: 10, maxWaitMs: 0, perUserSoftLimit: 1 })
+  await q.acquire(neverAbort(), undefined, { userId: 'user-a' })
+  await q.acquire(neverAbort(), undefined, { userId: 'user-b' })
+
+  const order: string[] = []
+  const a2 = q.acquire(neverAbort(), undefined, { userId: 'user-a' }).then(() => order.push('a2'))
+  const c1 = q.acquire(neverAbort(), undefined, { userId: 'user-c' }).then(() => order.push('c1'))
+  await tick()
+
+  q.release({ userId: 'user-b' })
+  await c1
+  expect(order).toEqual(['c1'])
+  expect(q.stats('user-a')).toEqual({ inflight: 2, queued: 1, myInflight: 1, myQueued: 1, myNextPosition: 1 })
+
+  q.release({ userId: 'user-c' })
+  await a2
+  expect(order).toEqual(['c1', 'a2'])
 })
 
 test('队列已满时立即抛 QueueFullError', async () => {
@@ -151,7 +171,7 @@ test('setLimits 提高 maxConcurrent 立即唤醒等待者', async () => {
   q.setLimits({ maxConcurrent: 2 }) // 腾出空位 → 队首立即放行
   await p
   expect(woken).toBe(true)
-  expect(q.limits()).toEqual({ maxConcurrent: 2, maxQueue: 10 })
+  expect(q.limits()).toEqual({ maxConcurrent: 2, maxQueue: 10, perUserSoftLimit: 0 })
   expect(q.stats()).toEqual({ inflight: 2, queued: 0 })
 })
 

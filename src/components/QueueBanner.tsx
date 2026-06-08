@@ -19,6 +19,7 @@ export default function QueueBanner() {
   const myPosition = queueStats.myNextPosition
   const etaQueueDepth = myPosition ?? queueStats.queued
   const etaMinutes = computeQueueEtaMinutes(etaQueueDepth, queueStats.maxConcurrent, avgMs)
+  const softLimitActive = queueStats.proxyUserSoftLimit > 0 && queueStats.myInflight >= queueStats.proxyUserSoftLimit
 
   return (
     <div className="mb-3 flex items-center justify-center">
@@ -31,6 +32,7 @@ export default function QueueBanner() {
           当前 {queueStats.queued} 个请求排队中
           {myPosition != null ? `，你排第 ${myPosition} 位` : ''}
           {queueStats.myQueued > 1 ? `（你的 ${queueStats.myQueued} 个请求在等）` : ''}
+          {softLimitActive ? `，团队公平调度中` : ''}
           {etaMinutes != null ? `，预计 ~${etaMinutes} 分钟` : ''}
         </span>
       </div>

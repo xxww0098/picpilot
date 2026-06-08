@@ -27,7 +27,7 @@ export default function ModelPicker({ model, options, onChange, ariaLabel, class
     <div
       role="radiogroup"
       aria-label={ariaLabel}
-      className={`inline-flex items-center gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 ${className ?? ''}`}
+      className={`inline-flex max-w-full items-center gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 ${className ?? ''}`}
     >
       {allOptions.map((option) => {
         const active = option.id === model
@@ -39,7 +39,7 @@ export default function ModelPicker({ model, options, onChange, ariaLabel, class
             aria-checked={active}
             title={`${option.label} · 由 ${option.provider} 提供`}
             onClick={() => { if (!active) onChange(option.id) }}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
+            className={`min-w-0 whitespace-nowrap px-2.5 py-1.5 rounded-lg text-[13px] sm:text-sm transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
               active
                 ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium'
                 : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'

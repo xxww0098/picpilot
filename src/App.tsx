@@ -4,6 +4,7 @@ import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { mergeImportedSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
+import { logger, serializeError } from './lib/logger'
 import { useAuth } from './contexts/AuthProvider'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
@@ -21,6 +22,7 @@ import RegisterModal from './components/RegisterModal'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
+const WorkflowCanvas = lazy(() => import('./components/workflow/WorkflowCanvas'))
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
 const LogPanel = lazy(() => import('./components/LogPanel'))
 // 遮罩编辑器较重（canvas + 图像处理），首屏不需要：首次打开时再加载，加载后保持挂载（行为同此前的常驻挂载）。
@@ -95,7 +97,7 @@ export default function App() {
           state.setSettings(mergeImportedSettings(state.settings, importedSettings))
         })
         .catch((error) => {
-          console.warn('Failed to import custom provider config URL:', error)
+          logger.warn('system', '自定义 Provider 配置 URL 导入失败', { error: serializeError(error) })
         })
     }
 
@@ -144,7 +146,17 @@ export default function App() {
   return (
     <>
       <Header />
-      {appMode === 'agent' ? (
+      {appMode === 'workflow' ? (
+        <Suspense
+          fallback={
+            <div className="flex min-h-[50vh] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+              加载工作流画布…
+            </div>
+          }
+        >
+          <WorkflowCanvas />
+        </Suspense>
+      ) : appMode === 'agent' ? (
         <Suspense
           fallback={
             <div className="flex min-h-[50vh] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
@@ -163,7 +175,7 @@ export default function App() {
           </div>
         </main>
       )}
-      <InputBar />
+      {appMode !== 'workflow' && <InputBar />}
       <DetailModal />
       <Lightbox />
       {showSettings && (

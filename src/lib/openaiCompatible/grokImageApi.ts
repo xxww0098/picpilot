@@ -96,6 +96,7 @@ export async function callGrokImagesApiSingle(opts: CallApiOptions, profile: Api
         body: JSON.stringify(body),
         signal: controller.signal,
       }, {
+        appMode: opts.telemetry?.appMode ?? 'gallery',
         provider: profile.provider,
         model: profile.model,
         codexCli: profile.codexCli,
@@ -128,6 +129,7 @@ export async function callGrokImagesApiSingle(opts: CallApiOptions, profile: Api
         body: JSON.stringify(body),
         signal: controller.signal,
       }, {
+        appMode: opts.telemetry?.appMode ?? 'gallery',
         provider: profile.provider,
         model: profile.model,
         codexCli: profile.codexCli,

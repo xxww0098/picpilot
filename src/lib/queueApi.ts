@@ -10,6 +10,10 @@ export interface QueueStats {
   maxConcurrent: number
   /** 排队长度上限 */
   maxQueue: number
+  /** 单用户在途软上限，0 表示关闭 */
+  proxyUserSoftLimit: number
+  /** 当前登录用户在途请求数 */
+  myInflight: number
   /** 当前登录用户正在排队的请求数 */
   myQueued: number
   /** 当前登录用户第一个等待请求在 FIFO 队列中的 1-based 位置；未排队为 null */

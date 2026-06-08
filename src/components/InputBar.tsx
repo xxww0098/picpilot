@@ -29,6 +29,29 @@ import Select from './Select'
 // 让出图过程中高频的 task 更新不再重渲整个 InputBar。
 const EMPTY_TASKS: TaskRecord[] = []
 
+const PROMPT_TEMPLATES = [
+  {
+    id: 'product-main',
+    label: '商品主图',
+    text: '电商商品主图，纯净背景，主体居中，真实材质，边缘清晰，高级摄影布光，保留产品结构与比例，不添加无关文字。',
+  },
+  {
+    id: 'lifestyle',
+    label: '场景图',
+    text: '商品生活方式场景图，真实使用环境，自然光线，画面干净，主体清楚可见，适合电商详情页展示。',
+  },
+  {
+    id: 'detail',
+    label: '细节卖点',
+    text: '商品细节特写，突出材质、工艺和关键卖点，背景简洁，微距摄影质感，画面适合放入详情页卖点模块。',
+  },
+  {
+    id: 'variant',
+    label: '变体延展',
+    text: '基于参考图延展同系列视觉，保持主体一致、风格一致、光线一致，只调整构图和场景，适合生成多张可比较变体。',
+  },
+] as const
+
 export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const appMode = useStore((s) => s.appMode)
@@ -66,9 +89,10 @@ export default function InputBar() {
   const imagesRef = useRef<HTMLDivElement>(null)
 
   const [isDragging, setIsDragging] = useState(false)
-  const [mobileCollapsed, setMobileCollapsed] = useState(false)
+  const [mobileCollapsed, setMobileCollapsed] = useState(true)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
+  const [promptTemplateId, setPromptTemplateId] = useState('')
   const handleRef = useRef<HTMLDivElement>(null)
   const dragTouchRef = useRef({ startY: 0, moved: false })
   const suppressHandleClickUntilRef = useRef(0)
@@ -133,7 +157,7 @@ export default function InputBar() {
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : hasSubmitApiConfig
-    ? isVideoMode ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像'
+    ? appMode === 'agent' ? '发送消息' : isVideoMode ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像'
     : '请先配置 API 与模型'
   const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 与模型配置，请在右上角设置中进行'
   const submitCurrentMode = useCallback(() => {
@@ -158,6 +182,11 @@ export default function InputBar() {
     onSubmit: submitCurrentMode,
     maskDraft,
     maskPreviewUrl,
+    promptPlaceholder: appMode === 'agent'
+      ? '输入给 Agent 的任务，可输入 @ 引用图片...'
+      : isVideoMode
+      ? '描述你想生成的视频...'
+      : undefined,
   })
   const {
     textareaRef,
@@ -212,6 +241,15 @@ export default function InputBar() {
   const selectMultiImageMode = useCallback((mode: MultiImageMode) => {
     if (useStore.getState().settings.multiImageMode !== mode) setSettings({ multiImageMode: mode })
   }, [setSettings])
+
+  const applyPromptTemplate = useCallback((templateId: string) => {
+    setPromptTemplateId(templateId)
+    const template = PROMPT_TEMPLATES.find((item) => item.id === templateId)
+    if (!template) return
+    const current = useStore.getState().prompt.trim()
+    setPrompt(current ? `${current}\n\n${template.text}` : template.text)
+    setPromptTemplateId('')
+  }, [setPrompt])
 
   useEffect(() => {
     setOutputCompressionInput(
@@ -553,7 +591,6 @@ export default function InputBar() {
     canSubmit,
     submitButtonAriaLabel,
     submitTooltipText,
-    submitIdleLabel: isVideoMode ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像',
     maskDraft,
     fileInputRef,
     cameraInputRef,
@@ -565,6 +602,13 @@ export default function InputBar() {
     onSubmit: submitCurrentMode,
     onStopAgent: stopActiveAgentResponse,
     onOpenSettings: () => setShowSettings(true),
+    submitIdleLabel: appMode === 'agent'
+      ? '发送消息'
+      : isVideoMode
+      ? '生成视频'
+      : maskDraft
+      ? '遮罩编辑'
+      : '生成图像',
   }
 
   const renderImageThumbs = () => (
@@ -685,11 +729,7 @@ export default function InputBar() {
           {inputImages.length > 0 && (
             isMobile ? (
               <>
-                <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
-                  <div className="collapse-inner">
-                    {renderImageThumbs()}
-                  </div>
-                </div>
+                {!mobileCollapsed && renderImageThumbs()}
                 {mobileCollapsed && (
                   <div className="text-xs text-gray-400 dark:text-gray-500 mb-2 ml-1">
                     {maskDraft ? `1 张遮罩主图 · ${referenceImages.length} 张参考图` : `${inputImages.length} 张参考图`}
@@ -702,6 +742,18 @@ export default function InputBar() {
           )}
 
           {/* 输入框 */}
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <select
+              value={promptTemplateId}
+              onChange={(e) => applyPromptTemplate(e.target.value)}
+              className="rounded-lg border border-gray-200/60 bg-white/60 px-2.5 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+            >
+              <option value="">提示词模板</option>
+              {PROMPT_TEMPLATES.map((template) => (
+                <option key={template.id} value={template.id}>{template.label}</option>
+              ))}
+            </select>
+          </div>
           <InputBarPromptEditor prompt={prompt} {...promptEditor} />
 
           {/* 参数 + 按钮 */}
@@ -715,12 +767,12 @@ export default function InputBar() {
 
             {/* 移动端布局 */}
             <div className="sm:hidden flex flex-col gap-2">
-              <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
-                <div className="collapse-inner">
+              {!mobileCollapsed && (
+                <>
                   {isVideoMode ? renderVideoParams('grid-cols-2') : renderParams('grid-cols-2')}
                   <div className="h-2" />
-                </div>
-              </div>
+                </>
+              )}
 
               <InputBarActions variant="mobile" {...actionProps} />
             </div>
@@ -730,22 +782,6 @@ export default function InputBar() {
             fileInputRef={fileInputRef}
             cameraInputRef={cameraInputRef}
             onFileUpload={handleFileUpload}
-          />
-          <input
-            ref={replaceFileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={handleFileUpload}
           />
           <input
             ref={replaceFileInputRef}

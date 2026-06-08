@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite'
-import { configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
 import { normalizeDevProxyConfig } from './src/lib/devProxy'
@@ -52,10 +51,6 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [react()],
     base: './',
-    // server/ 是独立的 Bun 子项目，用 `bun test` 跑（其测试 import 'bun:test'），不纳入 vitest。
-    test: {
-      exclude: [...configDefaults.exclude, 'server/**'],
-    },
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __DEV_PROXY_CONFIG__: JSON.stringify(devProxyConfig),

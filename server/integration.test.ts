@@ -1,7 +1,7 @@
 // 进程内集成测试：import 本模块拿到 { app, db }，用 app.request 驱动 HTTP 层（不占端口）。
 // 必须在 import ./index.ts / ./config.ts 之前设置环境变量——config.ts 在导入时读取并固化它们。
 // 放在 server/ 根目录（非 utils/），不会被 Dockerfile 的 COPY 打进生产镜像。
-import { test, expect, afterAll } from 'bun:test'
+import { afterAll, expect, test } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
@@ -257,6 +257,7 @@ test('请求事件：记录单张重新生成操作上下文', async () => {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       event_type: 'success',
+      app_mode: 'agent',
       provider: 'openai',
       api_mode: 'images',
       model: 'gpt-image-1',
@@ -270,20 +271,21 @@ test('请求事件：记录单张重新生成操作上下文', async () => {
 
   expect(res.status).toBe(200)
   const row = db.query(`
-    SELECT action_type, task_id, image_index
+    SELECT app_mode, action_type, task_id, image_index
     FROM request_events
     WHERE user_id = ?
     ORDER BY id DESC
     LIMIT 1
-  `).get('u-event-regenerate') as { action_type: string; task_id: string; image_index: number } | null
+  `).get('u-event-regenerate') as { app_mode: string; action_type: string; task_id: string; image_index: number } | null
   expect(row).toEqual({
+    app_mode: 'agent',
     action_type: 'regenerate_image',
     task_id: 'task-regenerate-1',
     image_index: 2,
   })
 })
 
-test('团队设置：管理员可设置画廊失败自动重试次数，并随用户资料下发', async () => {
+test('团队设置：管理员可设置运行参数，并随用户资料下发', async () => {
   seedUser('u-admin-team-settings', 'adminteam')
   db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-team-settings')
   seedUser('u-team-member', 'teamuser')
@@ -293,10 +295,24 @@ test('团队设置：管理员可设置画廊失败自动重试次数，并随�
   const patch = await app.request('/api/admin/team-settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ galleryAutoRetryCount: 3 }),
+    body: JSON.stringify({
+      galleryAutoRetryCount: 3,
+      proxyUserSoftLimit: 2,
+      streamFallbackEnabled: false,
+      requestTimeoutSeconds: 1200,
+    }),
   })
   expect(patch.status).toBe(200)
-  expect(((await patch.json()) as { galleryAutoRetryCount: number }).galleryAutoRetryCount).toBe(3)
+  const patchBody = (await patch.json()) as {
+    galleryAutoRetryCount: number
+    proxyUserSoftLimit: number
+    streamFallbackEnabled: boolean
+    requestTimeoutSeconds: number
+  }
+  expect(patchBody.galleryAutoRetryCount).toBe(3)
+  expect(patchBody.proxyUserSoftLimit).toBe(2)
+  expect(patchBody.streamFallbackEnabled).toBe(false)
+  expect(patchBody.requestTimeoutSeconds).toBe(1200)
 
   const invalid = await app.request('/api/admin/team-settings', {
     method: 'PATCH',
@@ -307,5 +323,61 @@ test('团队设置：管理员可设置画廊失败自动重试次数，并随�
 
   const me = await authGet('/api/auth/me', memberToken)
   expect(me.status).toBe(200)
-  expect(((await me.json()) as { galleryAutoRetryCount: number }).galleryAutoRetryCount).toBe(3)
+  const meBody = (await me.json()) as {
+    galleryAutoRetryCount: number
+    proxyUserSoftLimit: number
+    streamFallbackEnabled: boolean
+    requestTimeoutSeconds: number
+  }
+  expect(meBody.galleryAutoRetryCount).toBe(3)
+  expect(meBody.proxyUserSoftLimit).toBe(2)
+  expect(meBody.streamFallbackEnabled).toBe(false)
+  expect(meBody.requestTimeoutSeconds).toBe(1200)
+})
+
+test('失败聚合：将流式空响应归一为 stream_empty', async () => {
+  seedUser('u-admin-failure-summary', 'adminfail')
+  db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-failure-summary')
+  seedUser('u-failure-summary', 'failuser')
+  const adminToken = await tokenFor('u-admin-failure-summary', 'adminfail', true)
+  const userToken = await tokenFor('u-failure-summary', 'failuser')
+
+  const event = await app.request('/api/telemetry/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      event_type: 'failure',
+      app_mode: 'gallery',
+      provider: 'openai',
+      api_mode: 'images',
+      model: 'gpt-image-2',
+      error_type: 'server_error',
+      error_message: 'empty_stream: upstream stream closed before first payload',
+      http_status: 500,
+    }),
+  })
+  expect(event.status).toBe(200)
+
+  const res = await app.request('/api/admin/failure-summary', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  })
+  expect(res.status).toBe(200)
+  const body = (await res.json()) as { reasons: Array<{ reason: string; count: number }> }
+  expect(body.reasons.some((item) => item.reason === 'stream_empty' && item.count >= 1)).toBe(true)
+})
+
+test('诊断包：导出脱敏运行摘要，不包含 prompt 字段', async () => {
+  seedUser('u-admin-diagnostics', 'admindiag')
+  db.query('UPDATE users SET is_admin = 1 WHERE id = ?').run('u-admin-diagnostics')
+  const adminToken = await tokenFor('u-admin-diagnostics', 'admindiag', true)
+
+  const res = await app.request('/api/admin/diagnostics/export', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  })
+  expect(res.status).toBe(200)
+  expect(res.headers.get('Content-Type')).toContain('application/json')
+  const text = await res.text()
+  expect(text).toContain('"failureSummary"')
+  expect(text).toContain('"diagnosticsExcludesPrompt": true')
+  expect(text).not.toContain('"prompt"')
 })
