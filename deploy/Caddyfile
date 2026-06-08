@@ -34,7 +34,7 @@
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 
-	@api path /api/auth/* /api/admin/* /api/telemetry/* /api/gallery* /api/notifications* /api/avatars/*
+	@api path /api/*
 	handle @api {
 		reverse_proxy auth:3001 {
 			header_up Host {host}
