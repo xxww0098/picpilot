@@ -1,4 +1,4 @@
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type AgentPlatformAssetPlanItem, type AgentPlatformBrief, type AgentPlatformId, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, explicitUpstreamModeHeader, getActiveApiProfile, normalizeSettings } from './apiProfiles'
 import { chatModelSupportsHostedImageTool, getAgentImageEngine } from './chatModels'
 import { callImageApi } from './api'
@@ -8,6 +8,7 @@ import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } 
 import { logger, serializeError } from './logger'
 import { classifyError, reportEvent } from './telemetry'
 import { applyTeamRuntimeSettings } from './runtimeTeamSettings'
+import { getAgentPlatformAssetSlot, getAgentPlatformDefinition } from './platforms/registry'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -29,6 +30,13 @@ export interface AgentApiResult {
   images: AgentApiResultImage[]
   outputItems: ResponsesApiResponse['output']
   rawResponsePayload?: string
+}
+
+export interface AgentApiPlatformContext {
+  platformId?: AgentPlatformId
+  brief?: AgentPlatformBrief
+  assetPlan?: AgentPlatformAssetPlanItem[]
+  targetAssetSlotId?: string | null
 }
 
 const AGENT_IMAGE_INSTRUCTIONS = [
@@ -57,10 +65,22 @@ const AGENT_IMAGE_INSTRUCTIONS = [
   'Resolve user mentions ("the first image") to the matching id. Only use existing ids in image_generation prompts and generate_image_batch prompts.',
 ].join('\n')
 
-function createAgentInstructions(settings: AppSettings, hostedImageTool: boolean) {
+function createAgentInstructions(settings: AppSettings, hostedImageTool: boolean, platformContext?: AgentApiPlatformContext) {
   const maxToolRounds = Number.isFinite(settings.agentMaxToolRounds)
     ? Math.max(1, Math.trunc(settings.agentMaxToolRounds))
     : DEFAULT_AGENT_MAX_TOOL_ROUNDS
+  const platform = getAgentPlatformDefinition(platformContext?.platformId)
+  const targetAssetSlotId = getAgentPlatformAssetSlot(platform?.id, platformContext?.targetAssetSlotId)?.id ?? null
+  const platformInstructions = platform?.enabled
+    ? [
+        '',
+        platform.buildInstructions({
+          brief: platformContext?.brief,
+          assetPlan: platformContext?.assetPlan,
+          targetAssetSlotId,
+        }),
+      ]
+    : []
   // 无托管图像工具的对话模型（grok）：所有出图都必须走 generate_image_batch，连单图也是。
   const noHostedToolDirective = hostedImageTool ? [] : [
     '',
@@ -70,6 +90,7 @@ function createAgentInstructions(settings: AppSettings, hostedImageTool: boolean
   ]
   return [
     AGENT_IMAGE_INSTRUCTIONS,
+    ...platformInstructions,
     ...noHostedToolDirective,
     '',
     '## Tool policy',
@@ -645,6 +666,7 @@ export async function callAgentResponsesApi(opts: {
   onImageToolStarted?: (event: { toolCallId: string; outputIndex?: number }) => void | Promise<void>
   onImagePartialImage?: (event: { toolCallId: string; image: string; partialImageIndex?: number; outputIndex?: number }) => void | Promise<void>
   onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
+  platformContext?: AgentApiPlatformContext
 }): Promise<AgentApiResult> {
   const settings = applyTeamRuntimeSettings(opts.settings)
   const profile = { ...opts.profile, timeout: getActiveApiProfile(settings).timeout }
@@ -663,7 +685,7 @@ export async function callAgentResponsesApi(opts: {
   try {
     const body: Record<string, unknown> = {
       model,
-      instructions: createAgentInstructions(settings, chatModelSupportsHostedImageTool(model)),
+      instructions: createAgentInstructions(settings, chatModelSupportsHostedImageTool(model), opts.platformContext),
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
     }

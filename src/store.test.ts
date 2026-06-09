@@ -95,7 +95,7 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { cancelTask, cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
@@ -584,6 +584,153 @@ describe('agent conversation creation', () => {
     expect(state.activeAgentConversationId).toBe(id)
     now.mockRestore()
   })
+
+  it('creates a platform conversation when a platform id is provided', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(4_000)
+    useStore.setState({ agentConversations: [], activeAgentConversationId: null })
+
+    const id = useStore.getState().createAgentConversation('ozon')
+
+    const state = useStore.getState()
+    expect(state.activeAgentConversationId).toBe(id)
+    expect(state.agentConversations).toHaveLength(1)
+    expect(state.agentConversations[0]).toMatchObject({
+      id,
+      platformId: 'ozon',
+      assetPlan: [
+        { slotId: 'ozon_main', status: 'planned', taskIds: [] },
+        { slotId: 'ozon_gallery', status: 'planned', taskIds: [] },
+        { slotId: 'ozon_infographic', status: 'planned', taskIds: [] },
+        { slotId: 'ozon_rich_content', status: 'planned', taskIds: [] },
+      ],
+    })
+    now.mockRestore()
+  })
+
+  it('does not reuse an empty conversation from a different platform', () => {
+    const existing = agentConversation({ id: 'empty-ozon', platformId: 'ozon', createdAt: 1_000, updatedAt: 1_000 })
+    useStore.setState({ agentConversations: [existing], activeAgentConversationId: existing.id })
+
+    const id = useStore.getState().createAgentConversation('independent_site')
+
+    const state = useStore.getState()
+    expect(id).not.toBe(existing.id)
+    expect(state.agentConversations).toHaveLength(2)
+    expect(state.agentConversations.find((conversation) => conversation.id === id)?.platformId).toBe('independent_site')
+  })
+})
+
+describe('agent platform task status', () => {
+  it('marks an agent platform task as approved and rejects siblings in the same slot', () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-b', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-c', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_gallery', assetStatus: 'candidate' }),
+      ],
+    })
+
+    useStore.getState().setAgentTaskAssetStatus('task-b', 'approved')
+
+    expect(useStore.getState().tasks.map((item) => [item.id, item.assetStatus])).toEqual([
+      ['task-a', 'rejected'],
+      ['task-b', 'approved'],
+      ['task-c', 'candidate'],
+    ])
+  })
+
+  it('rejects a previously approved sibling when approving another task in the same slot', () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'approved' }),
+        task({ id: 'task-b', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-c', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_gallery', assetStatus: 'approved' }),
+      ],
+    })
+
+    useStore.getState().setAgentTaskAssetStatus('task-b', 'approved')
+
+    expect(useStore.getState().tasks.map((item) => [item.id, item.assetStatus])).toEqual([
+      ['task-a', 'rejected'],
+      ['task-b', 'approved'],
+      ['task-c', 'approved'],
+    ])
+  })
+
+  it('persists approved target and rejected siblings to task storage', async () => {
+    await clearTasks()
+    const storedTasks = [
+      task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'approved' }),
+      task({ id: 'task-b', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+      task({ id: 'task-c', sourceMode: 'agent', agentConversationId: 'conversation-b', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'approved' }),
+    ]
+    for (const item of storedTasks) await putDbTask(item)
+    useStore.setState({ tasks: storedTasks })
+
+    useStore.getState().setAgentTaskAssetStatus('task-b', 'approved')
+
+    await vi.waitFor(async () => {
+      const persisted = await getAllTasks()
+      expect(persisted.map((item) => [item.id, item.assetStatus])).toEqual([
+        ['task-a', 'rejected'],
+        ['task-b', 'approved'],
+        ['task-c', 'approved'],
+      ])
+    })
+  })
+
+  it('does not reject same-platform same-slot candidates from another conversation', () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-b', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-c', sourceMode: 'agent', agentConversationId: 'conversation-b', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+      ],
+    })
+
+    useStore.getState().setAgentTaskAssetStatus('task-b', 'approved')
+
+    expect(useStore.getState().tasks.map((item) => [item.id, item.assetStatus])).toEqual([
+      ['task-a', 'rejected'],
+      ['task-b', 'approved'],
+      ['task-c', 'candidate'],
+    ])
+  })
+
+  it('does not reject siblings when setting a non-approved status', () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+        task({ id: 'task-b', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' }),
+      ],
+    })
+
+    useStore.getState().setAgentTaskAssetStatus('task-b', 'rejected')
+
+    expect(useStore.getState().tasks.map((item) => [item.id, item.assetStatus])).toEqual([
+      ['task-a', 'candidate'],
+      ['task-b', 'rejected'],
+    ])
+  })
+
+  it('does nothing when the task id is missing', () => {
+    const existing = task({ id: 'task-a', sourceMode: 'agent', agentConversationId: 'conversation-a', platformId: 'ozon', platformAssetSlotId: 'ozon_main', assetStatus: 'candidate' })
+    useStore.setState({ tasks: [existing] })
+
+    useStore.getState().setAgentTaskAssetStatus('missing-task', 'approved')
+
+    expect(useStore.getState().tasks).toEqual([existing])
+  })
+
+  it('does nothing for a non-platform task id', () => {
+    const existing = task({ id: 'task-a', sourceMode: 'gallery' })
+    useStore.setState({ tasks: [existing] })
+
+    useStore.getState().setAgentTaskAssetStatus('task-a', 'approved')
+
+    expect(useStore.getState().tasks).toEqual([existing])
+    expect(useStore.getState().tasks[0].assetStatus).toBeUndefined()
+  })
 })
 
 describe('agent round deletion', () => {
@@ -995,7 +1142,27 @@ describe('agent draft lifecycle', () => {
     expect(state.agentEditingRoundId).toBeNull()
   })
 
+  it('saves and restores the agent target asset slot with the active draft', () => {
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+    useStore.getState().setActiveAgentConversationId('conversation-b')
+
+    let state = useStore.getState()
+    expect(state.agentTargetAssetSlotId).toBeNull()
+    expect(state.agentInputDrafts['conversation-a']).toMatchObject({
+      prompt: draftState.prompt,
+      agentTargetAssetSlotId: 'ozon_main',
+    })
+
+    useStore.getState().setActiveAgentConversationId('conversation-a')
+
+    state = useStore.getState()
+    expect(state.activeAgentConversationId).toBe('conversation-a')
+    expect(state.prompt).toBe(draftState.prompt)
+    expect(state.agentTargetAssetSlotId).toBe('ozon_main')
+  })
+
   it('keeps the current draft when selecting the already active conversation', () => {
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
     useStore.getState().setActiveAgentConversationId('conversation-a')
 
     const state = useStore.getState()
@@ -1003,6 +1170,7 @@ describe('agent draft lifecycle', () => {
     expect(state.inputImages).toEqual(draftState.inputImages)
     expect(state.maskDraft).toEqual(draftState.maskDraft)
     expect(state.maskEditorImageId).toBe(imageA.id)
+    expect(state.agentTargetAssetSlotId).toBe('ozon_main')
   })
 
   it('persists agent drafts separately from the gallery input draft', () => {
@@ -1038,6 +1206,301 @@ describe('agent draft lifecycle', () => {
     })
   })
 
+})
+
+describe('agent platform submit metadata', () => {
+  beforeEach(() => {
+    vi.mocked(callAgentResponsesApi).mockClear()
+    vi.mocked(callAgentResponsesApi).mockImplementation(() => new Promise(() => {}))
+    vi.mocked(callBatchImageSingle).mockClear()
+    vi.mocked(callBatchImageSingle).mockImplementation(async (opts: { batchItemId: string; prompt: string }) => ({
+      batchItemId: opts.batchItemId,
+      image: { dataUrl: 'data:image/png;base64,batch-output', revisedPrompt: opts.prompt },
+      error: null,
+    }))
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      prompt: '为 Ozon 生成主图',
+      inputImages: [],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      agentConversations: [agentConversation({
+        id: 'conversation-platform',
+        platformId: 'ozon',
+        assetPlan: [{ slotId: 'ozon_main', status: 'planned', taskIds: [] }],
+      })],
+      activeAgentConversationId: 'conversation-platform',
+      agentEditingRoundId: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('stores platform step and target slot on submitted rounds', async () => {
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+    await vi.waitFor(() => {
+      expect(callAgentResponsesApi).toHaveBeenCalledWith(expect.objectContaining({
+        platformContext: expect.objectContaining({
+          platformId: 'ozon',
+          targetAssetSlotId: 'ozon_main',
+        }),
+      }))
+    })
+
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-platform')
+    expect(conversation?.rounds[0]).toMatchObject({
+      stepType: 'generate',
+      targetAssetSlotId: 'ozon_main',
+    })
+  })
+
+  it('adds generated platform task ids to the targeted asset plan slot', async () => {
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '',
+      images: [{
+        toolCallId: 'tool-call-ozon-main',
+        dataUrl: 'data:image/png;base64,generated-ozon-main',
+        revisedPrompt: 'Ozon 主图',
+      }],
+      outputItems: [],
+      responseId: 'response-ozon-main',
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-platform')
+      const slot = conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')
+      expect(slot?.taskIds).toHaveLength(1)
+      expect(slot?.status).toBe('ready')
+    })
+  })
+
+  it('inherits the platform target slot when editing a platform-targeted round', async () => {
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '',
+      images: [{
+        toolCallId: 'tool-call-edited-ozon-main',
+        dataUrl: 'data:image/png;base64,edited-ozon-main',
+        revisedPrompt: '编辑后的 Ozon 主图',
+      }],
+      outputItems: [],
+      responseId: 'response-edited-ozon-main',
+    })
+    useStore.setState({
+      prompt: '编辑 Ozon 主图',
+      agentTargetAssetSlotId: null,
+      agentEditingRoundId: 'round-original',
+      agentConversations: [agentConversation({
+        id: 'conversation-platform',
+        platformId: 'ozon',
+        activeRoundId: 'round-original',
+        assetPlan: [{ slotId: 'ozon_main', status: 'ready', taskIds: ['task-original'] }],
+        rounds: [{
+          id: 'round-original',
+          index: 1,
+          parentRoundId: null,
+          userMessageId: 'user-original',
+          assistantMessageId: 'assistant-original',
+          prompt: '原始 Ozon 主图',
+          inputImageIds: [],
+          outputTaskIds: ['task-original'],
+          stepType: 'generate',
+          targetAssetSlotId: 'ozon_main',
+          status: 'done',
+          error: null,
+          createdAt: 1,
+          finishedAt: 2,
+        }],
+        messages: [
+          { id: 'user-original', role: 'user', content: '原始 Ozon 主图', roundId: 'round-original', createdAt: 1 },
+          { id: 'assistant-original', role: 'assistant', content: '已完成。', roundId: 'round-original', outputTaskIds: ['task-original'], createdAt: 2 },
+        ],
+      })],
+    })
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const state = useStore.getState()
+      const conversation = state.agentConversations.find((item) => item.id === 'conversation-platform')
+      const editedRound = conversation?.rounds.find((round) => round.id !== 'round-original')
+      expect(editedRound).toMatchObject({
+        stepType: 'generate',
+        targetAssetSlotId: 'ozon_main',
+      })
+      const editedTask = state.tasks.find((task) => task.agentRoundId === editedRound?.id)
+      expect(editedTask).toMatchObject({
+        platformId: 'ozon',
+        platformAssetSlotId: 'ozon_main',
+        assetStatus: 'candidate',
+      })
+    })
+  })
+
+  it('marks a targeted asset plan slot needs_revision when attached batch tasks have no successful output', async () => {
+    vi.mocked(callAgentResponsesApi)
+      .mockResolvedValueOnce({
+        text: '',
+        images: [],
+        outputItems: [{
+          type: 'function_call',
+          name: 'generate_image_batch',
+          call_id: 'batch-call-ozon-main',
+          arguments: JSON.stringify({
+            images: [{ id: 'ozon-main-failed', prompt: '生成 Ozon 主图' }],
+          }),
+        }],
+        responseId: 'response-batch-1',
+      })
+      .mockResolvedValueOnce({
+        text: '没有成功出图',
+        images: [],
+        outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '没有成功出图' }] }],
+        responseId: 'response-batch-2',
+      })
+    vi.mocked(callBatchImageSingle).mockResolvedValueOnce({
+      batchItemId: 'ozon-main-failed',
+      image: null,
+      error: '上游未返回图片',
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const state = useStore.getState()
+      const conversation = state.agentConversations.find((item) => item.id === 'conversation-platform')
+      const slot = conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')
+      expect(conversation?.rounds[0]?.status).toBe('done')
+      expect(slot?.taskIds).toHaveLength(1)
+      expect(slot?.status).toBe('needs_revision')
+      expect(state.tasks.find((item) => item.id === slot?.taskIds[0])).toMatchObject({
+        status: 'error',
+        outputImages: [],
+      })
+    })
+  })
+
+  it('marks a started hosted image task error when the round returns no completed image', async () => {
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(async (opts: Parameters<typeof callAgentResponsesApi>[0]) => {
+      await opts.onImageToolStarted?.({ toolCallId: 'tool-call-started-no-image' })
+      return {
+        text: '没有返回图片',
+        images: [],
+        outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '没有返回图片' }] }],
+        responseId: 'response-no-image',
+      }
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const state = useStore.getState()
+      const conversation = state.agentConversations.find((item) => item.id === 'conversation-platform')
+      const slot = conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')
+      expect(conversation?.rounds[0]?.status).toBe('done')
+      expect(slot?.taskIds).toHaveLength(1)
+      expect(slot?.status).toBe('needs_revision')
+      expect(state.tasks.find((item) => item.id === slot?.taskIds[0])).toMatchObject({
+        status: 'error',
+        error: '未返回图片',
+        outputImages: [],
+      })
+    })
+  })
+
+  it('marks a targeted asset plan slot needs_revision when an attached task errors with the round', async () => {
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(async (opts: Parameters<typeof callAgentResponsesApi>[0]) => {
+      await opts.onImageToolStarted?.({ toolCallId: 'tool-call-error' })
+      throw new Error('upstream broke')
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const state = useStore.getState()
+      expect(state.showToast).toHaveBeenCalledWith(expect.stringContaining('Agent 请求失败'), 'error')
+      const conversation = state.agentConversations.find((item) => item.id === 'conversation-platform')
+      const slot = conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')
+      expect(conversation?.rounds[0]?.status).toBe('error')
+      expect(slot?.taskIds).toHaveLength(1)
+      expect(slot?.status).toBe('needs_revision')
+    })
+  })
+
+  it('does not mutate the asset plan when a targeted round is deleted before task attachment', async () => {
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(async (opts: Parameters<typeof callAgentResponsesApi>[0]) => {
+      const current = useStore.getState()
+      useStore.setState({
+        agentConversations: current.agentConversations.map((conversation) =>
+          conversation.id === 'conversation-platform'
+            ? { ...conversation, activeRoundId: null, rounds: [], messages: [] }
+            : conversation,
+        ),
+      })
+      await opts.onImageToolStarted?.({ toolCallId: 'tool-call-deleted-round' })
+      return {
+        text: '',
+        images: [{
+          dataUrl: 'data:image/png;base64,direct-after-deletion',
+          revisedPrompt: 'deleted direct image',
+        }],
+        outputItems: [],
+        responseId: 'response-deleted-round',
+      }
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().showToast).toHaveBeenCalledWith('Agent 已回复', 'success')
+    })
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-platform')
+    expect(conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')).toEqual({
+      slotId: 'ozon_main',
+      status: 'planned',
+      taskIds: [],
+    })
+    expect(conversation?.rounds).toEqual([])
+    expect(conversation?.messages).toEqual([])
+    expect(useStore.getState().tasks.filter((item) => item.agentConversationId === 'conversation-platform')).toEqual([])
+  })
+
+  it('does not append an error assistant message when a targeted round is deleted before failure', async () => {
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(async () => {
+      const current = useStore.getState()
+      useStore.setState({
+        agentConversations: current.agentConversations.map((conversation) =>
+          conversation.id === 'conversation-platform'
+            ? { ...conversation, activeRoundId: null, rounds: [], messages: [] }
+            : conversation,
+        ),
+      })
+      throw new Error('upstream broke after deletion')
+    })
+    useStore.getState().setAgentTargetAssetSlotId('ozon_main')
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('Agent 请求失败'), 'error')
+    })
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-platform')
+    expect(conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')).toEqual({
+      slotId: 'ozon_main',
+      status: 'planned',
+      taskIds: [],
+    })
+    expect(conversation?.rounds).toEqual([])
+    expect(conversation?.messages).toEqual([])
+  })
 })
 
 describe('agent context for removed outputs', () => {
@@ -1411,6 +1874,41 @@ describe('agent context for removed outputs', () => {
     expect(serializedConversations).toContain('function_call_output')
     expect(serializedConversations).not.toContain('batch-deleted-base64')
   })
+
+  it('recomputes platform asset plan status when deleting the only completed slot task', async () => {
+    const deletedTask = task({
+      id: 'task-platform-ready',
+      outputImages: ['image-platform-ready'],
+      sourceMode: 'agent',
+      agentConversationId: 'conversation-a',
+      agentRoundId: 'round-a',
+      platformId: 'ozon',
+      platformAssetSlotId: 'ozon_main',
+      assetStatus: 'approved',
+      status: 'done',
+    })
+    useStore.setState((state) => ({
+      tasks: [deletedTask],
+      agentConversations: state.agentConversations.map((conversation) => ({
+        ...conversation,
+        platformId: 'ozon',
+        assetPlan: [{ slotId: 'ozon_main', status: 'ready', taskIds: ['task-platform-ready'], approvedTaskId: 'task-platform-ready' }],
+        rounds: conversation.rounds.map((round) => round.id === 'round-a'
+          ? { ...round, outputTaskIds: ['task-platform-ready'], targetAssetSlotId: 'ozon_main', stepType: 'generate' }
+          : round,
+        ),
+      })),
+    }))
+
+    await removeTask(deletedTask)
+
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-a')
+    expect(conversation?.assetPlan?.find((item) => item.slotId === 'ozon_main')).toEqual({
+      slotId: 'ozon_main',
+      status: 'planned',
+      taskIds: [],
+    })
+  })
 })
 
 describe('agent batch reference resolution', () => {
@@ -1623,6 +2121,7 @@ describe('agent assistant regeneration', () => {
       showToast: vi.fn(),
       setConfirmDialog: vi.fn(),
     })
+    vi.mocked(callAgentResponsesApi).mockClear()
   })
 
   it('creates a sibling round from the assistant message regardless of retry setting', async () => {
@@ -1691,6 +2190,59 @@ describe('agent assistant regeneration', () => {
     expect(conversation.messages.find((message) => message.id === 'assistant-a')).toMatchObject({
       content: '',
       outputTaskIds: [],
+    })
+  })
+
+  it('copies platform metadata when regenerating a completed platform-targeted round', async () => {
+    useStore.setState({
+      agentConversations: [
+        agentConversation({
+          id: 'conversation-platform',
+          platformId: 'ozon',
+          activeRoundId: 'round-platform',
+          rounds: [{
+            id: 'round-platform',
+            index: 1,
+            parentRoundId: null,
+            userMessageId: 'user-platform',
+            assistantMessageId: 'assistant-platform',
+            prompt: '为 Ozon 生成主图',
+            inputImageIds: [],
+            outputTaskIds: [],
+            stepType: 'generate',
+            targetAssetSlotId: 'ozon_main',
+            platformNotes: ['keep-note'],
+            status: 'done',
+            error: null,
+            createdAt: 1,
+            finishedAt: 2,
+          }],
+          messages: [
+            { id: 'user-platform', role: 'user', content: '为 Ozon 生成主图', roundId: 'round-platform', inputImageIds: [], createdAt: 1 },
+            { id: 'assistant-platform', role: 'assistant', content: '已完成。', roundId: 'round-platform', createdAt: 2 },
+          ],
+        }),
+      ],
+      activeAgentConversationId: 'conversation-platform',
+    })
+
+    await regenerateAgentAssistantMessage('conversation-platform', 'round-platform')
+
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-platform')
+    const newRound = conversation?.rounds.find((round) => round.id !== 'round-platform')
+    expect(newRound).toMatchObject({
+      stepType: 'generate',
+      targetAssetSlotId: 'ozon_main',
+      platformNotes: ['keep-note'],
+    })
+
+    await vi.waitFor(() => {
+      expect(callAgentResponsesApi).toHaveBeenCalledWith(expect.objectContaining({
+        platformContext: expect.objectContaining({
+          platformId: 'ozon',
+          targetAssetSlotId: 'ozon_main',
+        }),
+      }))
     })
   })
 })

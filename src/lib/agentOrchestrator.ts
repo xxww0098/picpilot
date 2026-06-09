@@ -32,6 +32,7 @@ import {
   getActiveAgentRounds,
   getAgentRoundPath,
 } from './agentConversationTree'
+import { addTaskToAgentAssetPlan, buildAgentPlatformContextItem, finalizeAgentAssetPlanSlotStatus, getValidAgentTargetAssetSlotId, reconcileAgentAssetPlanWithTasks, withAgentPlatformTaskMetadata } from './agentPlatformContext'
 
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const agentRoundControllers = new Map<string, AbortController>()
@@ -51,6 +52,8 @@ type AppStateSlice = {
   clearMaskDraft: () => void
   setAgentEditingRoundId: (id: string | null) => void
   agentEditingRoundId: string | null
+  agentTargetAssetSlotId: string | null
+  setAgentTargetAssetSlotId: (id: string | null) => void
   agentConversations: AgentConversation[]
   activeAgentConversationId: string | null
   createAgentConversation: () => string
@@ -185,8 +188,10 @@ function markAgentRoundStopped(conversationId: string, roundId: string) {
     stoppedRound = true
     const existingAssistantMessage = current.messages.find((message) => message.roundId === roundId && message.role === 'assistant')
     const assistantMessageId = existingAssistantMessage?.id ?? genId()
+    const assetPlan = finalizeAgentAssetPlanSlotStatus(current.assetPlan, round.targetAssetSlotId, getState().tasks)
     return {
       ...current,
+      ...(assetPlan ? { assetPlan } : {}),
       updatedAt: now,
       rounds: current.rounds.map((item) =>
         item.id === roundId
@@ -452,20 +457,28 @@ function scrubResponseOutputForDeletedAgentTasks(round: AgentRound, output: Resp
   })
 }
 
-function scrubAgentConversationsForDeletedTasks(conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
+function scrubAgentConversationsForDeletedTasks(conversations: AgentConversation[], deletedTasks: TaskRecord[], remainingTasks: TaskRecord[]) {
   if (deletedTasks.length === 0) return conversations
 
-  return conversations.map((conversation) => ({
-    ...conversation,
-    rounds: conversation.rounds.map((round) => {
+  return conversations.map((conversation) => {
+    const rounds = conversation.rounds.map((round) => {
       const roundDeletedTasks = deletedTasks.filter((task) => round.outputTaskIds.includes(task.id))
       if (roundDeletedTasks.length === 0 || !round.responseOutput?.length) return round
       return {
         ...round,
         responseOutput: scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks),
       }
-    }),
-  }))
+    })
+    const assetPlan = reconcileAgentAssetPlanWithTasks(
+      conversation.assetPlan,
+      remainingTasks.filter((task) => task.agentConversationId === conversation.id),
+    )
+    return {
+      ...conversation,
+      ...(assetPlan ? { assetPlan } : {}),
+      rounds,
+    }
+  })
 }
 
 function scrubTaskRawResponsePayloadForDeletedTasks(task: TaskRecord, conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
@@ -493,7 +506,7 @@ function scrubTaskRawResponsePayloadForDeletedTasks(task: TaskRecord, conversati
 export async function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[], remainingTasks: TaskRecord[]) {
   if (deletedTasks.length === 0) return remainingTasks
 
-  const conversations = scrubAgentConversationsForDeletedTasks(getState().agentConversations, deletedTasks)
+  const conversations = scrubAgentConversationsForDeletedTasks(getState().agentConversations, deletedTasks, remainingTasks)
   const scrubbedTasks = remainingTasks.map((task) => scrubTaskRawResponsePayloadForDeletedTasks(task, conversations, deletedTasks))
   setState({ agentConversations: conversations })
 
@@ -596,6 +609,10 @@ async function buildAgentApiInput(conversation: AgentConversation, currentRound:
     const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
     if (!userMessage) continue
 
+    if (round.id === currentRound.id) {
+      const platformContextItem = buildAgentPlatformContextItem(conversation, currentRound, tasks)
+      if (platformContextItem) input.push(platformContextItem)
+    }
     input.push(await createAgentUserInputItem(conversation, round, userMessage, tasks))
     if (round.id === currentRound.id) continue
 
@@ -678,6 +695,11 @@ export async function submitAgentMessage() {
   }
 
   const inputImageIds = uniqueIds(orderedInputImages.map((image) => image.id))
+  const editingRound = state.agentEditingRoundId
+    ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) ?? null
+    : null
+  const targetAssetSlotId = getValidAgentTargetAssetSlotId(conversation.platformId, state.agentTargetAssetSlotId)
+    ?? getValidAgentTargetAssetSlotId(conversation.platformId, editingRound?.targetAssetSlotId)
 
   for (const image of orderedInputImages) {
     await storeImage(image.dataUrl)
@@ -685,9 +707,6 @@ export async function submitAgentMessage() {
 
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   const now = Date.now()
-  const editingRound = state.agentEditingRoundId
-    ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) ?? null
-    : null
   const editingRoundAssistantMessage = editingRound?.assistantMessageId
     ? conversation.messages.find((message) => message.id === editingRound.assistantMessageId) ?? null
     : conversation.messages.find((message) => message.roundId === editingRound?.id && message.role === 'assistant') ?? null
@@ -725,6 +744,8 @@ export async function submitAgentMessage() {
     maskTargetImageId,
     maskImageId,
     outputTaskIds: [],
+    stepType: targetAssetSlotId ? 'generate' : undefined,
+    targetAssetSlotId,
     status: 'running',
     error: null,
     createdAt: now,
@@ -783,6 +804,7 @@ export async function submitAgentMessage() {
   state.clearInputImages()
   state.clearMaskDraft()
   state.setAgentEditingRoundId(null)
+  state.setAgentTargetAssetSlotId(null)
 
   if (fallbackTitle) {
     void generateAgentConversationTitle(conversation.id, trimmedPrompt, inputImageIds, requestSettings, activeProfile, fallbackTitle)
@@ -872,6 +894,9 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
     maskTargetImageId: sourceRound.maskTargetImageId ?? sourceUserMessage.maskTargetImageId ?? null,
     maskImageId: sourceRound.maskImageId ?? sourceUserMessage.maskImageId ?? null,
     outputTaskIds: [],
+    stepType: sourceRound.stepType,
+    targetAssetSlotId: sourceRound.targetAssetSlotId ?? null,
+    ...(Array.isArray(sourceRound.platformNotes) ? { platformNotes: [...sourceRound.platformNotes] } : {}),
     status: 'running',
     error: null,
     createdAt: now,
@@ -918,6 +943,25 @@ async function executeAgentRound(
   const startedAt = Date.now()
   const controller = new AbortController()
   const controllerKey = getAgentRoundControllerKey(conversationId, roundId)
+  const streamingTaskIds: string[] = []
+  const markAgentTaskError = (taskId: string | undefined, error: string, patch: Partial<TaskRecord> = {}) => {
+    if (!taskId) return
+    const latestTask = getState().tasks.find((task) => task.id === taskId)
+    if (!latestTask || (latestTask.status === 'done' && latestTask.outputImages.length > 0)) return
+    updateTaskInStore(taskId, {
+      status: 'error',
+      error,
+      finishedAt: Date.now(),
+      elapsed: Date.now() - latestTask.createdAt,
+      ...patch,
+    })
+    getState().setTaskStreamPreview(taskId)
+  }
+  const markIncompleteAgentTasksError = (message: string, patch: Partial<TaskRecord> = {}) => {
+    for (const taskId of streamingTaskIds) {
+      markAgentTaskError(taskId, message, patch)
+    }
+  }
   agentRoundControllers.set(controllerKey, controller)
   try {
     const latestState = getState()
@@ -947,26 +991,32 @@ async function executeAgentRound(
       : conversation.messages.find((message) => message.roundId === roundId && message.role === 'assistant') ?? null
     const assistantMessageId = existingAssistantMessage?.id ?? genId()
     const shouldStreamAssistantMessage = activeProfile.streamImages === true
-    const streamingTaskIds: string[] = []
     const taskIdByToolCallId = new Map<string, string>()
 
     const attachTaskToAgentRound = (taskId: string) => {
       if (streamingTaskIds.includes(taskId)) return
       streamingTaskIds.push(taskId)
-      updateAgentConversation(conversationId, (current) => ({
-        ...current,
-        updatedAt: Date.now(),
-        rounds: current.rounds.map((item) =>
-          item.id === roundId
-            ? { ...item, outputTaskIds: item.outputTaskIds.includes(taskId) ? item.outputTaskIds : [...item.outputTaskIds, taskId] }
-            : item,
-        ),
-        messages: current.messages.map((message) =>
-          message.id === assistantMessageId
-            ? { ...message, outputTaskIds: [...new Set([...(message.outputTaskIds ?? []), taskId])] }
-            : message,
-        ),
-      }))
+      updateAgentConversation(conversationId, (current) => {
+        const currentRound = current.rounds.find((item) => item.id === roundId)
+        const assetPlan = currentRound
+          ? addTaskToAgentAssetPlan(current.assetPlan, currentRound.targetAssetSlotId, taskId)
+          : current.assetPlan
+        return {
+          ...current,
+          ...(assetPlan ? { assetPlan } : {}),
+          updatedAt: Date.now(),
+          rounds: current.rounds.map((item) =>
+            item.id === roundId
+              ? { ...item, outputTaskIds: item.outputTaskIds.includes(taskId) ? item.outputTaskIds : [...item.outputTaskIds, taskId] }
+              : item,
+          ),
+          messages: current.messages.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, outputTaskIds: [...new Set([...(message.outputTaskIds ?? []), taskId])] }
+              : message,
+          ),
+        }
+      })
     }
 
     const ensureStreamingAgentTask = async (
@@ -974,7 +1024,11 @@ async function executeAgentRound(
       taskPrompt = '',
       inputImageIds = round.inputImageIds ?? [],
       options: { createdAt?: number; agentBatchCallId?: string; maskTargetImageId?: string | null; maskImageId?: string | null } = {},
-    ) => {
+    ): Promise<string | null> => {
+      const latestConversation = getState().agentConversations.find((item) => item.id === conversationId)
+      const latestRound = latestConversation?.rounds.find((item) => item.id === roundId) ?? null
+      if (!latestConversation || !latestRound) return null
+
       const existingTaskId = taskIdByToolCallId.get(toolCallId)
       if (existingTaskId) return existingTaskId
 
@@ -1011,16 +1065,18 @@ async function executeAgentRound(
         ...(options.agentBatchCallId ? { agentBatchCallId: options.agentBatchCallId } : {}),
       }
 
-      taskIdByToolCallId.set(toolCallId, task.id)
-      getState().setTasks([task, ...getState().tasks])
-      attachTaskToAgentRound(task.id)
-      await putTask(task)
-      return task.id
+      const taskWithPlatform = withAgentPlatformTaskMetadata(task, latestConversation, latestRound)
+      taskIdByToolCallId.set(toolCallId, taskWithPlatform.id)
+      getState().setTasks([taskWithPlatform, ...getState().tasks])
+      attachTaskToAgentRound(taskWithPlatform.id)
+      await putTask(taskWithPlatform)
+      return taskWithPlatform.id
     }
 
     const completeAgentImageTask = async (image: AgentApiResultImage, rawResponsePayload?: string) => {
       const toolCallId = image.toolCallId ?? genId()
       const taskId = await ensureStreamingAgentTask(toolCallId)
+      if (!taskId) return null
       const latestTask = getState().tasks.find((task) => task.id === taskId)
       if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
 
@@ -1149,47 +1205,57 @@ async function executeAgentRound(
 
       // Fire all batch items concurrently after all cards are visible.
       const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds }) => {
-
-        const batchResult = await callBatchImageSingle({
-          settings: requestSettings,
-          profile: agentProfile,
-          params,
-          batchItemId: item.id,
-          prompt: item.prompt,
-          referenceImageDataUrls: references.dataUrls,
-          referenceIds,
-          signal: controller.signal,
-          onImageToolStarted: shouldStreamAssistantMessage
-            ? async () => {
-                if (controller.signal.aborted) return
-              }
-            : undefined,
-          onPartialImage: shouldStreamAssistantMessage
-            ? async ({ image, partialImageIndex }) => {
-                if (controller.signal.aborted) return
-                const taskId = taskIdByToolCallId.get(batchToolCallId)
-                if (taskId) {
-                  getState().setTaskStreamPreview(taskId, image, partialImageIndex)
-                  if (partialImageIndex === 0 || partialImageIndex == null) {
-                    void persistTaskStreamPartialImage(taskId, image)
+        try {
+          const batchResult = await callBatchImageSingle({
+            settings: requestSettings,
+            profile: agentProfile,
+            params,
+            batchItemId: item.id,
+            prompt: item.prompt,
+            referenceImageDataUrls: references.dataUrls,
+            referenceIds,
+            signal: controller.signal,
+            onImageToolStarted: shouldStreamAssistantMessage
+              ? async () => {
+                  if (controller.signal.aborted) return
+                }
+              : undefined,
+            onPartialImage: shouldStreamAssistantMessage
+              ? async ({ image, partialImageIndex }) => {
+                  if (controller.signal.aborted) return
+                  const taskId = taskIdByToolCallId.get(batchToolCallId)
+                  if (taskId) {
+                    getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+                    if (partialImageIndex === 0 || partialImageIndex == null) {
+                      void persistTaskStreamPartialImage(taskId, image)
+                    }
                   }
                 }
-              }
-            : undefined,
-          onImageToolCompleted: shouldStreamAssistantMessage
-            ? async (image) => {
-                if (controller.signal.aborted) return
-                await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
-              }
+              : undefined,
+            onImageToolCompleted: shouldStreamAssistantMessage
+              ? async (image) => {
+                  if (controller.signal.aborted) return
+                  await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
+                }
             : undefined,
         })
 
-        // If not streaming and we have an image, complete the pre-created task.
-        if (batchResult.image && !shouldStreamAssistantMessage) {
-          await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
-        }
+          // If not streaming and we have an image, complete the pre-created task.
+          if (batchResult.image && !shouldStreamAssistantMessage) {
+            await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
+          }
+          if (!batchResult.image) {
+            markAgentTaskError(taskIdByToolCallId.get(batchToolCallId), batchResult.error || '未返回图片')
+          }
 
-        return batchResult
+          return batchResult
+        } catch (err) {
+          markAgentTaskError(
+            taskIdByToolCallId.get(batchToolCallId),
+            err instanceof Error ? err.message : String(err),
+          )
+          throw err
+        }
       })
 
       const batchResults = await Promise.allSettled(batchPromises)
@@ -1230,6 +1296,12 @@ async function executeAgentRound(
         profile: agentProfile,
         params,
         input: apiInputForTurn,
+        platformContext: {
+          platformId: conversation.platformId,
+          brief: conversation.platformBrief,
+          assetPlan: conversation.assetPlan,
+          targetAssetSlotId: round.targetAssetSlotId,
+        },
         telemetry: {
           prompt: userMessage.content,
           roundId,
@@ -1270,6 +1342,7 @@ async function executeAgentRound(
           ? async ({ toolCallId, image, partialImageIndex }) => {
               if (controller.signal.aborted) return
               const taskId = await ensureStreamingAgentTask(toolCallId)
+              if (!taskId) return
               if (controller.signal.aborted) return
               getState().setTaskStreamPreview(taskId, image, partialImageIndex)
               if (partialImageIndex === 0 || partialImageIndex == null) {
@@ -1303,6 +1376,7 @@ async function executeAgentRound(
       for (const image of result.images) {
         if (image.toolCallId && taskIdByToolCallId.has(image.toolCallId)) {
           const completedTaskId = await completeAgentImageTask(image, result.rawResponsePayload)
+          if (!completedTaskId) continue
           const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
           if (promptRefIds.length > 0) {
             const promptRefs = await resolveReferenceImages(promptRefIds)
@@ -1318,26 +1392,32 @@ async function executeAgentRound(
           }
           continue
         }
+        const latestConversationForImage = getState().agentConversations.find((item) => item.id === conversationId)
+        const latestRoundForImage = latestConversationForImage?.rounds.find((item) => item.id === roundId) ?? null
+        if (!latestConversationForImage || !latestRoundForImage) continue
         const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
         const promptRefs = await resolveReferenceImages(promptRefIds)
         const imgId = await storeImage(image.dataUrl, 'generated')
         cacheImage(imgId, image.dataUrl)
+        const finalConversationForImage = getState().agentConversations.find((item) => item.id === conversationId)
+        const finalRoundForImage = finalConversationForImage?.rounds.find((item) => item.id === roundId) ?? null
+        if (!finalConversationForImage || !finalRoundForImage) continue
         const actualParams: Partial<TaskParams> = {
           ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
           n: 1,
         }
         const task: TaskRecord = {
           id: genId(),
-          prompt: image.revisedPrompt ?? round?.prompt ?? userMessage.content,
+          prompt: image.revisedPrompt ?? finalRoundForImage.prompt ?? userMessage.content,
           params,
           apiProvider: agentImageProvider,
           apiProfileId: activeProfile.id,
           apiProfileName: activeProfile.name,
           apiMode: activeProfile.apiMode,
           apiModel: activeProfile.model,
-          inputImageIds: uniqueIds([...(round?.inputImageIds ?? []), ...promptRefs.imageIds]),
-          maskTargetImageId: round?.maskTargetImageId ?? null,
-          maskImageId: round?.maskImageId ?? null,
+          inputImageIds: uniqueIds([...finalRoundForImage.inputImageIds, ...promptRefs.imageIds]),
+          maskTargetImageId: finalRoundForImage.maskTargetImageId ?? null,
+          maskImageId: finalRoundForImage.maskImageId ?? null,
           outputImages: [imgId],
           actualParams,
           actualParamsByImage: { [imgId]: actualParams },
@@ -1355,9 +1435,10 @@ async function executeAgentRound(
           agentToolCallId: image.toolCallId,
           agentToolAction: image.action,
         }
-        getState().setTasks([task, ...getState().tasks])
-        attachTaskToAgentRound(task.id)
-        await putTask(task)
+        const taskWithPlatform = withAgentPlatformTaskMetadata(task, finalConversationForImage, finalRoundForImage)
+        getState().setTasks([taskWithPlatform, ...getState().tasks])
+        attachTaskToAgentRound(taskWithPlatform.id)
+        await putTask(taskWithPlatform)
       }
 
       if (result.rawResponsePayload && streamingTaskIds.length > 0) {
@@ -1447,8 +1528,10 @@ async function executeAgentRound(
       pendingToolTextSeparator = true
     }
 
+    markIncompleteAgentTasksError('未返回图片')
     const taskIds: string[] = [...streamingTaskIds]
-    const outputIds = taskIds.flatMap((taskId) => getState().tasks.find((task) => task.id === taskId)?.outputImages ?? [])
+    const latestTasks = getState().tasks
+    const outputIds = taskIds.flatMap((taskId) => latestTasks.find((task) => task.id === taskId)?.outputImages ?? [])
     const limitNotice = reachedToolLimit ? `已达到最大工具调用次数（${maxToolCalls}），已停止自动续跑。` : ''
     const joinedText = textSegments.join('\n\n').trim()
     const finalContent = [joinedText, limitNotice]
@@ -1465,27 +1548,35 @@ async function executeAgentRound(
       createdAt: Date.now(),
     }
 
-    updateAgentConversation(conversationId, (current) => ({
-      ...current,
-      updatedAt: Date.now(),
-      rounds: current.rounds.map((round) =>
-        round.id === roundId
-          ? {
-              ...round,
-              assistantMessageId,
-              outputTaskIds: taskIds,
-              responseId: lastResponseId,
-              responseOutput: accumulatedOutputItems,
-              status: 'done',
-              error: null,
-              finishedAt: Date.now(),
-            }
-          : round,
-      ),
-      messages: current.messages.some((message) => message.id === assistantMessageId)
-        ? current.messages.map((message) => message.id === assistantMessageId ? assistantMessage : message)
-        : [...current.messages, assistantMessage],
-    }))
+    updateAgentConversation(conversationId, (current) => {
+      const currentRound = current.rounds.find((item) => item.id === roundId)
+      if (!currentRound) return current
+      const assetPlan = currentRound
+        ? finalizeAgentAssetPlanSlotStatus(current.assetPlan, currentRound.targetAssetSlotId, latestTasks)
+        : current.assetPlan
+      return {
+        ...current,
+        ...(assetPlan ? { assetPlan } : {}),
+        updatedAt: Date.now(),
+        rounds: current.rounds.map((round) =>
+          round.id === roundId
+            ? {
+                ...round,
+                assistantMessageId,
+                outputTaskIds: taskIds,
+                responseId: lastResponseId,
+                responseOutput: accumulatedOutputItems,
+                status: 'done',
+                error: null,
+                finishedAt: Date.now(),
+              }
+            : round,
+        ),
+        messages: current.messages.some((message) => message.id === assistantMessageId)
+          ? current.messages.map((message) => message.id === assistantMessageId ? assistantMessage : message)
+          : [...current.messages, assistantMessage],
+      }
+    })
 
     logger.info('agent', 'Agent 轮次完成', {
       appMode: 'agent',
@@ -1500,6 +1591,7 @@ async function executeAgentRound(
     getState().showToast(outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复', 'success')
   } catch (err) {
     if (controller.signal.aborted) {
+      markIncompleteAgentTasksError(AGENT_STOPPED_MESSAGE, { customRecoverable: false })
       if (markAgentRoundStopped(conversationId, roundId)) {
         getState().showToast('已停止生成', 'info')
       }
@@ -1525,15 +1617,21 @@ async function executeAgentRound(
       error: serializeError(err),
     })
 
+    markIncompleteAgentTasksError(message)
     updateAgentConversation(conversationId, (current) => {
       const failedRound = current.rounds.find((round) => round.id === roundId)
+      if (!failedRound) return current
       const existingAssistantMessage = failedRound?.assistantMessageId
         ? current.messages.find((item) => item.id === failedRound.assistantMessageId)
         : current.messages.find((item) => item.roundId === roundId && item.role === 'assistant')
       const errorContent = `请求失败：${message}`
+      const assetPlan = failedRound
+        ? finalizeAgentAssetPlanSlotStatus(current.assetPlan, failedRound.targetAssetSlotId, getState().tasks)
+        : current.assetPlan
 
       return {
         ...current,
+        ...(assetPlan ? { assetPlan } : {}),
         title: current.rounds.length === 1 && current.rounds[0].id === roundId ? '新对话' : current.title,
         updatedAt: Date.now(),
         rounds: current.rounds.map((round) =>

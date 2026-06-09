@@ -1,5 +1,5 @@
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, SetStateAction, TouchEvent as ReactTouchEvent } from 'react'
-import type { AgentConversation } from '../../types'
+import type { AgentConversation, AgentPlatformId } from '../../types'
 import { EditIcon, SidebarLeftIcon } from '../icons'
 import ConversationListItem from './ConversationListItem'
 import { groupConversationsByTime } from '../../lib/agentConversationGroups'
@@ -16,7 +16,7 @@ interface AgentConversationSidebarProps {
   agentEditingConversationId: string | null
   agentGeneratingTitleIds: Record<string, boolean>
   editingConversationTitle: string
-  createConversation: () => void
+  createConversation: (platformId?: AgentPlatformId) => void
   handleConversationPointerDown: (id: string, e: ReactPointerEvent) => void
   clearConversationLongPressTimer: () => void
   handleConversationSelect: (id: string) => void
@@ -57,7 +57,7 @@ export default function AgentConversationSidebar({
             <button type="button" onClick={() => setSidebarCollapsed(true)} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
               <SidebarLeftIcon className="w-5 h-5" />
             </button>
-            <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="新对话">
+            <button type="button" onClick={() => createConversation()} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="新对话">
               <EditIcon className="w-5 h-5" />
             </button>
           </div>
@@ -70,7 +70,7 @@ export default function AgentConversationSidebar({
           </div>
           <button
             type="button"
-            onClick={createConversation}
+            onClick={() => createConversation()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-300 dark:hover:bg-white/[0.09] dark:hover:text-white"
             title="新对话"
           >

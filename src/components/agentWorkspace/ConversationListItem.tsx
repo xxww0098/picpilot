@@ -2,6 +2,7 @@ import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEv
 import type { AgentConversation } from '../../types'
 import { EditIcon, TrashIcon } from '../icons'
 import AgentActionButton from './AgentActionButton'
+import AgentPlatformBadge from './AgentPlatformBadge'
 
 function getConversationPreview(item: AgentConversation) {
   const latestUserMessage = [...item.messages].reverse().find((message) => message.role === 'user' && message.content.trim())
@@ -80,7 +81,10 @@ export default function ConversationListItem({
         </div>
       ) : (
         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.id)} title={item.title || '新对话'}>
-          <span className={`block truncate text-sm ${isActive ? 'font-semibold text-gray-950 dark:text-white' : 'font-medium text-gray-700 dark:text-gray-300'}`}>{item.title || '新对话'}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className={`truncate text-sm ${isActive ? 'font-semibold text-gray-950 dark:text-white' : 'font-medium text-gray-700 dark:text-gray-300'}`}>{item.title || '新对话'}</span>
+            <AgentPlatformBadge platformId={item.platformId} />
+          </span>
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-none text-gray-400 dark:text-gray-500">
             {isRunning && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
             <span className="shrink-0">{meta}</span>

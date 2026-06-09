@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import type { AgentMessage, AgentRound, TaskRecord } from '../types'
+import type { AgentMessage, AgentPlatformId, AgentRound, TaskRecord } from '../types'
 import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, sendTaskOutputsToGallery, updateTaskInStore, useStore } from '../store'
 import { logger, serializeError } from '../lib/logger'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
@@ -8,14 +8,18 @@ import { downloadImageIds } from '../lib/downloadImages'
 import { openConfirmDialog, openDestructiveConfirm } from '../lib/dialog'
 import TaskCard from './TaskCard'
 import MarkdownRenderer from './MarkdownRenderer'
-import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon, PhotoIcon } from './icons'
+import { TrashIcon, DownloadIcon, EditIcon, ChevronLeftIcon, ChevronRightIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon, PhotoIcon } from './icons'
 import AgentActionButton from './agentWorkspace/AgentActionButton'
 import AgentConversationHeader from './agentWorkspace/AgentConversationHeader'
 import AgentConversationSidebar from './agentWorkspace/AgentConversationSidebar'
-import AgentStarterPanel from './agentWorkspace/AgentStarterPanel'
+import AgentAssetPlanPanel from './agentWorkspace/AgentAssetPlanPanel'
+import AgentMobilePullIndicator from './agentWorkspace/AgentMobilePullIndicator'
+import AgentMobileTopBar from './agentWorkspace/AgentMobileTopBar'
+import AgentWorkspaceEmptyState from './agentWorkspace/AgentWorkspaceEmptyState'
 import { getAgentAssistantBlocks, getAgentAssistantCopyContent, getRoundStatusLabel, getRoundTasks, getRoundTaskSlots, isAgentRoundInterrupted } from './agentWorkspace/assistantBlocks'
-import { getConversationGeneratedImageCount, getConversationOutputTaskIds, getConversationSearchText } from './agentWorkspace/conversationMetrics'
+import { getConversationAssetPlanProgress, getConversationGeneratedImageCount, getConversationOutputTaskIds, getConversationSearchText } from './agentWorkspace/conversationMetrics'
 import { ChatImageThumb, AgentStreamingCursor, AgentWebSearchInlineStatus, AgentWebSearchStatusLines } from './agentWorkspace/messageParts'
+import { getAgentPlatformDefinition } from '../lib/platforms/registry'
 const MOBILE_HEADER_PULL_THRESHOLD = 24
 const MOBILE_HEADER_PULL_MAX_OFFSET = 48
 const MOBILE_HEADER_EDGE_GUARD = 24
@@ -51,6 +55,8 @@ export default function AgentWorkspace() {
   const setAgentEditingConversationId = useStore((s) => s.setAgentEditingConversationId)
   const setAgentEditingRoundId = useStore((s) => s.setAgentEditingRoundId)
   const setActiveAgentRoundId = useStore((s) => s.setActiveAgentRoundId)
+  const setAgentTargetAssetSlotId = useStore((s) => s.setAgentTargetAssetSlotId)
+  const setAgentTaskAssetStatus = useStore((s) => s.setAgentTaskAssetStatus)
   const showToast = useStore((s) => s.showToast)
   const agentGeneratingTitleIds = useStore((s) => s.agentGeneratingTitleIds)
   const conversation = conversations.find((item) => item.id === activeConversationId) ?? null
@@ -268,16 +274,33 @@ export default function AgentWorkspace() {
     : activeRounds.length > 0
     ? '就绪'
     : '新对话'
+  const activePlatformDefinition = useMemo(() => {
+    const platform = getAgentPlatformDefinition(conversation?.platformId)
+    return platform?.enabled ? platform : null
+  }, [conversation?.platformId])
+  const activeAssetPlanProgress = getConversationAssetPlanProgress(conversation, tasks)
+  const showEmptyAgentState = !conversation || activeMessages.length === 0
 
-  const applyStarterPrompt = useCallback((promptText: string) => {
+  const handleCreateConversation = useCallback((platformId?: AgentPlatformId) => {
+    createConversation(platformId)
+  }, [createConversation])
+
+  const handleMobileTitleClick = useCallback(() => {
+    setSidebarCollapsed(false)
+    if (conversation) setAgentEditingConversationId(conversation.id)
+  }, [conversation, setAgentEditingConversationId, setSidebarCollapsed])
+
+  const focusPromptEditor = useCallback(() => {
+    const editor = document.querySelector<HTMLElement>('[data-input-prompt-editor]')
+    editor?.focus()
+  }, [])
+
+  const applyStarterPrompt = useCallback((promptText: string, targetAssetSlotId?: string) => {
     if (!conversation) createConversation()
+    setAgentTargetAssetSlotId(targetAssetSlotId ?? null)
     setPrompt(promptText)
-    const focusPromptEditor = () => {
-      const editor = document.querySelector<HTMLElement>('[data-input-prompt-editor]')
-      editor?.focus()
-    }
     window.requestAnimationFrame(focusPromptEditor)
-  }, [conversation, createConversation, setPrompt])
+  }, [conversation, createConversation, focusPromptEditor, setAgentTargetAssetSlotId, setPrompt])
 
   useEffect(() => {
     const conversationId = conversation?.id ?? null
@@ -508,6 +531,7 @@ export default function AgentWorkspace() {
 
   const handleEditRoundMessage = async (round: AgentRound, content: string) => {
     setAgentEditingRoundId(round.id)
+    setAgentTargetAssetSlotId(round.targetAssetSlotId ?? null)
     clearMaskDraft()
 
     const inputImages = await Promise.all(
@@ -565,17 +589,11 @@ export default function AgentWorkspace() {
       data-agent-workspace 
       className="relative flex min-h-[calc(100vh-100px)] w-full flex-col overflow-visible px-0 transition-all duration-300 lg:flex-row lg:gap-3"
     >
-      {/* Pull Down Indicator */}
-      {pullDownOffset > 0 && !agentMobileHeaderVisible && (
-        <div 
-          className="fixed top-0 left-0 right-0 z-50 flex justify-center items-end pointer-events-none sm:hidden"
-          style={{ height: `${pullDownOffset + 10}px`, opacity: pullDownOffset / MOBILE_HEADER_PULL_MAX_OFFSET }}
-        >
-          <div className="bg-black/60 backdrop-blur-sm text-white rounded-full p-1 mb-2 shadow-lg">
-            <ChevronDownIcon className="w-4 h-4" />
-          </div>
-        </div>
-      )}
+      <AgentMobilePullIndicator
+        pullDownOffset={pullDownOffset}
+        hidden={agentMobileHeaderVisible}
+        maxOffset={MOBILE_HEADER_PULL_MAX_OFFSET}
+      />
 
       {/* Mobile Left Sidebar Overlay Backdrop */}
       {!sidebarCollapsed && (
@@ -594,7 +612,7 @@ export default function AgentWorkspace() {
         agentEditingConversationId={agentEditingConversationId}
         agentGeneratingTitleIds={agentGeneratingTitleIds}
         editingConversationTitle={editingConversationTitle}
-        createConversation={createConversation}
+        createConversation={handleCreateConversation}
         handleConversationPointerDown={handleConversationPointerDown}
         clearConversationLongPressTimer={clearConversationLongPressTimer}
         handleConversationSelect={handleConversationSelect}
@@ -605,62 +623,40 @@ export default function AgentWorkspace() {
         handleDeleteConversation={handleDeleteConversation}
       />
 
-      {/* Center Chat Area */}
       <section className="min-w-0 flex-1 flex flex-col relative">
-        {/* Mobile Header Toggles */}
-        <div className={`sticky top-0 z-20 lg:hidden overflow-hidden transition-all duration-300 ease-in-out ${mobileTopBarVisible ? 'max-h-16 opacity-100 mb-2' : 'max-h-0 opacity-0 mb-0 pointer-events-none'}`}>
-          <div
-            className="grid h-14 grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] items-center border-b border-gray-200 bg-white/80 px-2 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/80"
-            onTouchStart={handleHeaderTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-          >
-            <div className="flex min-w-0 items-center gap-1">
-              <button type="button" onClick={() => setSidebarCollapsed(false)} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200" title="展开对话列表">
-                <SidebarLeftIcon className="w-5 h-5" />
-              </button>
-              {!agentMobileHeaderVisible && (
-                <button
-                  type="button"
-                  onClick={() => setAgentMobileHeaderVisible(true)}
-                  className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200"
-                  aria-label="显示主导航"
-                  title="显示主导航"
-                >
-                  <ChevronDownIcon className="h-5 w-5" />
-                </button>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSidebarCollapsed(false)
-                if (conversation) {
-                  useStore.getState().setAgentEditingConversationId(conversation.id)
-                }
-              }}
-              className="min-w-0 truncate rounded px-2 text-center text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.04]"
-            >
-              {conversation?.title || 'Agent'}
-            </button>
-            <div className="flex min-w-0 justify-end">
-              <button type="button" onClick={createConversation} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200" title="新对话">
-                <EditIcon className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-        </div>
+        <AgentMobileTopBar
+          visible={mobileTopBarVisible}
+          agentMobileHeaderVisible={agentMobileHeaderVisible}
+          title={conversation?.title || 'Agent'}
+          onOpenSidebar={() => setSidebarCollapsed(false)}
+          onShowMobileHeader={() => setAgentMobileHeaderVisible(true)}
+          onEditTitle={handleMobileTitleClick}
+          onCreateConversation={() => handleCreateConversation()}
+          onHeaderTouchStart={handleHeaderTouchStart}
+          onHeaderTouchMove={handleTouchMove}
+          onHeaderTouchEnd={handleTouchEnd}
+        />
 
         {conversation && (
           <AgentConversationHeader
             title={conversation.title || 'Agent'}
+            platformId={conversation.platformId}
             activeConversationRunning={activeConversationRunning}
             activeConversationErrorCount={activeConversationErrorCount}
             activeConversationStatus={activeConversationStatus}
             roundCount={activeRounds.length}
             imageCount={activeConversationImageCount}
             outputTaskCount={getConversationOutputTaskIds(conversation).length}
-            onCreateConversation={createConversation}
+            assetPlanProgress={activeAssetPlanProgress}
+            onCreateConversation={() => handleCreateConversation()}
+          />
+        )}
+
+        {conversation && activePlatformDefinition && (
+          <AgentAssetPlanPanel
+            conversation={conversation}
+            tasks={tasks}
+            onSetTaskAssetStatus={setAgentTaskAssetStatus}
           />
         )}
 
@@ -671,25 +667,15 @@ export default function AgentWorkspace() {
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {!conversation ? (
-            <AgentStarterPanel
-              label="PicPilot Agent"
-              title="把出图任务拆成可执行轮次"
-              description="适合商品主图、参考图变体、细节修复和详情页卖点图。选择一个任务后，可以继续补充参考图和约束。"
+          {showEmptyAgentState ? (
+            <AgentWorkspaceEmptyState
+              platformDefinition={activePlatformDefinition}
+              onSelectPlatform={handleCreateConversation}
               onApplyPrompt={applyStarterPrompt}
             />
           ) : (
             (() => {
-              if (activeMessages.length === 0) {
-                return (
-                  <AgentStarterPanel
-                    label="新对话"
-                    title="先选一个图片任务"
-                    description="Agent 会在同一轮里保留提示词、参考图、工具调用和输出图片，后续可直接编辑、重试或发回画廊。"
-                    onApplyPrompt={applyStarterPrompt}
-                  />
-                )
-              }
+              if (!conversation) return null
 
               const renderedMessages = activeMessages.map((message) => {
                 const round = conversation.rounds.find((item) => item.id === message.roundId)

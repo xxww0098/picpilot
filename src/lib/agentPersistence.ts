@@ -1,4 +1,12 @@
-import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem } from '../types'
+import type {
+  AgentConversation,
+  AgentMessage,
+  AgentPlatformAssetPlanItem,
+  AgentPlatformBrief,
+  AgentRound,
+  ResponsesOutputItem,
+} from '../types'
+import { normalizeAgentPlatformId } from './platforms/registry'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -6,6 +14,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeOptionalStringArray(value: unknown): string[] | undefined {
+  const items = normalizeStringArray(value).map((item) => item.trim()).filter(Boolean)
+  return items.length ? items : undefined
+}
+
+function normalizeAgentPlatformBrief(value: unknown): AgentPlatformBrief | undefined {
+  if (!isRecord(value)) return undefined
+  const brief: AgentPlatformBrief = {}
+  const productName = normalizeOptionalString(value.productName)
+  const category = normalizeOptionalString(value.category)
+  const targetMarket = normalizeOptionalString(value.targetMarket)
+  const audience = normalizeOptionalString(value.audience)
+  const brandTone = normalizeOptionalString(value.brandTone)
+  const sourceUrl = normalizeOptionalString(value.sourceUrl)
+  const locale = normalizeOptionalString(value.locale)
+  const sellingPoints = normalizeOptionalStringArray(value.sellingPoints)
+  const restrictions = normalizeOptionalStringArray(value.restrictions)
+  if (productName) brief.productName = productName
+  if (category) brief.category = category
+  if (targetMarket) brief.targetMarket = targetMarket
+  if (audience) brief.audience = audience
+  if (brandTone) brief.brandTone = brandTone
+  if (sourceUrl) brief.sourceUrl = sourceUrl
+  if (locale) brief.locale = locale
+  if (sellingPoints) brief.sellingPoints = sellingPoints
+  if (restrictions) brief.restrictions = restrictions
+  return Object.keys(brief).length ? brief : undefined
+}
+
+function normalizeAssetPlanStatus(value: unknown): AgentPlatformAssetPlanItem['status'] {
+  return value === 'generating' || value === 'ready' || value === 'needs_revision' ? value : 'planned'
+}
+
+function normalizeAgentAssetPlan(value: unknown): AgentPlatformAssetPlanItem[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items = value
+    .filter(isRecord)
+    .map((item): AgentPlatformAssetPlanItem | null => {
+      const slotId = normalizeOptionalString(item.slotId)
+      if (!slotId) return null
+      const promptHint = normalizeOptionalString(item.promptHint)
+      const approvedTaskId = normalizeOptionalString(item.approvedTaskId)
+      const notes = normalizeOptionalString(item.notes)
+      return {
+        slotId,
+        status: normalizeAssetPlanStatus(item.status),
+        taskIds: normalizeStringArray(item.taskIds),
+        ...(promptHint ? { promptHint } : {}),
+        ...(approvedTaskId ? { approvedTaskId } : {}),
+        ...(notes ? { notes } : {}),
+      }
+    })
+    .filter((item): item is AgentPlatformAssetPlanItem => Boolean(item))
+  return items.length ? items : undefined
 }
 
 function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound | null {
@@ -33,6 +101,11 @@ function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound 
     outputTaskIds: normalizeStringArray(round.outputTaskIds),
     ...(typeof round.responseId === 'string' ? { responseId: round.responseId } : {}),
     ...(Array.isArray(round.responseOutput) ? { responseOutput: round.responseOutput } : {}),
+    ...(round.stepType === 'brief' || round.stepType === 'plan' || round.stepType === 'generate' || round.stepType === 'revise' || round.stepType === 'validate' || round.stepType === 'export'
+      ? { stepType: round.stepType }
+      : {}),
+    targetAssetSlotId: typeof round.targetAssetSlotId === 'string' ? round.targetAssetSlotId : null,
+    ...(Array.isArray(round.platformNotes) ? { platformNotes: normalizeStringArray(round.platformNotes) } : {}),
     status,
     error: status === 'error'
       ? typeof round.error === 'string' ? round.error : '上次请求已中断'
@@ -85,9 +158,14 @@ export function normalizeAgentConversations(value: unknown): AgentConversation[]
             .map(normalizeAgentMessage)
             .filter((message): message is AgentMessage => message != null && roundIds.has(message.roundId))
         : []
+      const platformBrief = normalizeAgentPlatformBrief(conversation.platformBrief)
+      const assetPlan = normalizeAgentAssetPlan(conversation.assetPlan)
       return {
         id: conversation.id,
         title: typeof conversation.title === 'string' && conversation.title.trim() ? conversation.title : '新对话',
+        platformId: normalizeAgentPlatformId(conversation.platformId),
+        ...(platformBrief ? { platformBrief } : {}),
+        ...(assetPlan ? { assetPlan } : {}),
         activeRoundId: typeof conversation.activeRoundId === 'string' && roundIds.has(conversation.activeRoundId) ? conversation.activeRoundId : rounds[rounds.length - 1]?.id ?? null,
         createdAt: typeof conversation.createdAt === 'number' ? conversation.createdAt : Date.now(),
         updatedAt: typeof conversation.updatedAt === 'number' ? conversation.updatedAt : Date.now(),

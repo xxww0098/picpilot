@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
-import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
+import { createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS } from './apiProfiles'
 import { callAgentConversationTitleApi, callAgentResponsesApi } from './agentApi'
 
 describe('callAgentResponsesApi', () => {
@@ -128,6 +128,140 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const headers = (init as RequestInit).headers as Record<string, string>
     expect(headers['X-PicPilot-Upstream-Mode']).toBeUndefined()
+  })
+
+  it('injects Ozon platform instructions when provided', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'OK' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+    })
+
+    await callAgentResponsesApi({
+      settings: { ...DEFAULT_SETTINGS, agentModel: DEFAULT_RESPONSES_MODEL },
+      profile,
+      params: DEFAULT_PARAMS,
+      input: 'hello',
+      platformContext: {
+        platformId: 'ozon',
+        brief: { productName: '保温杯' },
+        assetPlan: [{ slotId: 'ozon_main', status: 'planned', taskIds: [] }],
+        targetAssetSlotId: 'ozon_main',
+      },
+    })
+
+    const [, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.instructions).toContain('## Platform: Ozon')
+    expect(body.instructions).toContain('Ozon listing asset project')
+    expect(body.instructions).toContain('ozon_main')
+  })
+
+  it('injects independent site platform instructions when provided', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'OK' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+    })
+
+    await callAgentResponsesApi({
+      settings: { ...DEFAULT_SETTINGS, agentModel: DEFAULT_RESPONSES_MODEL },
+      profile,
+      params: DEFAULT_PARAMS,
+      input: 'hello',
+      platformContext: {
+        platformId: 'independent_site',
+        brief: { productName: '手工灯' },
+        targetAssetSlotId: 'site_hero',
+      },
+    })
+
+    const [, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.instructions).toContain('## Platform: Independent site')
+    expect(body.instructions).toContain('brand-owned product page asset project')
+    expect(body.instructions).toContain('site_hero')
+  })
+
+  it('omits invalid target slots from Ozon platform instructions', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'OK' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+    })
+
+    await callAgentResponsesApi({
+      settings: { ...DEFAULT_SETTINGS, agentModel: DEFAULT_RESPONSES_MODEL },
+      profile,
+      params: DEFAULT_PARAMS,
+      input: 'hello',
+      platformContext: {
+        platformId: 'ozon',
+        targetAssetSlotId: 'site_hero',
+      },
+    })
+
+    const [, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.instructions).toContain('## Platform: Ozon')
+    expect(body.instructions).toContain('Ozon listing asset project')
+    expect(body.instructions).not.toContain('site_hero')
+  })
+
+  it('skips legacy platform instructions while keeping generic Agent image instructions', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'OK' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+    })
+
+    await callAgentResponsesApi({
+      settings: { ...DEFAULT_SETTINGS, agentModel: DEFAULT_RESPONSES_MODEL },
+      profile,
+      params: DEFAULT_PARAMS,
+      input: 'hello',
+      platformContext: {
+        platformId: 'generic_legacy',
+        targetAssetSlotId: 'ozon_main',
+      },
+    })
+
+    const [, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.instructions).not.toContain('## Platform:')
+    expect(body.instructions).toContain('You are an image-generation assistant in a multi-turn gallery app.')
   })
 
   it('extracts image_generation results from base64 object fields', async () => {

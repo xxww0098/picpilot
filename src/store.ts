@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware'
 import { getCachedAuthUser, namespacedStorageKey } from './lib/auth'
 import type {
   AgentConversation,
+  AgentAssetStatus,
+  AgentPlatformId,
   ApiProfile,
   AppSettings,
   AppMode,
@@ -95,6 +97,7 @@ import {
 } from './store/imageCache'
 import { generateVideo } from './lib/videoApi'
 import { applyTeamRuntimeSettings, isTeamStreamFallbackEnabled } from './lib/runtimeTeamSettings'
+import { getAgentPlatformDefinition, normalizeAgentPlatformId } from './lib/platforms/registry'
 
 export { getErrorToastMessage } from './lib/errorToast'
 export { migratePersistedState } from './lib/agentPersistence'
@@ -137,6 +140,7 @@ type AgentInputDraft = {
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
   maskEditorImageId: string | null
+  agentTargetAssetSlotId?: string | null
   updatedAt?: number
 }
 
@@ -187,10 +191,24 @@ export function getGalleryDisplayedImageIds(
   }).flatMap((t) => t.outputImages)
 }
 
-function createAgentConversation(now = Date.now()): AgentConversation {
+function createDefaultAssetPlan(platformId: AgentPlatformId) {
+  const platform = getAgentPlatformDefinition(platformId)
+  if (!platform?.enabled) return undefined
+  return platform.assetSlots.map((slot) => ({
+    slotId: slot.id,
+    status: 'planned' as const,
+    taskIds: [],
+  }))
+}
+
+function createAgentConversation(now = Date.now(), platformId?: AgentPlatformId): AgentConversation {
+  const normalizedPlatformId = platformId ? normalizeAgentPlatformId(platformId) : 'generic_legacy'
+  const assetPlan = createDefaultAssetPlan(normalizedPlatformId)
   return {
     id: genId(),
     title: '新对话',
+    platformId: normalizedPlatformId,
+    ...(assetPlan ? { assetPlan } : {}),
     activeRoundId: null,
     createdAt: now,
     updatedAt: now,
@@ -351,8 +369,9 @@ export interface AppState {
   agentMobileHeaderVisible: boolean
   agentEditingRoundId: string | null
   agentEditingConversationId: string | null
+  agentTargetAssetSlotId: string | null
   agentGeneratingTitleIds: Record<string, true>
-  createAgentConversation: () => string
+  createAgentConversation: (platformId?: AgentPlatformId) => string
   setActiveAgentConversationId: (id: string | null) => void
   setActiveAgentRoundId: (conversationId: string, roundId: string | null) => void
   renameAgentConversation: (id: string, title: string) => void
@@ -363,10 +382,12 @@ export interface AppState {
   setAgentMobileHeaderVisible: (visible: boolean) => void
   setAgentEditingRoundId: (id: string | null) => void
   setAgentEditingConversationId: (id: string | null) => void
+  setAgentTargetAssetSlotId: (slotId: string | null) => void
 
   // 任务列表
   tasks: TaskRecord[]
   setTasks: (t: TaskRecord[]) => void
+  setAgentTaskAssetStatus: (taskId: string, status: AgentAssetStatus) => void
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
@@ -518,6 +539,7 @@ function normalizeAgentInputDraft(value: unknown, fallbackUpdatedAt = Date.now()
     inputImages: normalizeInputImages(draft.inputImages),
     maskDraft: normalizeMaskDraft(draft.maskDraft),
     maskEditorImageId: typeof draft.maskEditorImageId === 'string' ? draft.maskEditorImageId : null,
+    agentTargetAssetSlotId: typeof draft.agentTargetAssetSlotId === 'string' ? draft.agentTargetAssetSlotId : null,
     updatedAt,
   }
 }
@@ -555,12 +577,13 @@ export function cleanStaleAgentInputDrafts(drafts: Record<string, AgentInputDraf
   return next
 }
 
-function clearInputDraftState(): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function clearInputDraftState(): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'> {
   return {
     prompt: '',
     inputImages: [],
     maskDraft: null,
     maskEditorImageId: null,
+    agentTargetAssetSlotId: null,
   }
 }
 
@@ -570,16 +593,18 @@ function copyAgentInputDraft(draft: AgentInputDraft): AgentInputDraft {
     inputImages: draft.inputImages.map((img) => ({ ...img })),
     maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
     maskEditorImageId: draft.maskEditorImageId,
+    agentTargetAssetSlotId: draft.agentTargetAssetSlotId ?? null,
     updatedAt: draft.updatedAt ?? Date.now(),
   }
 }
 
-function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>): AgentInputDraft {
+function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'>): AgentInputDraft {
   return {
     prompt: state.prompt,
     inputImages: state.inputImages,
     maskDraft: state.maskDraft,
     maskEditorImageId: state.maskEditorImageId,
+    agentTargetAssetSlotId: state.agentTargetAssetSlotId,
     updatedAt: Date.now(),
   }
 }
@@ -593,7 +618,7 @@ function splitBatchPromptDraft(prompt: string): string[] {
 }
 
 function isEmptyAgentInputDraft(draft: AgentInputDraft) {
-  return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId
+  return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId && !draft.agentTargetAssetSlotId
 }
 
 function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversationId: string, draft: AgentInputDraft) {
@@ -606,14 +631,14 @@ function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversatio
   return next
 }
 
-function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
+function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'>) {
   if (state.appMode !== 'agent' || !state.activeAgentConversationId) return state.agentInputDrafts
   return setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, getCurrentAgentInputDraft(state))
 }
 
-function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
+function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'>) {
   if (state.appMode !== 'gallery' && state.appMode !== 'video') return state.galleryInputDraft
-  const draft = getCurrentAgentInputDraft(state)
+  const draft = { ...getCurrentAgentInputDraft(state), agentTargetAssetSlotId: null }
   return isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft)
 }
 
@@ -621,19 +646,23 @@ function getPersistableGalleryInputDraft(state: AppState) {
   return saveGalleryInputDraft(state)
 }
 
-function restoreGalleryInputDraftState(draft: AgentInputDraft | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function restoreGalleryInputDraftState(draft: AgentInputDraft | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'> {
   if (!draft) return clearInputDraftState()
   return {
     prompt: draft.prompt,
     inputImages: draft.inputImages.map((img) => ({ ...img })),
     maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
     maskEditorImageId: draft.maskEditorImageId,
+    agentTargetAssetSlotId: null,
   }
 }
 
-function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, conversationId: string | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, conversationId: string | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'agentTargetAssetSlotId'> {
   const draft = conversationId ? drafts[conversationId] : null
-  return restoreGalleryInputDraftState(draft ?? null)
+  return {
+    ...restoreGalleryInputDraftState(draft ?? null),
+    agentTargetAssetSlotId: draft?.agentTargetAssetSlotId ?? null,
+  }
 }
 
 function syncActiveInputDraft<T extends Partial<AgentInputDraft>>(
@@ -645,6 +674,7 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft>>(
     inputImages: patch.inputImages ?? state.inputImages,
     maskDraft: patch.maskDraft !== undefined ? patch.maskDraft : state.maskDraft,
     maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
+    agentTargetAssetSlotId: patch.agentTargetAssetSlotId !== undefined ? patch.agentTargetAssetSlotId : state.agentTargetAssetSlotId,
   }
   if (state.appMode === 'gallery' || state.appMode === 'video') {
     return {
@@ -874,41 +904,47 @@ export const useStore = create<AppState>()(
       agentMobileHeaderVisible: false,
       agentEditingRoundId: null,
       agentEditingConversationId: null,
+      agentTargetAssetSlotId: null,
       agentGeneratingTitleIds: {},
-      createAgentConversation: () => {
+      createAgentConversation: (platformId) => {
         const now = Date.now()
+        const normalizedPlatformId = platformId ? normalizeAgentPlatformId(platformId) : 'generic_legacy'
         const latestConversation = getLatestAgentConversation(get().agentConversations)
-        if (latestConversation && isEmptyAgentConversation(latestConversation)) {
+        if (
+          latestConversation &&
+          isEmptyAgentConversation(latestConversation) &&
+          (latestConversation.platformId ?? 'generic_legacy') === normalizedPlatformId
+        ) {
           set((state) => {
             const agentInputDrafts = saveActiveAgentInputDrafts(state)
+            const assetPlan = latestConversation.assetPlan ?? createDefaultAssetPlan(normalizedPlatformId)
             return {
               agentConversations: state.agentConversations.map((conversation) =>
                 conversation.id === latestConversation.id
-                  ? { ...conversation, createdAt: now, updatedAt: now }
+                  ? { ...conversation, platformId: normalizedPlatformId, ...(assetPlan ? { assetPlan } : {}), createdAt: now, updatedAt: now }
                   : conversation,
               ),
               activeAgentConversationId: latestConversation.id,
               agentInputDrafts,
               agentSidebarCollapsed: true,
               agentEditingRoundId: null,
+              agentTargetAssetSlotId: null,
               ...restoreAgentInputDraftState(agentInputDrafts, latestConversation.id),
             }
           })
           return latestConversation.id
         }
 
-        const conversation = createAgentConversation(now)
+        const conversation = createAgentConversation(now, normalizedPlatformId)
         set((state) => {
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           return {
-            agentConversations: [
-              ...state.agentConversations,
-              conversation,
-            ],
+            agentConversations: [...state.agentConversations, conversation],
             activeAgentConversationId: conversation.id,
             agentInputDrafts,
             agentSidebarCollapsed: true,
             agentEditingRoundId: null,
+            agentTargetAssetSlotId: null,
             ...restoreAgentInputDraftState(agentInputDrafts, conversation.id),
           }
         })
@@ -930,6 +966,7 @@ export const useStore = create<AppState>()(
           agentSidebarCollapsed: true,
           agentAssetPanelCollapsed: true,
           agentEditingRoundId: null,
+          agentTargetAssetSlotId: null,
           ...restoreAgentInputDraftState(agentInputDrafts, id),
         }
       }),
@@ -956,10 +993,45 @@ export const useStore = create<AppState>()(
       setAgentMobileHeaderVisible: (agentMobileHeaderVisible) => set({ agentMobileHeaderVisible }),
       setAgentEditingRoundId: (agentEditingRoundId) => set({ agentEditingRoundId }),
       setAgentEditingConversationId: (agentEditingConversationId) => set({ agentEditingConversationId }),
+      setAgentTargetAssetSlotId: (agentTargetAssetSlotId) => set((s) => syncActiveInputDraft(s, { agentTargetAssetSlotId })),
 
       // Tasks
       tasks: [],
       setTasks: (tasks) => set({ tasks }),
+      setAgentTaskAssetStatus: (taskId, status) => {
+        const state = get()
+        const target = state.tasks.find((task) => task.id === taskId)
+        if (!target?.platformId || !target.platformAssetSlotId) {
+          return
+        }
+
+        const changedTasks: TaskRecord[] = []
+        const tasks = state.tasks.map((task) => {
+          const nextStatus =
+            task.id === taskId
+              ? status
+              : status === 'approved' &&
+                  target.agentConversationId &&
+                  task.agentConversationId === target.agentConversationId &&
+                  task.platformId === target.platformId &&
+                  task.platformAssetSlotId === target.platformAssetSlotId
+                ? 'rejected'
+                : task.assetStatus
+
+          if (nextStatus !== task.assetStatus) {
+            const updated = { ...task, assetStatus: nextStatus }
+            changedTasks.push(updated)
+            return updated
+          }
+          return task
+        })
+
+        if (changedTasks.length === 0) return
+        set({ tasks })
+        for (const task of changedTasks) {
+          void putTask(task)
+        }
+      },
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {

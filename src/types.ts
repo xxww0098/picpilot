@@ -242,9 +242,55 @@ export interface TaskRecord {
   agentBatchCallId?: string
   /** Agent 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
+  /** Agent 平台项目 ID */
+  platformId?: AgentPlatformId
+  /** Agent 平台资产槽位 ID */
+  platformAssetSlotId?: string | null
+  /** 平台资产候选状态 */
+  assetStatus?: AgentAssetStatus
+  /** 平台规则校验提示 */
+  validationWarnings?: string[]
 }
 
 // ===== Agent 模式 =====
+
+export type AgentPlatformId =
+  | 'ozon'
+  | 'independent_site'
+  | 'amazon'
+  | 'shopify'
+  | 'generic_legacy'
+
+export type AgentRoundStepType =
+  | 'brief'
+  | 'plan'
+  | 'generate'
+  | 'revise'
+  | 'validate'
+  | 'export'
+
+export type AgentAssetStatus = 'candidate' | 'approved' | 'rejected'
+
+export interface AgentPlatformBrief {
+  productName?: string
+  category?: string
+  targetMarket?: string
+  audience?: string
+  brandTone?: string
+  sellingPoints?: string[]
+  restrictions?: string[]
+  sourceUrl?: string
+  locale?: string
+}
+
+export interface AgentPlatformAssetPlanItem {
+  slotId: string
+  promptHint?: string
+  status: 'planned' | 'generating' | 'ready' | 'needs_revision'
+  taskIds: string[]
+  approvedTaskId?: string
+  notes?: string
+}
 
 export type AgentMessageRole = 'user' | 'assistant'
 export type AgentRoundStatus = 'running' | 'done' | 'error'
@@ -274,6 +320,9 @@ export interface AgentRound {
   outputTaskIds: string[]
   responseId?: string
   responseOutput?: ResponsesOutputItem[]
+  stepType?: AgentRoundStepType
+  targetAssetSlotId?: string | null
+  platformNotes?: string[]
   status: AgentRoundStatus
   error: string | null
   createdAt: number
@@ -288,6 +337,9 @@ export interface AgentConversation {
   updatedAt: number
   rounds: AgentRound[]
   messages: AgentMessage[]
+  platformId?: AgentPlatformId
+  platformBrief?: AgentPlatformBrief
+  assetPlan?: AgentPlatformAssetPlanItem[]
 }
 
 // ===== IndexedDB 存储的图片 =====

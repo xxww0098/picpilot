@@ -1,22 +1,28 @@
+import type { AgentPlatformId } from '../../types'
 import { EditIcon, HistoryIcon, PhotoIcon, WrenchIcon } from '../icons'
+import AgentPlatformBadge from './AgentPlatformBadge'
 
 export default function AgentConversationHeader({
   title,
+  platformId,
   activeConversationRunning,
   activeConversationErrorCount,
   activeConversationStatus,
   roundCount,
   imageCount,
   outputTaskCount,
+  assetPlanProgress,
   onCreateConversation,
 }: {
   title: string
+  platformId?: AgentPlatformId
   activeConversationRunning: boolean
   activeConversationErrorCount: number
   activeConversationStatus: string
   roundCount: number
   imageCount: number
   outputTaskCount: number
+  assetPlanProgress: string
   onCreateConversation: () => void
 }) {
   return (
@@ -29,15 +35,17 @@ export default function AgentConversationHeader({
               ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
               : activeConversationErrorCount > 0
               ? 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-300'
-              : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
+            : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
           }`}>
             {activeConversationStatus}
           </span>
+          <AgentPlatformBadge platformId={platformId} />
         </div>
         <div className="mt-1 flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
           <span className="inline-flex items-center gap-1"><HistoryIcon className="h-3.5 w-3.5" />{roundCount} 轮</span>
           <span className="inline-flex items-center gap-1"><PhotoIcon className="h-3.5 w-3.5" />{imageCount} 张图</span>
           <span className="inline-flex items-center gap-1"><WrenchIcon className="h-3.5 w-3.5" />{outputTaskCount} 个任务</span>
+          {assetPlanProgress && <span>{assetPlanProgress}</span>}
         </div>
       </div>
       <button
