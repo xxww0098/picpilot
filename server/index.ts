@@ -60,9 +60,13 @@ import {
   PROXY_QUEUE_MAX_WAIT_MS,
   PROXY_USER_SOFT_LIMIT,
   PUBLIC_DIR,
+  REVERSE_PROXY_API_KEY,
+  REVERSE_PROXY_URL,
   STATIC_DIR,
   THUMB_LONG_EDGE,
   THUMBS_DIR,
+  UPSTREAM_MODE,
+  normalizeUpstreamMode,
 } from './config.ts'
 
 type SQLQueryBindings = string | number | bigint | boolean | null | Buffer
@@ -604,8 +608,33 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ])
 
-function resolveApiProxyTarget(c: Context): URL | null {
-  if (!API_PROXY_URL) return null
+type ApiProxyUpstream = {
+  mode: 'api' | 'reverse'
+  url: string
+  apiKey: string
+  urlVar: string
+}
+
+function selectApiProxyUpstream(c: Context): ApiProxyUpstream {
+  const mode = normalizeUpstreamMode(c.req.header('X-PicPilot-Upstream-Mode'), UPSTREAM_MODE)
+  if (mode === 'reverse') {
+    return {
+      mode,
+      url: REVERSE_PROXY_URL,
+      apiKey: REVERSE_PROXY_API_KEY,
+      urlVar: 'REVERSE_PROXY_URL',
+    }
+  }
+  return {
+    mode: 'api',
+    url: API_PROXY_URL,
+    apiKey: API_PROXY_API_KEY,
+    urlVar: 'API_PROXY_URL',
+  }
+}
+
+function resolveApiProxyTarget(c: Context, upstream: ApiProxyUpstream): URL | null {
+  if (!upstream.url) return null
 
   const requestUrl = new URL(c.req.url)
   const prefix = '/api-proxy/'
@@ -614,9 +643,9 @@ function resolveApiProxyTarget(c: Context): URL | null {
   const endpointPath = requestUrl.pathname.slice(prefix.length).replace(/^\/+/, '')
   if (!endpointPath) return null
 
-  const target = new URL(API_PROXY_URL.endsWith('/') ? API_PROXY_URL : `${API_PROXY_URL}/`)
+  const target = new URL(upstream.url.endsWith('/') ? upstream.url : `${upstream.url}/`)
   if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-    throw new Error('API_PROXY_URL 只支持 http/https')
+    throw new Error(`${upstream.urlVar} 只支持 http/https`)
   }
 
   const baseSegments = target.pathname.split('/').filter(Boolean)
@@ -635,15 +664,16 @@ function resolveApiProxyTarget(c: Context): URL | null {
   return target
 }
 
-function createApiProxyRequestHeaders(c: Context): Headers {
+function createApiProxyRequestHeaders(c: Context, apiKey: string): Headers {
   const headers = new Headers(c.req.raw.headers)
   for (const header of HOP_BY_HOP_HEADERS) headers.delete(header)
   headers.delete('host')
   headers.delete('authorization')
   headers.delete('x-picpilot-authorization')
+  headers.delete('x-picpilot-upstream-mode')
 
-  if (API_PROXY_API_KEY) {
-    headers.set('authorization', `Bearer ${API_PROXY_API_KEY}`)
+  if (apiKey) {
+    headers.set('authorization', `Bearer ${apiKey}`)
   }
 
   return headers
@@ -946,7 +976,7 @@ app.all('/api-proxy/*', async (c) => {
       status: 204,
       headers: {
           Allow: 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'authorization, content-type, x-picpilot-authorization',
+          'Access-Control-Allow-Headers': 'authorization, content-type, x-picpilot-authorization, x-picpilot-upstream-mode',
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         },
       })
@@ -959,9 +989,10 @@ app.all('/api-proxy/*', async (c) => {
     })
   }
 
+  const activeUpstream = selectApiProxyUpstream(c)
   let target: URL | null
   try {
-    target = resolveApiProxyTarget(c)
+    target = resolveApiProxyTarget(c, activeUpstream)
   } catch (err) {
     logger.error({ scope: 'proxy', err: String(err) }, 'API proxy target resolution failed')
     return c.json({ error: err instanceof Error ? err.message : 'API 代理配置无效。' }, 500)
@@ -970,7 +1001,7 @@ app.all('/api-proxy/*', async (c) => {
 
   const payload = c.get('jwtPayload') as { sub: string }
   const proxyStartedAt = Date.now()
-  logger.info({ scope: 'proxy', userId: payload.sub, method: c.req.method, target: target.href }, 'API proxy request start')
+  logger.info({ scope: 'proxy', userId: payload.sub, method: c.req.method, upstreamMode: activeUpstream.mode, target: target.href }, 'API proxy request start')
   const maxBatchImages = getUserMaxBatchImages(payload.sub)
   if (maxBatchImages == null) return c.json({ error: '登录状态已失效，请重新登录。' }, 401)
 
@@ -1012,7 +1043,7 @@ app.all('/api-proxy/*', async (c) => {
   try {
     upstream = await fetch(target, {
       method: c.req.method,
-      headers: createApiProxyRequestHeaders(c),
+      headers: createApiProxyRequestHeaders(c, activeUpstream.apiKey),
       body: c.req.method === 'POST' ? c.req.raw.body : undefined,
       signal: c.req.raw.signal,
       // 取消完全交给 signal：客户端断开/取消 -> 499，前端 profile.timeout(900s)
@@ -1612,6 +1643,8 @@ async function buildDiagnosticsBundle() {
       dataDir: DATA_DIR,
       dbPath: DB_PATH,
       apiProxyConfigured: Boolean(API_PROXY_URL),
+      upstreamMode: UPSTREAM_MODE,
+      upstreamConfigured: UPSTREAM_MODE === 'reverse' ? Boolean(REVERSE_PROXY_URL) : Boolean(API_PROXY_URL),
       cliproxyLogDirConfigured: Boolean(CLIPROXY_LOG_DIR),
       eventRetentionDays: EVENT_RETENTION_DAYS,
     },

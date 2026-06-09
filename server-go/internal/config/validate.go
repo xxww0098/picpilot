@@ -10,7 +10,9 @@ package config
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -118,6 +120,121 @@ func NormalizeBooleanSetting(v any, fallback bool) bool {
 	return fallback
 }
 
+const (
+	UpstreamModeAPI     = "api"
+	UpstreamModeReverse = "reverse"
+)
+
+const (
+	OutboundProxyModeEnv     = "env"
+	OutboundProxyModeNone    = "none"
+	OutboundProxyModeHTTP    = "http"
+	OutboundProxyModeHTTPS   = "https"
+	OutboundProxyModeSOCKS5  = "socks5"
+	OutboundProxyModeSOCKS5H = "socks5h"
+)
+
+func NormalizeUpstreamMode(v any) string {
+	switch s := strings.ToLower(strings.TrimSpace(toString(v))); s {
+	case "reverse", "rev", "chatgpt2api":
+		return UpstreamModeReverse
+	default:
+		return UpstreamModeAPI
+	}
+}
+
+func NormalizeOutboundProxyType(v any, fallback string) string {
+	switch s := strings.ToLower(strings.TrimSpace(toString(v))); s {
+	case "":
+		return fallbackOutboundProxyType(fallback)
+	case OutboundProxyModeEnv, OutboundProxyModeNone, OutboundProxyModeHTTP, OutboundProxyModeHTTPS, OutboundProxyModeSOCKS5, OutboundProxyModeSOCKS5H:
+		return s
+	default:
+		return fallbackOutboundProxyType(fallback)
+	}
+}
+
+func fallbackOutboundProxyType(fallback string) string {
+	switch s := strings.ToLower(strings.TrimSpace(fallback)); s {
+	case OutboundProxyModeEnv, OutboundProxyModeNone, OutboundProxyModeHTTP, OutboundProxyModeHTTPS, OutboundProxyModeSOCKS5, OutboundProxyModeSOCKS5H:
+		return s
+	default:
+		return OutboundProxyModeEnv
+	}
+}
+
+func NormalizeOutboundProxyURL(v any) string {
+	return strings.TrimSpace(toString(v))
+}
+
+func NormalizeCLIProxyAPIURL(v any) string {
+	return strings.TrimRight(strings.TrimSpace(toString(v)), "/")
+}
+
+func NormalizeCLIProxyManagementKey(v any) string {
+	return strings.TrimSpace(toString(v))
+}
+
+func ValidateHTTPBaseURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("URL scheme must be http or https")
+	}
+	if parsed.Host == "" {
+		return errors.New("URL must include host")
+	}
+	return nil
+}
+
+func OutboundProxyTypeRequiresURL(proxyType string) bool {
+	switch NormalizeOutboundProxyType(proxyType, OutboundProxyModeEnv) {
+	case OutboundProxyModeHTTP, OutboundProxyModeHTTPS, OutboundProxyModeSOCKS5, OutboundProxyModeSOCKS5H:
+		return true
+	default:
+		return false
+	}
+}
+
+func BuildOutboundProxyURL(proxyType, proxyURL string) (*url.URL, error) {
+	mode := NormalizeOutboundProxyType(proxyType, OutboundProxyModeEnv)
+	if mode == OutboundProxyModeEnv || mode == OutboundProxyModeNone {
+		return nil, nil
+	}
+	raw := NormalizeOutboundProxyURL(proxyURL)
+	if raw == "" {
+		return nil, errors.New("proxy URL is required")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = mode + "://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Host == "" {
+		return nil, errors.New("proxy URL must include host")
+	}
+	if NormalizeOutboundProxyType(parsed.Scheme, "") != mode {
+		return nil, errors.New("proxy URL scheme does not match proxy type")
+	}
+	return parsed, nil
+}
+
+func toString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	default:
+		return ""
+	}
+}
+
 // ----- JSON patch-value parsers (ok=false when out of range/invalid) -----
 
 func parsePatchClamped(v any, lo, hi float64) (int, bool) {
@@ -154,6 +271,58 @@ func ParseBooleanPatchValue(v any) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func ParseOutboundProxyTypePatchValue(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.ToLower(strings.TrimSpace(s))
+	normalized := NormalizeOutboundProxyType(trimmed, "")
+	if trimmed != "" && normalized == OutboundProxyModeEnv && trimmed != OutboundProxyModeEnv {
+		return "", false
+	}
+	return normalized, true
+}
+
+func ParseOutboundProxyURLPatchValue(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > 2048 || strings.ContainsAny(s, "\r\n\t") {
+		return "", false
+	}
+	return s, true
+}
+
+func ParseCLIProxyAPIURLPatchValue(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = NormalizeCLIProxyAPIURL(s)
+	if len(s) > 2048 || strings.ContainsAny(s, "\r\n\t") {
+		return "", false
+	}
+	if err := ValidateHTTPBaseURL(s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+func ParseCLIProxyManagementKeyPatchValue(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = NormalizeCLIProxyManagementKey(s)
+	if len(s) > 4096 || strings.ContainsAny(s, "\r\n\t") {
+		return "", false
+	}
+	return s, true
 }
 
 func GetPositiveIntegerValue(v any) (int, bool) {

@@ -29,7 +29,7 @@ import Select from './Select'
 // 让出图过程中高频的 task 更新不再重渲整个 InputBar。
 const EMPTY_TASKS: TaskRecord[] = []
 
-const PROMPT_TEMPLATES = [
+const GALLERY_PROMPT_TEMPLATES = [
   {
     id: 'product-main',
     label: '商品主图',
@@ -49,6 +49,29 @@ const PROMPT_TEMPLATES = [
     id: 'variant',
     label: '变体延展',
     text: '基于参考图延展同系列视觉，保持主体一致、风格一致、光线一致，只调整构图和场景，适合生成多张可比较变体。',
+  },
+] as const
+
+const AGENT_PROMPT_TEMPLATES = [
+  {
+    id: 'agent-main-set',
+    label: '主图方案',
+    text: '为这个商品生成一组电商主图方案：先判断主体和关键卖点，再输出 4 个构图版本。要求主体比例稳定，材质真实，背景干净，适合上架首图。',
+  },
+  {
+    id: 'agent-reference-variants',
+    label: '参考图变体',
+    text: '基于参考图生成同系列变体：保持商品主体、颜色和关键结构一致，只调整背景、光线和构图。每个版本说明适合的使用位置。',
+  },
+  {
+    id: 'agent-repair',
+    label: '细节修复',
+    text: '检查参考图中的瑕疵、边缘、文字和材质一致性，先指出需要修复的问题，再生成修复版本。不要改变商品比例，不新增无关元素。',
+  },
+  {
+    id: 'agent-detail-page',
+    label: '详情页卖点',
+    text: '把商品拆成 3 个详情页卖点图：每个卖点给出画面目标、构图建议和生成提示词，并按顺序生成适合连续展示的图片。',
   },
 ] as const
 
@@ -183,7 +206,7 @@ export default function InputBar() {
     maskDraft,
     maskPreviewUrl,
     promptPlaceholder: appMode === 'agent'
-      ? '输入给 Agent 的任务，可输入 @ 引用图片...'
+      ? '描述要生成或修改的商品图，可用 @ 引用历史图片...'
       : isVideoMode
       ? '描述你想生成的视频...'
       : undefined,
@@ -211,6 +234,8 @@ export default function InputBar() {
     ? `管理员设置单次最多生成 ${outputImageLimit} 张`
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
   const displaySize = getParamValueLabel('size', normalizeImageSize(params.size) || DEFAULT_PARAMS.size)
+  const activePromptTemplates = appMode === 'agent' ? AGENT_PROMPT_TEMPLATES : GALLERY_PROMPT_TEMPLATES
+  const promptTemplatePlaceholder = appMode === 'agent' ? '常用任务' : '提示词模板'
 
   const qualityOptions = [
     { label: '自动', value: 'auto' },
@@ -244,12 +269,13 @@ export default function InputBar() {
 
   const applyPromptTemplate = useCallback((templateId: string) => {
     setPromptTemplateId(templateId)
-    const template = PROMPT_TEMPLATES.find((item) => item.id === templateId)
+    const templates = appMode === 'agent' ? AGENT_PROMPT_TEMPLATES : GALLERY_PROMPT_TEMPLATES
+    const template = templates.find((item) => item.id === templateId)
     if (!template) return
     const current = useStore.getState().prompt.trim()
     setPrompt(current ? `${current}\n\n${template.text}` : template.text)
     setPromptTemplateId('')
-  }, [setPrompt])
+  }, [appMode, setPrompt])
 
   useEffect(() => {
     setOutputCompressionInput(
@@ -746,10 +772,11 @@ export default function InputBar() {
             <select
               value={promptTemplateId}
               onChange={(e) => applyPromptTemplate(e.target.value)}
+              aria-label={promptTemplatePlaceholder}
               className="rounded-lg border border-gray-200/60 bg-white/60 px-2.5 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
             >
-              <option value="">提示词模板</option>
-              {PROMPT_TEMPLATES.map((template) => (
+              <option value="">{promptTemplatePlaceholder}</option>
+              {activePromptTemplates.map((template) => (
                 <option key={template.id} value={template.id}>{template.label}</option>
               ))}
             </select>

@@ -26,9 +26,11 @@ tar czf picpilot-backup.tar.gz /opt/picpilot/data/
 ```env
 ADMIN_USERS=admin:your-strong-password
 JWT_SECRET=<openssl rand -hex 32 生成>
+UPSTREAM_MODE=api
 API_PROXY_API_KEY=your-api-key
 CLIPROXY_API_URL=http://cliproxy:8317
 CLIPROXY_MGMT_KEY=your-management-key
+REVERSE_PROXY_URL=internal
 MAX_CONCURRENT_PROXY_REQUESTS=5
 PROXY_QUEUE_MAX=10
 PROXY_QUEUE_MAX_WAIT_MS=240000
@@ -38,12 +40,25 @@ PROXY_QUEUE_MAX_WAIT_MS=240000
 |------|------|------|
 | `ADMIN_USERS` | 管理员账号，格式 `用户名:密码` | 是 |
 | `JWT_SECRET` | JWT 签名密钥，至少 32 字符 | 是 |
-| `API_PROXY_API_KEY` | CLIProxyAPI 的 API Key | 是 |
+| `UPSTREAM_MODE` | 上游模式：`api` 使用 CLIProxy/API，`reverse` 使用 Go 内置 ChatGPT 逆向 | 否 |
+| `API_PROXY_API_KEY` | API 模式 CLIProxyAPI 的 API Key | `api` 模式必填 |
 | `CLIPROXY_API_URL` | CLIProxyAPI 地址（默认 `http://cliproxy:8317`） | 否 |
 | `CLIPROXY_MGMT_KEY` | CLIProxyAPI 管理密钥（用于查询凭证状态） | 否 |
+| `REVERSE_PROXY_URL` | reverse 模式地址；内置实现填 `internal` | `reverse` 模式必填 |
+| `OUTBOUND_PROXY_TYPE` | 服务端出站代理默认类型：`env` / `none` / `http` / `https` / `socks5` / `socks5h`，可在管理端运行时覆盖 | 否 |
+| `OUTBOUND_PROXY_URL` | 出站代理默认地址，格式 `host:port` 或完整代理 URL | 否 |
 | `MAX_CONCURRENT_PROXY_REQUESTS` | 全局并发上限（默认 5） | 否 |
 | `PROXY_QUEUE_MAX` | 等待队列长度上限（默认 10），已满则立即 429 | 否 |
 | `PROXY_QUEUE_MAX_WAIT_MS` | 排队最长等待毫秒（默认 240000，上限 240000），超时返回 429 | 否 |
+
+reverse 模式默认使用 Go 内置实现，不需要 `chatgpt2api` 容器：
+
+管理员可在「管理面板 → 逆向账号」导入或删除 ChatGPT/Codex OAuth JSON；账号只存入 PicPilot SQLite 数据库，不需要给 auth 容器挂载账号目录。
+
+```bash
+cd /opt/picpilot
+docker compose -f compose.yml up -d auth
+```
 
 ## 并发控制
 
@@ -106,14 +121,19 @@ services:
 
   auth:
     build:
-      context: /root/picpilot/server
+      context: /root/picpilot/server-go
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       - ADMIN_USERS=${ADMIN_USERS}
       - JWT_SECRET=${JWT_SECRET}
+      - UPSTREAM_MODE=${UPSTREAM_MODE:-api}
       - API_PROXY_URL=${API_PROXY_URL:-http://cliproxy:8317/v1}
       - API_PROXY_API_KEY=${API_PROXY_API_KEY}
+      - REVERSE_PROXY_URL=${REVERSE_PROXY_URL:-internal}
+      - REVERSE_PROXY_API_KEY=${REVERSE_PROXY_API_KEY}
+      - CHATGPT2API_AUTH_KEY=${CHATGPT2API_AUTH_KEY}
+      - CHATGPT_REVERSE_BASE_URL=${CHATGPT_REVERSE_BASE_URL:-https://chatgpt.com}
       - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cliproxy:8317}
       - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY}
       - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}

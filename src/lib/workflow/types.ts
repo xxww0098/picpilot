@@ -38,6 +38,10 @@ export const DEFAULT_GENERATE_PARAMS: WorkflowGenerateParams = {
 export type InputNodeData = {
   kind: 'input'
   label: string
+  /** 输入说明,用于模板化工作流指导用户上传哪类图片。 */
+  description?: string
+  /** 限制图片数量;单图模板设为 1 时,新上传会替换旧图。 */
+  maxImages?: number
   /** 用户上传的产品图 / 参考图 */
   images: WorkflowImage[]
 }
@@ -143,12 +147,16 @@ export function makeEdgeId(source: string, target: string, sourceHandle?: string
   return `e-${source}.${sourceHandle ?? HANDLE.OUT}-${target}.${targetHandle ?? HANDLE.IN}`
 }
 
-export function createInputNode(position: { x: number; y: number }, label = '输入图片'): InputNode {
+export function createInputNode(
+  position: { x: number; y: number },
+  label = '输入图片',
+  options: { description?: string; maxImages?: number } = {},
+): InputNode {
   return {
     id: makeNodeId('input'),
     type: 'input',
     position,
-    data: { kind: 'input', label, images: [] },
+    data: { kind: 'input', label, description: options.description, maxImages: options.maxImages, images: [] },
   }
 }
 

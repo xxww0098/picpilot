@@ -119,21 +119,40 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
 }
 
 function getResponsesImageResultBase64(result: ResponsesOutputItem['result']): string | undefined {
-  const b64 = typeof result === 'string'
-    ? result
-    : result && typeof result === 'object'
-    ? typeof result.b64_json === 'string'
-      ? result.b64_json
-      : typeof result.base64 === 'string'
-      ? result.base64
-      : typeof result.image === 'string'
-      ? result.image
-      : typeof result.data === 'string'
-      ? result.data
-      : ''
-    : ''
+  if (typeof result === 'string') return result.trim() ? result : undefined
+  if (!result || typeof result !== 'object') return undefined
 
-  return b64.trim() ? b64 : undefined
+  if (Array.isArray(result)) {
+    for (const item of result) {
+      const b64 = getResponsesImageResultBase64(item as ResponsesOutputItem['result'])
+      if (b64) return b64
+    }
+    return undefined
+  }
+
+  const record = result as Record<string, unknown>
+  const b64 = typeof record.b64_json === 'string'
+    ? record.b64_json
+    : typeof record.base64 === 'string'
+    ? record.base64
+    : typeof record.image === 'string'
+    ? record.image
+    : typeof record.data === 'string'
+    ? record.data
+    : ''
+  if (b64.trim()) return b64
+
+  const data = record.data
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const nested = getResponsesImageResultBase64(item as ResponsesOutputItem['result'])
+      if (nested) return nested
+    }
+  } else if (isRecordValue(data)) {
+    return getResponsesImageResultBase64(data as ResponsesOutputItem['result'])
+  }
+
+  return undefined
 }
 
 
@@ -141,9 +160,16 @@ function getResponsesStreamPayload(event: Record<string, unknown>): ResponsesApi
   const response = event.response
   if (isRecordValue(response)) return response as ResponsesApiResponse
 
+  const output = event.output
+  if (Array.isArray(output)) return { output: output.filter(isRecordValue) as ResponsesOutputItem[] }
+
   const item = event.item
   if (isRecordValue(item) && item.type === 'image_generation_call') {
     return { output: [item as ResponsesOutputItem] }
+  }
+
+  if (getResponsesImageResultBase64(event.result as ResponsesOutputItem['result'])) {
+    return { output: [{ ...event, type: 'image_generation_call' } as ResponsesOutputItem] }
   }
 
   return null
@@ -160,7 +186,7 @@ async function parseResponsesApiStreamResponse(
   await readJsonServerSentEvents(response, (event) => {
     const type = getStringValue(event, 'type')
     if (type === 'response.image_generation_call.partial_image') {
-      const b64 = getStringValue(event, 'partial_image_b64')
+      const b64 = getStringValue(event, 'partial_image_b64') ?? getStringValue(event, 'b64_json')
       if (b64) {
         onPartialImage?.({
           image: normalizeBase64Image(b64, mime),

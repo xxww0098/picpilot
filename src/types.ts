@@ -1,6 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
+export type UpstreamMode = 'server' | 'api' | 'reverse'
 export type AppMode = 'gallery' | 'agent' | 'video' | 'workflow'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 /** 多张参考图的提交模式：each=每张各生成（N→N）；merge=合成为一次请求（N→1） */
@@ -69,11 +70,12 @@ export interface ApiProfile {
   model: string
   timeout: number
   apiMode: ApiMode
+  upstreamMode: UpstreamMode
   codexCli: boolean
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'upstreamMode' | 'codexCli' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
 }
 
 export interface AppSettings {
@@ -146,6 +148,21 @@ export interface MaskDraft {
 
 export type TaskStatus = 'running' | 'done' | 'error'
 
+export interface TaskImageSource {
+  /** 该输出图片实际使用的 Provider 类型 */
+  apiProvider?: ApiProvider
+  /** 该输出图片实际使用的 API 配置 ID */
+  apiProfileId?: string
+  /** 该输出图片实际使用的 Provider 名称 */
+  apiProfileName?: string
+  /** 该输出图片实际使用的 API 模式 */
+  apiMode?: ApiMode
+  /** 该输出图片实际使用的模型 ID */
+  apiModel?: string
+  /** 该输出图片实际使用的上游模式 */
+  upstreamMode?: UpstreamMode
+}
+
 export interface TaskRecord {
   id: string
   prompt: string
@@ -160,6 +177,10 @@ export interface TaskRecord {
   apiMode?: ApiMode
   /** 生成时使用的模型 ID */
   apiModel?: string
+  /** 生成时使用的上游模式；旧记录可能为空 */
+  upstreamMode?: UpstreamMode
+  /** 每张输出图片的实际来源；用于失败补图/单张重生后来源可能混合的任务 */
+  sourceByImage?: Record<string, TaskImageSource>
   /** 自定义异步服务商任务 ID，用于重启后继续查询结果 */
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
@@ -184,6 +205,8 @@ export interface TaskRecord {
   videoDurationSeconds?: number
   /** 批量生成（n>1）中失败的张数；部分成功时 > 0，此时 status 仍为 'done' */
   failedImageCount?: number
+  /** 当前失败槽位最后一次实际尝试使用的来源；旧记录为空时回退到任务级来源 */
+  failedImageSource?: TaskImageSource
   /** 批量生成中失败槽位的错误信息（用于展示/重试提示） */
   partialImageErrors?: string[]
   /**

@@ -12,6 +12,7 @@ import {
 import {
   getNumberValue,
   getStringValue,
+  isRecordValue,
   normalizeImageApiPayload,
   readJsonServerSentEvents,
 } from './shared'
@@ -66,9 +67,37 @@ export async function parseImagesApiResponse(payload: ImageApiResponse, mime: st
   }
 }
 
+function getImageValueFields(source: Record<string, unknown>): Pick<ImageResponseItem, 'b64_json' | 'url'> {
+  const explicitB64 = getStringValue(source, 'b64_json') ?? getStringValue(source, 'base64')
+  if (explicitB64) return { b64_json: explicitB64 }
+
+  const explicitUrl = getStringValue(source, 'url') ?? getStringValue(source, 'image_url')
+  if (explicitUrl) return { url: explicitUrl }
+
+  const image = getStringValue(source, 'image')
+  if (image) return isHttpUrl(image) || isDataUrl(image) ? { url: image } : { b64_json: image }
+
+  const data = source.data
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (!isRecordValue(item)) continue
+      const nested = getImageValueFields(item)
+      if (nested.b64_json || nested.url) return nested
+    }
+  } else if (isRecordValue(data)) {
+    const nested = getImageValueFields(data)
+    if (nested.b64_json || nested.url) return nested
+  } else {
+    const dataString = getStringValue(source, 'data')
+    if (dataString) return isHttpUrl(dataString) || isDataUrl(dataString) ? { url: dataString } : { b64_json: dataString }
+  }
+
+  return {}
+}
+
 function eventToImageResponseItem(event: Record<string, unknown>): ImageResponseItem {
   return {
-    b64_json: getStringValue(event, 'b64_json'),
+    ...getImageValueFields(event),
     revised_prompt: getStringValue(event, 'revised_prompt'),
     size: getStringValue(event, 'size'),
     quality: getStringValue(event, 'quality'),
@@ -76,6 +105,32 @@ function eventToImageResponseItem(event: Record<string, unknown>): ImageResponse
     output_compression: getNumberValue(event, 'output_compression'),
     moderation: getStringValue(event, 'moderation'),
   }
+}
+
+function eventToImageResponseItems(event: Record<string, unknown>): ImageResponseItem[] {
+  const direct = eventToImageResponseItem(event)
+  if (direct.b64_json || direct.url) return [direct]
+
+  const result = event.result
+  if (typeof result === 'string' && result.trim()) {
+    return [{ ...eventToImageResponseItem(event), b64_json: result }]
+  }
+  if (isRecordValue(result)) {
+    const item = eventToImageResponseItem({ ...event, ...result })
+    return item.b64_json || item.url ? [item] : []
+  }
+
+  const data = event.data
+  const dataItems = Array.isArray(data)
+    ? data
+    : isRecordValue(data)
+    ? [data]
+    : []
+
+  return dataItems
+    .filter(isRecordValue)
+    .map((item) => eventToImageResponseItem({ ...event, ...item }))
+    .filter((item) => Boolean(item.b64_json || item.url))
 }
 
 export async function parseImagesApiStreamResponse(
@@ -90,7 +145,7 @@ export async function parseImagesApiStreamResponse(
     const type = getStringValue(event, 'type')
     const object = getStringValue(event, 'object')
     if (type === 'image_generation.partial_image' || type === 'image_edit.partial_image') {
-      const b64 = getStringValue(event, 'b64_json')
+      const b64 = getStringValue(event, 'b64_json') ?? getStringValue(event, 'partial_image_b64')
       if (b64) {
         onPartialImage?.({
           image: normalizeBase64Image(b64, mime),
@@ -106,7 +161,12 @@ export async function parseImagesApiStreamResponse(
     }
 
     if (type === 'image_generation.completed' || type === 'image_edit.completed') {
-      completedItems.push(eventToImageResponseItem(event))
+      const payload = normalizeImageApiPayload(event)
+      if (Array.isArray(payload.data) && payload.data.length) {
+        resultPayload = payload
+        return
+      }
+      completedItems.push(...eventToImageResponseItems(event))
     }
   })
 

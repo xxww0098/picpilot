@@ -24,6 +24,7 @@ import (
 
 	"github.com/xxww0098/picpilot/server-go/internal/admin"
 	"github.com/xxww0098/picpilot/server-go/internal/auth"
+	"github.com/xxww0098/picpilot/server-go/internal/chatgptreverse"
 	"github.com/xxww0098/picpilot/server-go/internal/config"
 	"github.com/xxww0098/picpilot/server-go/internal/db"
 	"github.com/xxww0098/picpilot/server-go/internal/diagnostics"
@@ -35,6 +36,8 @@ import (
 	"github.com/xxww0098/picpilot/server-go/internal/static"
 	"github.com/xxww0098/picpilot/server-go/internal/task"
 	"github.com/xxww0098/picpilot/server-go/internal/telemetry"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
+	"github.com/xxww0098/picpilot/server-go/internal/upstreamcooldown"
 )
 
 // AppVersion is overridable at build time via -ldflags "-X main.AppVersion=...".
@@ -113,6 +116,8 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 func main() {
 	logger := newLogger()
 	cfg := config.Load(logger)
+	appCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
 
 	database, err := db.Open(cfg.DBPath, cfg.DefaultMaxBatchImages)
 	if err != nil {
@@ -135,6 +140,17 @@ func main() {
 	if err := authMod.Seed(os.Getenv("ADMIN_USERS"), os.Getenv("AUTH_USERS")); err != nil {
 		logger.Error("user seeding failed", "err", err.Error())
 	}
+	cooldownGate := upstreamcooldown.NewGate()
+	activeUpstream := upstream.FromConfig(cfg)
+	reverseStore := chatgptreverse.NewStore(database)
+	if result, err := chatgptreverse.SyncAuthAccountsFromDir(context.Background(), reverseStore, cfg.ChatGPTReverseAuthDir); err != nil {
+		logger.Warn("chatgpt reverse auth dir sync failed", "scope", "reverse", "dir", cfg.ChatGPTReverseAuthDir, "err", err.Error())
+	} else if result.Imported > 0 || result.Updated > 0 || result.Unchanged > 0 {
+		logger.Info("chatgpt reverse auth dir synced", "scope", "reverse", "dir", cfg.ChatGPTReverseAuthDir, "imported", result.Imported, "updated", result.Updated, "unchanged", result.Unchanged, "skipped", result.Skipped)
+	}
+	reverseService := chatgptreverse.New(cfg, reverseStore, logger, settingsProvider)
+	reverseService.StartQuotaLimitedRefreshLoop(appCtx, 0)
+	upstreamConfigured := currentUpstreamConfigured(activeUpstream, reverseService)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)     // real client IP from X-Real-IP (behind Caddy) for rate limiting
@@ -142,20 +158,25 @@ func main() {
 	r.Use(requestLogger(logger)) // structured access log for /api/* (transparent to streaming)
 
 	r.Get("/api/health", func(w http.ResponseWriter, _ *http.Request) {
-		httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok", "version": AppVersion})
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"status":             "ok",
+			"version":            AppVersion,
+			"upstreamMode":       activeUpstream.Mode,
+			"upstreamConfigured": currentUpstreamConfigured(activeUpstream, reverseService),
+		})
 	})
 
 	authMod.Register(r)
 	// proxy module owns /api-proxy/* (JWT + RequireUser + queue) and JWT-gated /api/queue/stats.
-	proxy.New(cfg, proxyQueue, settingsProvider, authMod, logger).Register(r)
+	proxy.NewWithCooldownGate(cfg, proxyQueue, settingsProvider, authMod, logger, cooldownGate, reverseService).Register(r)
 	// async task model: submit/status/SSE/cancel, executor shares the global queue.
-	taskMod := task.New(database, proxyQueue, settingsProvider, cfg, authMod, logger)
+	taskMod := task.NewWithCooldownGate(database, proxyQueue, settingsProvider, cfg, authMod, logger, cooldownGate, reverseService)
 	taskMod.Start()
 	taskMod.Register(r)
 	// gallery + avatars (publish/list/delete/serve + avatar upload/get/delete).
 	gallery.New(database, cfg, authMod, logger).Register(r)
 	// admin backend (team settings runtime, users, invites, events/export, overview, moderation).
-	admin.New(database, cfg, proxyQueue, settingsProvider, authMod, logger).Register(r)
+	admin.New(database, cfg, proxyQueue, settingsProvider, authMod, logger, reverseService).Register(r)
 	// telemetry event recorder + notifications; also runs the event-retention purge.
 	telemetryMod := telemetry.New(database, authMod, logger, cfg.EventRetentionDays)
 	telemetryMod.Register(r)
@@ -185,6 +206,7 @@ func main() {
 
 	go func() {
 		logger.Info("server starting", "addr", srv.Addr, "version", AppVersion,
+			"upstreamMode", activeUpstream.Mode, "upstreamConfigured", upstreamConfigured,
 			"maxConcurrent", sp.MaxConcurrent, "maxQueue", sp.MaxQueue)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server error", "err", err.Error())
@@ -197,9 +219,17 @@ func main() {
 	<-stop
 
 	logger.Info("server shutting down")
+	stopBackground()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err.Error())
 	}
+}
+
+func currentUpstreamConfigured(active upstream.Target, reverseService *chatgptreverse.Service) bool {
+	if active.Internal {
+		return reverseService.Configured()
+	}
+	return active.Configured()
 }

@@ -110,7 +110,13 @@ export const InputNodeView = memo(function InputNodeView({ id, data }: NodeProps
     async (files: FileList | null) => {
       if (!files || files.length === 0) return
       const added = await readImageFiles(files)
-      updateNodeData(id, (node) => ({ images: [...(node.data as InputNode['data']).images, ...added] }))
+      if (added.length === 0) return
+      updateNodeData(id, (node) => {
+        const nodeData = node.data as InputNode['data']
+        const maxImages = typeof nodeData.maxImages === 'number' && nodeData.maxImages > 0 ? Math.floor(nodeData.maxImages) : null
+        const next = maxImages === 1 ? added.slice(-1) : [...nodeData.images, ...added].slice(-(maxImages ?? Infinity))
+        return { images: next }
+      })
     },
     [id, updateNodeData],
   )
@@ -122,6 +128,11 @@ export const InputNodeView = memo(function InputNodeView({ id, data }: NodeProps
 
   return (
     <NodeShell title={data.label} accent="#0ea5e9">
+      {data.description && (
+        <div className="mb-2 rounded-md bg-sky-500/10 px-2 py-1.5 text-[11px] leading-4 text-sky-700 dark:text-sky-300">
+          {data.description}
+        </div>
+      )}
       {data.images.length > 0 ? (
         <div className="mb-2 grid grid-cols-3 gap-1.5">
           {data.images.map((img) => (
@@ -144,9 +155,9 @@ export const InputNodeView = memo(function InputNodeView({ id, data }: NodeProps
         onClick={() => inputRef.current?.click()}
         className="nodrag w-full rounded-lg border border-dashed border-[hsl(var(--border))] py-2 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:border-[hsl(var(--primary))] hover:text-[hsl(var(--primary))]"
       >
-        + 上传图片
+        {data.maxImages === 1 && data.images.length > 0 ? '替换图片' : '+ 上传图片'}
       </button>
-      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => void onFiles(e.target.files)} />
+      <input ref={inputRef} type="file" accept="image/*" multiple={data.maxImages !== 1} className="hidden" onChange={(e) => void onFiles(e.target.files)} />
       <Handle type="source" position={Position.Right} id={HANDLE.OUT} className={HANDLE_CLASS} />
     </NodeShell>
   )

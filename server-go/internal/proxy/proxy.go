@@ -1,9 +1,10 @@
 // Package proxy ports the authenticated API proxy (/api-proxy/*) from server/index.ts.
 //
-// It forwards OpenAI-compatible requests to API_PROXY_URL, injecting the upstream key,
-// behind the global concurrency queue. Unlike the Bun/Hono version it needs NO SSE
-// heartbeat hack: Go's http.Server has no write/idle deadline here, and ReverseProxy
-// with FlushInterval=-1 streams chunks immediately, so long silent streams stay alive.
+// It forwards OpenAI-compatible requests to the active upstream selected by
+// UPSTREAM_MODE, injecting the upstream key behind the global concurrency queue.
+// Unlike the Bun/Hono version it needs NO SSE heartbeat hack: Go's http.Server has no
+// write/idle deadline here, and ReverseProxy with FlushInterval=-1 streams chunks
+// immediately, so long silent streams stay alive.
 package proxy
 
 import (
@@ -16,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,10 +25,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/xxww0098/picpilot/server-go/internal/auth"
+	"github.com/xxww0098/picpilot/server-go/internal/chatgptreverse"
 	"github.com/xxww0098/picpilot/server-go/internal/config"
 	"github.com/xxww0098/picpilot/server-go/internal/httpx"
+	"github.com/xxww0098/picpilot/server-go/internal/outboundproxy"
 	"github.com/xxww0098/picpilot/server-go/internal/queue"
 	"github.com/xxww0098/picpilot/server-go/internal/settings"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
+	"github.com/xxww0098/picpilot/server-go/internal/upstreamcooldown"
 )
 
 // hop-by-hop headers stripped on both request and response (mirrors HOP_BY_HOP_HEADERS).
@@ -47,13 +51,18 @@ type Proxy struct {
 	auth      *auth.Auth
 	logger    *slog.Logger
 	transport http.RoundTripper
+	reverse   *chatgptreverse.Service
 }
 
 // New constructs the proxy module with a long-request-friendly transport (60s dial,
 // no response-header timeout, since image generation can take minutes before responding).
 func New(cfg *config.Config, q *queue.Queue, sp *settings.Provider, a *auth.Auth, logger *slog.Logger) *Proxy {
+	return NewWithCooldownGate(cfg, q, sp, a, logger, upstreamcooldown.NewGate())
+}
+
+func NewWithCooldownGate(cfg *config.Config, q *queue.Queue, sp *settings.Provider, a *auth.Auth, logger *slog.Logger, gate *upstreamcooldown.Gate, reverse ...*chatgptreverse.Service) *Proxy {
 	base := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 outboundproxy.ProxyFunc(sp),
 		DialContext:           (&net.Dialer{Timeout: 60 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -66,9 +75,13 @@ func New(cfg *config.Config, q *queue.Queue, sp *settings.Provider, a *auth.Auth
 		// Retry transient upstream failures before the response reaches the client.
 		// Only error responses (429/5xx) and transport errors are retried; 2xx
 		// responses (which may stream SSE/partial images) pass through untouched.
-		tr = &retryTransport{base: base, maxRetries: cfg.UpstreamMaxRetries, logger: logger}
+		tr = &retryTransport{base: base, maxRetries: cfg.UpstreamMaxRetries, logger: logger, cooldowns: gate}
 	}
-	return &Proxy{cfg: cfg, q: q, settings: sp, auth: a, logger: logger, transport: tr}
+	var reverseService *chatgptreverse.Service
+	if len(reverse) > 0 {
+		reverseService = reverse[0]
+	}
+	return &Proxy{cfg: cfg, q: q, settings: sp, auth: a, logger: logger, transport: tr, reverse: reverseService}
 }
 
 // retryTransport retries transient upstream failures (transport errors, HTTP 429, HTTP
@@ -80,6 +93,7 @@ type retryTransport struct {
 	base       http.RoundTripper
 	maxRetries int
 	logger     *slog.Logger
+	cooldowns  *upstreamcooldown.Gate
 }
 
 const maxRetryBodyBytes = 8 << 20 // 8 MiB
@@ -101,13 +115,30 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	model := upstreamcooldown.ExtractRequestModel(req.Header.Get("Content-Type"), replay)
 	backoff := 500 * time.Millisecond
 	for attempt := 1; ; attempt++ {
+		if waited, err := rt.cooldowns.Wait(req.Context(), model); err != nil {
+			return nil, err
+		} else if waited > 0 {
+			rt.logger.Info("waited for upstream model cooldown", "scope", "proxy",
+				"model", model, "waitMs", waited.Milliseconds())
+		}
 		if replay != nil {
 			req.Body = io.NopCloser(bytes.NewReader(replay))
 			req.ContentLength = int64(len(replay))
 		}
 		resp, err := rt.base.RoundTrip(req)
+		cooldownDelay, cooldownModel := inspectCooldown(resp)
+		if cooldownModel != "" {
+			model = cooldownModel
+		}
+		if cooldownDelay > 0 {
+			rt.cooldowns.Set(model, cooldownDelay)
+			if resp != nil && resp.Header.Get("Retry-After") == "" {
+				resp.Header.Set("Retry-After", upstreamcooldown.RetryAfterSeconds(cooldownDelay))
+			}
+		}
 
 		retryable := false
 		switch {
@@ -127,15 +158,43 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		rt.logger.Warn("upstream proxy attempt failed; retrying", "scope", "proxy",
 			"attempt", attempt, "maxRetries", rt.maxRetries, "status", statusOf(resp), "err", errStr(err))
+		sleep := backoff
+		if cooldownDelay > sleep {
+			sleep = cooldownDelay
+		}
 		select {
 		case <-req.Context().Done():
 			return nil, req.Context().Err()
-		case <-time.After(backoff):
+		case <-time.After(sleep):
 		}
 		if backoff < 8*time.Second {
 			backoff *= 2
 		}
 	}
+}
+
+func inspectCooldown(resp *http.Response) (time.Duration, string) {
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests || resp.Body == nil {
+		if resp != nil {
+			return upstreamcooldown.RetryAfterDelay(resp.Header), ""
+		}
+		return 0, ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return upstreamcooldown.RetryAfterDelay(resp.Header), ""
+	}
+	info := upstreamcooldown.ParseBody(body)
+	if info == nil {
+		return upstreamcooldown.RetryAfterDelay(resp.Header), ""
+	}
+	delay := info.Delay
+	if headerDelay := upstreamcooldown.RetryAfterDelay(resp.Header); headerDelay > delay {
+		delay = headerDelay
+	}
+	return delay, info.Model
 }
 
 func statusOf(resp *http.Response) int {
@@ -204,7 +263,21 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
-	target, err := resolveTarget(p.cfg.APIProxyURL, r.URL.Path, r.URL.RawQuery)
+	activeUpstream := upstream.FromConfigForMode(p.cfg, r.Header.Get("X-PicPilot-Upstream-Mode"))
+	endpoint := proxyEndpoint(r.URL.Path)
+	if activeUpstream.Internal {
+		if p.reverse == nil || !p.reverse.Configured() {
+			httpx.Error(w, http.StatusServiceUnavailable, "内置 reverse 未配置 ChatGPT 凭据，请联系管理员。")
+			return
+		}
+		if endpoint == "" {
+			httpx.Error(w, http.StatusNotFound, "接口不存在。")
+			return
+		}
+		p.handleInternalReverse(w, r, endpoint)
+		return
+	}
+	target, err := activeUpstream.ResolveProxy(r.URL.Path, r.URL.RawQuery)
 	if err != nil {
 		p.logger.Error("api proxy target resolution failed", "scope", "proxy", "err", err.Error())
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
@@ -257,7 +330,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = target
 			pr.Out.Host = target.Host
-			pr.Out.Header = buildUpstreamHeaders(r.Header, p.cfg.APIProxyAPIKey)
+			pr.Out.Header = buildUpstreamHeaders(r.Header, activeUpstream.APIKey)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			for _, h := range hopByHop {
@@ -272,57 +345,55 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 				p.logger.Info("api proxy request aborted", "scope", "proxy", "err", e.Error())
 				return
 			}
-			p.logger.Error("upstream api request failed", "scope", "proxy", "target", target.String(), "err", e.Error())
+			p.logger.Error("upstream api request failed", "scope", "proxy", "mode", activeUpstream.Mode, "target", target.String(), "err", e.Error())
 			httpx.Error(ew, http.StatusBadGateway, "上游 API 请求失败，请稍后重试。")
 		},
 	}
 	rp.ServeHTTP(w, r)
 }
 
-// resolveTarget ports resolveApiProxyTarget: joins API_PROXY_URL with the /api-proxy/*
-// suffix, tolerating a duplicated trailing /v1 (so /api-proxy/v1/models -> .../v1/models).
-func resolveTarget(apiProxyURL, reqPath, rawQuery string) (*url.URL, error) {
-	if apiProxyURL == "" {
-		return nil, nil
+func (p *Proxy) handleInternalReverse(w http.ResponseWriter, r *http.Request, endpoint string) {
+	claims := auth.ClaimsFrom(r.Context())
+	userID := ""
+	if claims != nil {
+		userID = claims.Subject
 	}
-	const prefix = "/api-proxy/"
-	if !strings.HasPrefix(reqPath, prefix) {
-		return nil, nil
-	}
-	endpointPath := strings.TrimLeft(reqPath[len(prefix):], "/")
-	if endpointPath == "" {
-		return nil, nil
-	}
-	base := apiProxyURL
-	if !strings.HasSuffix(base, "/") {
-		base += "/"
-	}
-	target, err := url.Parse(base)
-	if err != nil {
-		return nil, err
-	}
-	if target.Scheme != "http" && target.Scheme != "https" {
-		return nil, errors.New("API_PROXY_URL 只支持 http/https")
-	}
-	baseSeg := splitNonEmpty(target.Path)
-	epSeg := splitNonEmpty(endpointPath)
-	if len(baseSeg) > 0 && len(epSeg) > 0 && baseSeg[len(baseSeg)-1] == "v1" && epSeg[0] == "v1" {
-		epSeg = epSeg[1:]
-	}
-	target.Path = "/" + strings.Join(append(baseSeg, epSeg...), "/")
-	target.RawQuery = rawQuery
-	return target, nil
-}
 
-func splitNonEmpty(p string) []string {
-	parts := strings.Split(p, "/")
-	out := parts[:0]
-	for _, s := range parts {
-		if s != "" {
-			out = append(out, s)
+	maxBatch := p.settings.DefaultMaxBatchImages()
+	if r.Method == http.MethodPost {
+		if n := estimateRequestedImageCount(r, "/v1/"+endpoint); n > maxBatch {
+			httpx.JSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":          "单次批量生成数量上限为 " + itoa(maxBatch) + " 张，本次请求 " + itoa(n) + " 张。请减少数量后重试。",
+				"maxBatchImages": maxBatch,
+				"requested":      n,
+			})
+			return
 		}
 	}
-	return out
+
+	switch err := p.q.Acquire(r.Context(), 0, userID); {
+	case err == nil:
+	case errors.Is(err, queue.ErrClientAbort):
+		w.WriteHeader(499)
+		return
+	case errors.Is(err, queue.ErrQueueFull):
+		httpx.Error(w, http.StatusTooManyRequests, "服务繁忙，排队人数过多，请稍后重试。")
+		return
+	default:
+		httpx.Error(w, http.StatusTooManyRequests, "服务繁忙，排队等待超时，请稍后重试。")
+		return
+	}
+	defer p.q.Release(userID)
+
+	p.reverse.ServeProxy(w, r, endpoint)
+}
+
+func proxyEndpoint(path string) string {
+	const prefix = "/api-proxy/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	return strings.TrimLeft(path[len(prefix):], "/")
 }
 
 // buildUpstreamHeaders clones inbound headers, strips hop-by-hop + host + client auth,
@@ -338,6 +409,7 @@ func buildUpstreamHeaders(in http.Header, apiKey string) http.Header {
 	out.Del("Host")
 	out.Del("Authorization")
 	out.Del("X-Picpilot-Authorization")
+	out.Del("X-Picpilot-Upstream-Mode")
 	if apiKey != "" {
 		out.Set("Authorization", "Bearer "+apiKey)
 	}

@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xxww0098/picpilot/server-go/internal/config"
 	"github.com/xxww0098/picpilot/server-go/internal/db"
@@ -30,6 +32,10 @@ func TestIsRetryableErr(t *testing.T) {
 }
 
 func newExecutorFor(t *testing.T, upstreamURL string, retries int) *Executor {
+	return newExecutorWithConfig(t, upstreamURL, retries, nil)
+}
+
+func newExecutorWithConfig(t *testing.T, upstreamURL string, retries int, configure func(*config.Config)) *Executor {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"), 10)
 	if err != nil {
@@ -37,6 +43,9 @@ func newExecutorFor(t *testing.T, upstreamURL string, retries int) *Executor {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	cfg := &config.Config{APIProxyURL: upstreamURL + "/v1", APIProxyAPIKey: "k", UpstreamMaxRetries: retries, MaxConcurrent: 1, DefaultRequestTimeoutSeconds: 900}
+	if configure != nil {
+		configure(cfg)
+	}
 	q := queue.New(queue.Options{MaxConcurrent: 1, MaxQueue: 10})
 	sp := settings.NewProvider(d, cfg)
 	return NewExecutor(NewStore(d), q, sp, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -64,6 +73,72 @@ func TestUpstreamRetriesTransientFailures(t *testing.T) {
 	}
 	if result == "" {
 		t.Fatal("expected result body")
+	}
+}
+
+func TestUpstreamReverseModeUsesReverseEndpointAndKey(t *testing.T) {
+	var path, authHeader, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		path = req.URL.Path
+		authHeader = req.Header.Get("Authorization")
+		b, _ := io.ReadAll(req.Body)
+		body = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"url":"http://img/reverse.png"}]}`)
+	}))
+	defer srv.Close()
+	exec := newExecutorWithConfig(t, srv.URL, 0, func(cfg *config.Config) {
+		cfg.UpstreamMode = config.UpstreamModeReverse
+		cfg.APIProxyURL = "http://api-mode-should-not-be-used.invalid/v1"
+		cfg.APIProxyAPIKey = "api-key"
+		cfg.ReverseProxyURL = srv.URL + "/v1"
+		cfg.ReverseProxyAPIKey = "reverse-key"
+	})
+
+	status, result, errType, errMsg := exec.doUpstream(context.Background(), &Task{
+		ID: "reverse", UserID: "u1", Endpoint: "images/generations", RequestJSON: `{"model":"gpt-image-2","prompt":"x"}`,
+	})
+	if status != StatusSucceeded {
+		t.Fatalf("want succeeded, got %s/%s msg=%s", status, errType, errMsg)
+	}
+	if path != "/v1/images/generations" {
+		t.Fatalf("upstream path=%q want /v1/images/generations", path)
+	}
+	if authHeader != "Bearer reverse-key" {
+		t.Fatalf("auth=%q want reverse key", authHeader)
+	}
+	if !strings.Contains(body, `"prompt":"x"`) {
+		t.Fatalf("request body not forwarded: %s", body)
+	}
+	if !strings.Contains(result, "reverse.png") {
+		t.Fatalf("result not returned from reverse upstream: %s", result)
+	}
+}
+
+func TestUpstreamHonorsModelCooldownBeforeRetry(t *testing.T) {
+	var hits atomic.Int32
+	start := time.Now()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		if time.Since(start) < 600*time.Millisecond {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"code":"model_cooldown","message":"All credentials are cooling down","model":"gpt-image-2","provider":"codex","reset_seconds":0.65}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"url":"http://img/ok.png"}]}`)
+	}))
+	defer srv.Close()
+	exec := newExecutorFor(t, srv.URL, 1)
+	status, result, errType, errMsg := exec.doUpstream(context.Background(), &Task{ID: "cooldown", UserID: "u1", Endpoint: "images/generations", RequestJSON: `{"model":"gpt-image-2","prompt":"x"}`})
+	if status != StatusSucceeded {
+		t.Fatalf("want succeeded after cooldown retry, got %s/%s msg=%s", status, errType, errMsg)
+	}
+	if result == "" {
+		t.Fatal("expected result body")
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("want 2 upstream attempts, got %d", hits.Load())
 	}
 }
 

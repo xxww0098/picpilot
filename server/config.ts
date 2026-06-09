@@ -46,6 +46,16 @@ export const EVENT_RETENTION_DAYS = Number(process.env.EVENT_RETENTION_DAYS ?? 3
 export const PER_USER_PUBLIC_QUOTA_BYTES = Number(process.env.PER_USER_PUBLIC_QUOTA_BYTES ?? 500 * 1024 * 1024)
 export const API_PROXY_URL = (process.env.API_PROXY_URL || '').trim()
 export const API_PROXY_API_KEY = (process.env.API_PROXY_API_KEY || '').trim()
+export type UpstreamMode = 'api' | 'reverse'
+export function normalizeUpstreamMode(value: unknown, fallback: UpstreamMode = 'api'): UpstreamMode {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (normalized === 'reverse' || normalized === 'rev' || normalized === 'chatgpt2api') return 'reverse'
+  if (normalized === 'api') return 'api'
+  return fallback
+}
+export const UPSTREAM_MODE = normalizeUpstreamMode(process.env.UPSTREAM_MODE || process.env.PICPILOT_UPSTREAM_MODE)
+export const REVERSE_PROXY_URL = (process.env.REVERSE_PROXY_URL || process.env.CHATGPT2API_URL || '').trim()
+export const REVERSE_PROXY_API_KEY = (process.env.REVERSE_PROXY_API_KEY || process.env.CHATGPT2API_AUTH_KEY || '').trim()
 export const MAX_CONCURRENT = Math.max(1, Number(process.env.MAX_CONCURRENT_PROXY_REQUESTS ?? 5))
 // 排队等待上限：超过 MAX_CONCURRENT 的请求进入 FIFO 队列等待放行。
 // 等待期间连接静默无字节流动，必须 < Bun idleTimeout(255s)，否则会被静默断开；这里钳到 240s 内。

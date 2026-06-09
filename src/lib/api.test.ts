@@ -131,7 +131,7 @@ describe('callImageApi', () => {
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
       onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
-    } as any)
+    })
 
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
@@ -181,7 +181,7 @@ describe('callImageApi', () => {
       prompt: 'prompt',
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
-    } as any)
+    })
 
     expect(result).toMatchObject({
       images: ['data:image/png;base64,ZmluYWw='],
@@ -222,7 +222,7 @@ describe('callImageApi', () => {
       prompt: 'prompt',
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
-    } as any)
+    })
 
     expect(result).toMatchObject({
       images: ['data:image/png;base64,ZmluYWw='],
@@ -236,6 +236,52 @@ describe('callImageApi', () => {
         quality: 'medium',
         size: '1024x1536',
       }],
+      revisedPrompts: ['rewritten'],
+    })
+  })
+
+  it('parses Images API streams that put event type in the SSE event line', async () => {
+    const streamBody = [
+      'event: image_generation.partial_image',
+      'data: {"partial_image_index":0,"partial_image_b64":"cGFydGlhbA=="}',
+      '',
+      'event: image_generation.completed',
+      'data: {"data":[{"b64_json":"ZmluYWw=","revised_prompt":"rewritten"}],"size":"1024x1024","quality":"high","output_format":"png"}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const partialImages: string[] = []
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
+    })
+
+    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(result).toMatchObject({
+      images: ['data:image/png;base64,ZmluYWw='],
+      actualParams: {
+        output_format: 'png',
+        quality: 'high',
+        size: '1024x1024',
+      },
       revisedPrompts: ['rewritten'],
     })
   })
@@ -274,7 +320,7 @@ describe('callImageApi', () => {
       params: { ...DEFAULT_PARAMS, n: 2 },
       inputImageDataUrls: [],
       onPartialImage: (partial: { image: string; requestIndex?: number }) => partials.push(partial),
-    } as any)
+    })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const [, init] of fetchMock.mock.calls) {
@@ -329,7 +375,7 @@ describe('callImageApi', () => {
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
       onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
-    } as any)
+    })
 
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
@@ -400,7 +446,45 @@ describe('callImageApi', () => {
       prompt: 'prompt',
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
-    } as any)
+    })
+
+    expect(result).toMatchObject({
+      images: ['data:image/png;base64,ZmluYWw='],
+      actualParams: { size: '1024x1024' },
+      actualParamsList: [{ size: '1024x1024' }],
+    })
+  })
+
+  it('parses Responses API stream events with top-level output payloads', async () => {
+    const streamBody = [
+      'event: response.completed',
+      'data: {"output":[{"type":"image_generation_call","result":{"base64":"ZmluYWw="},"size":"1024x1024"}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        apiMode: 'responses',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          apiMode: 'responses',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
 
     expect(result).toMatchObject({
       images: ['data:image/png;base64,ZmluYWw='],
@@ -432,6 +516,35 @@ describe('callImageApi', () => {
       '/api-proxy/images/generations',
       expect.objectContaining({ method: 'POST' }),
     )
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    expect(headers['X-PicPilot-Upstream-Mode']).toBeUndefined()
+  })
+
+  it('sends the selected upstream mode through the team API proxy', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          upstreamMode: 'reverse',
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    expect(headers['X-PicPilot-Upstream-Mode']).toBe('reverse')
   })
 
   it('uses the same-origin API proxy path when API proxy is enabled and base URL is empty', async () => {

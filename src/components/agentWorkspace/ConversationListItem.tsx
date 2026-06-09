@@ -3,7 +3,15 @@ import type { AgentConversation } from '../../types'
 import { EditIcon, TrashIcon } from '../icons'
 import AgentActionButton from './AgentActionButton'
 
-// 侧边栏单条会话项（由 AgentWorkspace 抽出）。纯展示，状态与回调全部由父组件透传，行为等价。
+function getConversationPreview(item: AgentConversation) {
+  const latestUserMessage = [...item.messages].reverse().find((message) => message.role === 'user' && message.content.trim())
+  return latestUserMessage?.content.trim().replace(/\s+/g, ' ') ?? ''
+}
+
+function getConversationImageCount(item: AgentConversation) {
+  return new Set(item.rounds.flatMap((round) => round.outputTaskIds)).size
+}
+
 export default function ConversationListItem({
   item,
   isGeneratingTitle,
@@ -35,10 +43,20 @@ export default function ConversationListItem({
   onStartRename: (e: ReactMouseEvent | ReactTouchEvent, id: string, title: string) => void
   onDelete: (id: string) => void
 }) {
+  const roundCount = item.rounds.length
+  const imageCount = getConversationImageCount(item)
+  const isRunning = item.rounds.some((round) => round.status === 'running')
+  const preview = getConversationPreview(item)
+  const meta = isRunning
+    ? '生成中'
+    : roundCount > 0
+    ? `${roundCount} 轮${imageCount > 0 ? ` · ${imageCount} 个图片任务` : ''}`
+    : '空对话'
+
   return (
     <div
       data-agent-conversation-item
-      className={`group flex items-center gap-2 rounded-lg px-2 py-2 transition-colors ${isActive ? 'bg-gray-200/70 dark:bg-white/[0.09]' : 'hover:bg-gray-100 dark:hover:bg-white/[0.05]'}`}
+      className={`group flex items-center gap-2 rounded-xl px-2.5 py-2.5 transition-colors ${isActive ? 'bg-gray-200/80 dark:bg-white/[0.09]' : 'hover:bg-gray-100 dark:hover:bg-white/[0.05]'}`}
       onPointerDown={(e) => onPointerDown(item.id, e)}
       onPointerUp={onLongPressClear}
       onPointerCancel={onLongPressClear}
@@ -51,7 +69,7 @@ export default function ConversationListItem({
         <div className="min-w-0 flex-1">
           <input
             type="text"
-            className="w-full bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-1 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
+            className="w-full min-w-0 rounded-lg border border-blue-400/50 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500 dark:border-white/20 dark:bg-black/20 dark:text-white dark:focus:border-white/40"
             value={editingTitle}
             onChange={(e) => onEditingTitleChange(e.target.value)}
             onKeyDown={onRenameKeyDown}
@@ -62,7 +80,17 @@ export default function ConversationListItem({
         </div>
       ) : (
         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.id)} title={item.title || '新对话'}>
-          <span className={`block truncate text-sm ${isActive ? 'font-medium text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title || '新对话'}</span>
+          <span className={`block truncate text-sm ${isActive ? 'font-semibold text-gray-950 dark:text-white' : 'font-medium text-gray-700 dark:text-gray-300'}`}>{item.title || '新对话'}</span>
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-none text-gray-400 dark:text-gray-500">
+            {isRunning && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+            <span className="shrink-0">{meta}</span>
+            {preview && (
+              <>
+                <span className="shrink-0 text-gray-300 dark:text-gray-600">/</span>
+                <span className="truncate">{preview}</span>
+              </>
+            )}
+          </span>
         </button>
       )}
       <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${isEditing ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${showActions ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>

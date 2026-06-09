@@ -22,6 +22,7 @@ import RegisterModal from './components/RegisterModal'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
+const VideoWorkspace = lazy(() => import('./components/VideoWorkspace'))
 const WorkflowCanvas = lazy(() => import('./components/workflow/WorkflowCanvas'))
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
 const LogPanel = lazy(() => import('./components/LogPanel'))
@@ -165,6 +166,16 @@ export default function App() {
           }
         >
           <AgentWorkspace />
+        </Suspense>
+      ) : appMode === 'video' ? (
+        <Suspense
+          fallback={
+            <div className="flex min-h-[50vh] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+              加载视频工作区…
+            </div>
+          }
+        >
+          <VideoWorkspace />
         </Suspense>
       ) : (
         <main data-home-main data-drag-select-surface className="pb-48">

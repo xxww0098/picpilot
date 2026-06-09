@@ -7,15 +7,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/xxww0098/picpilot/server-go/internal/chatgptreverse"
 	"github.com/xxww0098/picpilot/server-go/internal/config"
+	"github.com/xxww0098/picpilot/server-go/internal/outboundproxy"
 	"github.com/xxww0098/picpilot/server-go/internal/queue"
 	"github.com/xxww0098/picpilot/server-go/internal/settings"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
+	"github.com/xxww0098/picpilot/server-go/internal/upstreamcooldown"
 )
 
 const dispatchBuffer = 4096
@@ -63,15 +66,17 @@ func (p *pubsub) publish(id string) {
 
 // Executor runs queued tasks with a bounded worker pool that shares the global queue.
 type Executor struct {
-	store    *Store
-	q        *queue.Queue
-	settings *settings.Provider
-	cfg      *config.Config
-	logger   *slog.Logger
-	client   *http.Client
-	pending  chan string
-	workers  int
-	ps       *pubsub
+	store     *Store
+	q         *queue.Queue
+	settings  *settings.Provider
+	cfg       *config.Config
+	logger    *slog.Logger
+	client    *http.Client
+	cooldowns *upstreamcooldown.Gate
+	reverse   *chatgptreverse.Service
+	pending   chan string
+	workers   int
+	ps        *pubsub
 
 	cancelMu sync.Mutex
 	cancels  map[string]context.CancelFunc
@@ -80,18 +85,28 @@ type Executor struct {
 // NewExecutor sizes the worker pool to the queue's MaxConcurrent so total upstream
 // concurrency (sync proxy + async tasks) stays bounded by the shared global limit.
 func NewExecutor(store *Store, q *queue.Queue, sp *settings.Provider, cfg *config.Config, logger *slog.Logger) *Executor {
+	return NewExecutorWithCooldownGate(store, q, sp, cfg, logger, upstreamcooldown.NewGate())
+}
+
+func NewExecutorWithCooldownGate(store *Store, q *queue.Queue, sp *settings.Provider, cfg *config.Config, logger *slog.Logger, gate *upstreamcooldown.Gate, reverse ...*chatgptreverse.Service) *Executor {
 	workers := q.Limits().MaxConcurrent
 	if workers < 1 {
 		workers = 1
 	}
+	var reverseService *chatgptreverse.Service
+	if len(reverse) > 0 {
+		reverseService = reverse[0]
+	}
 	return &Executor{
 		store: store, q: q, settings: sp, cfg: cfg, logger: logger,
-		pending: make(chan string, dispatchBuffer),
-		workers: workers,
-		ps:      newPubsub(),
-		cancels: make(map[string]context.CancelFunc),
+		cooldowns: gate,
+		reverse:   reverseService,
+		pending:   make(chan string, dispatchBuffer),
+		workers:   workers,
+		ps:        newPubsub(),
+		cancels:   make(map[string]context.CancelFunc),
 		client: &http.Client{Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
+			Proxy:                 outboundproxy.ProxyFunc(sp),
 			DialContext:           (&net.Dialer{Timeout: 60 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
@@ -230,25 +245,57 @@ func (e *Executor) doUpstream(ctx context.Context, t *Task) (status Status, resu
 		maxAttempts = 1
 	}
 	backoff := 500 * time.Millisecond
+	model := upstreamcooldown.ExtractRequestModel("application/json", []byte(t.RequestJSON))
 	for attempt := 1; ; attempt++ {
+		if waited, err := e.cooldowns.Wait(ctx, model); err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return StatusFailed, "", "timeout", "请求超时：超过配置时长仍未完成。"
+			}
+			return StatusCanceled, "", "cancelled", "任务已取消。"
+		} else if waited > 0 {
+			e.logger.Info("waited for upstream model cooldown", "scope", "task", "id", t.ID,
+				"model", model, "waitMs", waited.Milliseconds())
+		}
 		status, result, errType, errMsg = e.attemptUpstream(ctx, t)
+		cooldownDelay, cooldownModel := cooldownFromErr(errType, errMsg)
+		if cooldownModel != "" {
+			model = cooldownModel
+		}
+		if cooldownDelay > 0 {
+			e.cooldowns.Set(model, cooldownDelay)
+		}
 		if status == StatusSucceeded || !isRetryableErr(errType) || attempt >= maxAttempts {
 			return status, result, errType, errMsg
 		}
 		e.logger.Warn("upstream attempt failed; retrying", "scope", "task", "id", t.ID,
 			"attempt", attempt, "maxAttempts", maxAttempts, "errType", errType)
+		sleep := backoff
+		if cooldownDelay > sleep {
+			sleep = cooldownDelay
+		}
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return StatusFailed, "", "timeout", "请求超时：超过配置时长仍未完成。"
 			}
 			return StatusCanceled, "", "cancelled", "任务已取消。"
-		case <-time.After(backoff):
+		case <-time.After(sleep):
 		}
 		if backoff < 8*time.Second {
 			backoff *= 2
 		}
 	}
+}
+
+func cooldownFromErr(errType, errMsg string) (time.Duration, string) {
+	if errType != "upstream_429" {
+		return 0, ""
+	}
+	info := upstreamcooldown.ParseBody([]byte(errMsg))
+	if info == nil {
+		return 0, ""
+	}
+	return info.Delay, info.Model
 }
 
 // isRetryableErr reports whether a failed attempt is worth retrying. Transient
@@ -260,7 +307,18 @@ func isRetryableErr(errType string) bool {
 
 // attemptUpstream performs a single upstream request.
 func (e *Executor) attemptUpstream(ctx context.Context, t *Task) (status Status, result, errType, errMsg string) {
-	target, err := joinUpstream(e.cfg.APIProxyURL, t.Endpoint)
+	activeUpstream := upstream.FromConfigForMode(e.cfg, t.UpstreamMode)
+	if activeUpstream.Internal {
+		if e.reverse == nil || !e.reverse.Configured() {
+			return StatusFailed, "", "config", "内置 reverse 未配置 ChatGPT 凭据，请联系管理员。"
+		}
+		code, _, body := e.reverse.DoJSON(ctx, t.Endpoint, t.RequestJSON)
+		if code >= 200 && code < 300 {
+			return StatusSucceeded, body, "", ""
+		}
+		return StatusFailed, "", "upstream_" + strconv.Itoa(code), truncate(body, 2000)
+	}
+	target, err := activeUpstream.JoinEndpoint(t.Endpoint)
 	if err != nil {
 		return StatusFailed, "", "config", err.Error()
 	}
@@ -269,8 +327,8 @@ func (e *Executor) attemptUpstream(ctx context.Context, t *Task) (status Status,
 		return StatusFailed, "", "internal", err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if e.cfg.APIProxyAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.cfg.APIProxyAPIKey)
+	if activeUpstream.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+activeUpstream.APIKey)
 	}
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -289,42 +347,6 @@ func (e *Executor) attemptUpstream(ctx context.Context, t *Task) (status Status,
 		return StatusSucceeded, string(body), "", ""
 	}
 	return StatusFailed, "", "upstream_" + strconv.Itoa(resp.StatusCode), truncate(string(body), 2000)
-}
-
-// joinUpstream joins API_PROXY_URL with the task endpoint, tolerating a duplicated /v1.
-func joinUpstream(base, endpoint string) (string, error) {
-	if base == "" {
-		return "", errors.New("上游 API 地址未配置")
-	}
-	endpoint = strings.TrimLeft(endpoint, "/")
-	if endpoint == "" {
-		return "", errors.New("endpoint 为空")
-	}
-	if !strings.HasSuffix(base, "/") {
-		base += "/"
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return "", err
-	}
-	baseSeg := splitNonEmpty(u.Path)
-	epSeg := splitNonEmpty(endpoint)
-	if len(baseSeg) > 0 && len(epSeg) > 0 && baseSeg[len(baseSeg)-1] == "v1" && epSeg[0] == "v1" {
-		epSeg = epSeg[1:]
-	}
-	u.Path = "/" + strings.Join(append(baseSeg, epSeg...), "/")
-	return u.String(), nil
-}
-
-func splitNonEmpty(p string) []string {
-	parts := strings.Split(p, "/")
-	out := parts[:0]
-	for _, s := range parts {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 func truncate(s string, n int) string {

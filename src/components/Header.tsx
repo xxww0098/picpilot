@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useStore, getGalleryDisplayedImageIds } from '../store'
-import { getActiveApiProfile, normalizeSettings, switchApiProfileProvider } from '../lib/apiProfiles'
-import { IMAGE_MODELS } from '../lib/imageModels'
+import { DEFAULT_IMAGES_MODEL, getActiveApiProfile, normalizeSettings, switchApiProfileProvider } from '../lib/apiProfiles'
 import { CHAT_MODELS } from '../lib/chatModels'
 import ModelPicker from './ModelPicker'
 import { useVersionCheck } from '../hooks/useVersionCheck'
@@ -15,7 +14,7 @@ import { useNotificationUnread } from '../hooks/useNotificationUnread'
 import { openConfirmDialog, showAppToast } from '../lib/dialog'
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import { downloadImagesAsZip, formatExportFileTime } from '../lib/downloadImages'
-import type { AppMode } from '../types'
+import type { AppMode, UpstreamMode } from '../types'
 import { useIsMobile } from '../hooks/useIsMobile'
 import UserMenu from './UserMenu'
 
@@ -23,6 +22,8 @@ const HelpModal = lazy(() => import('./HelpModal'))
 const GalleryView = lazy(() => import('./GalleryView'))
 const AdminPanel = lazy(() => import('./admin/AdminPanel'))
 const NotificationsPanel = lazy(() => import('./NotificationsPanel'))
+
+type HeaderImageUpstreamMode = Extract<UpstreamMode, 'api' | 'reverse'>
 
 export default function Header() {
   const appMode = useStore((s) => s.appMode)
@@ -58,23 +59,29 @@ export default function Header() {
   // 顶栏模型开关占一行/一段，移动端占位高度需相应调整。
   const showAnyPicker = showImagePicker || showChatPicker
   const mobileAgentHeaderHidden = isMobile && appMode === 'agent' && !agentMobileHeaderVisible
-  const handleModelChange = useCallback((model: string) => {
-    const option = IMAGE_MODELS.find((item) => item.id === model)
-    const provider = option?.provider === 'xAI' ? 'xAI' : 'openai'
+  const imageModelActive = activeProfile.provider === 'openai'
+    && activeProfile.apiMode === 'images'
+    && activeProfile.model === DEFAULT_IMAGES_MODEL
+  const imageUpstreamMode: HeaderImageUpstreamMode = activeProfile.provider === 'openai' && activeProfile.upstreamMode === 'reverse'
+    ? 'reverse'
+    : 'api'
+  const applyGptImageProfile = useCallback((upstreamMode?: HeaderImageUpstreamMode) => {
     const normalized = normalizeSettings(settings)
     const currentProfile = normalized.profiles.find((profile) => profile.id === normalized.activeProfileId) ?? activeProfile
-    const switchedProfile = currentProfile.provider === provider
+    const switchedProfile = currentProfile.provider === 'openai'
       ? currentProfile
-      : switchApiProfileProvider(currentProfile, provider)
+      : switchApiProfileProvider(currentProfile, 'openai')
+    const nextUpstreamMode: HeaderImageUpstreamMode = upstreamMode ?? (switchedProfile.upstreamMode === 'reverse' ? 'reverse' : 'api')
     const nextProfile = {
       ...switchedProfile,
-      provider,
-      model,
+      provider: 'openai' as const,
+      model: DEFAULT_IMAGES_MODEL,
       apiMode: 'images' as const,
+      upstreamMode: nextUpstreamMode,
     }
     setSettings({
       ...normalized,
-      model,
+      model: DEFAULT_IMAGES_MODEL,
       apiMode: 'images',
       activeProfileId: currentProfile.id,
       profiles: normalized.profiles.map((profile) => profile.id === currentProfile.id ? nextProfile : profile),
@@ -83,7 +90,6 @@ export default function Header() {
   const handleAgentModelChange = useCallback((agentModel: string) => {
     setSettings({ agentModel })
   }, [setSettings])
-
   useEffect(() => {
     if (appMode === 'agent') {
       setScrollDirection('up')
@@ -250,7 +256,12 @@ export default function Header() {
           )}
           {showImagePicker && (
             <div className="hidden sm:flex items-center mr-2">
-              <ModelPicker model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
+              <HeaderImageModelControl
+                active={imageModelActive}
+                mode={imageUpstreamMode}
+                onSelectModel={() => applyGptImageProfile()}
+                onChangeMode={(mode) => applyGptImageProfile(mode)}
+              />
             </div>
           )}
           {showChatPicker && (
@@ -346,7 +357,13 @@ export default function Header() {
           <div className="mx-2 flex items-center gap-2">
             <MobileViewSelect mode={appMode} onChange={setAppMode} />
             {showImagePicker && (
-              <MobileModelSelect model={activeProfile.model} options={IMAGE_MODELS} onChange={handleModelChange} ariaLabel="图像模型" />
+              <HeaderImageModelControl
+                active={imageModelActive}
+                mode={imageUpstreamMode}
+                onSelectModel={() => applyGptImageProfile()}
+                onChangeMode={(mode) => applyGptImageProfile(mode)}
+                className="min-w-0 flex-1"
+              />
             )}
             {showChatPicker && (
               <MobileModelSelect model={settings.agentModel} options={CHAT_MODELS} onChange={handleAgentModelChange} ariaLabel="对话模型" />
@@ -478,6 +495,68 @@ function MobileModelSelect({
       </select>
       <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
     </label>
+  )
+}
+
+const HEADER_IMAGE_UPSTREAM_MODES: Array<{ value: HeaderImageUpstreamMode; label: string; title: string }> = [
+  { value: 'api', label: 'API', title: '使用服务端 API_PROXY_URL 通道' },
+  { value: 'reverse', label: '逆向', title: '使用 ChatGPT reverse 通道' },
+]
+
+function HeaderImageModelControl({
+  active,
+  mode,
+  onSelectModel,
+  onChangeMode,
+  className,
+}: {
+  active: boolean
+  mode: HeaderImageUpstreamMode
+  onSelectModel: () => void
+  onChangeMode: (mode: HeaderImageUpstreamMode) => void
+  className?: string
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="GPT Image 2 模型与上游通道"
+      className={`inline-flex h-[2.375rem] max-w-full items-stretch gap-1 rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] ${className ?? ''}`}
+    >
+      <button
+        type="button"
+        aria-pressed={active}
+        title="GPT Image 2"
+        onClick={onSelectModel}
+        className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 sm:min-w-[6.75rem] sm:text-sm ${
+          active
+            ? 'bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white'
+            : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
+        }`}
+      >
+        GPT Image 2
+      </button>
+      <div className="grid w-11 shrink-0 grid-rows-2 gap-0.5" role="group" aria-label="GPT Image 2 上游通道">
+        {HEADER_IMAGE_UPSTREAM_MODES.map((item) => {
+          const selected = item.value === mode
+          return (
+            <button
+              key={item.value}
+              type="button"
+              title={item.title}
+              aria-pressed={selected}
+              onClick={() => onChangeMode(item.value)}
+              className={`rounded-md px-1 text-[10px] font-semibold leading-none transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
+                selected
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white'
+                  : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
+              }`}
+            >
+              {item.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

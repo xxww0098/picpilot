@@ -1,4 +1,4 @@
-import type { ApiMode, AppSettings } from '../types'
+import type { ApiMode, AppSettings, UpstreamMode } from '../types'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_IMAGES_MODEL,
@@ -7,16 +7,18 @@ import {
   mergeImportedSettings,
   normalizeSettings,
   normalizeStreamPartialImages,
+  normalizeUpstreamMode,
 } from './apiProfiles'
 import { classifyImportEnvelope } from './schemas'
 
-const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'streamImages', 'streamPartialImages']
+const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'upstreamMode', 'streamImages', 'streamPartialImages']
 
-function getProfileDedupKey(profile: Pick<AppSettings['profiles'][number], 'provider' | 'model' | 'apiMode' | 'streamImages' | 'streamPartialImages'>) {
+function getProfileDedupKey(profile: Pick<AppSettings['profiles'][number], 'provider' | 'model' | 'apiMode' | 'upstreamMode' | 'streamImages' | 'streamPartialImages'>) {
   return JSON.stringify([
     profile.provider,
     profile.model.trim(),
     profile.apiMode,
+    profile.upstreamMode,
     profile.streamImages === true,
     profile.streamPartialImages ?? 0,
   ])
@@ -86,11 +88,13 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
   const codexCliParam = searchParams.get('codexCli')
   const apiModeParam = searchParams.get('apiMode')
   const modelParam = searchParams.get('model')
+  const upstreamModeParam = searchParams.get('upstreamMode')
   const streamImagesParam = searchParams.get('streamImages')
   const streamPartialImagesParam = searchParams.get('streamPartialImages')
   const apiMode: ApiMode | undefined = apiModeParam === 'images' || apiModeParam === 'responses' ? apiModeParam : undefined
+  const upstreamMode: UpstreamMode | undefined = upstreamModeParam === null ? undefined : normalizeUpstreamMode(upstreamModeParam)
 
-  const hasLegacyOpenAIParams = codexCliParam !== null || apiMode !== undefined || modelParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null
+  const hasLegacyOpenAIParams = codexCliParam !== null || apiMode !== undefined || modelParam !== null || upstreamModeParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null
   const settings = importedSettings == null
     ? normalizeSettings(currentSettings)
     : activateFirstImportedProfile(mergeImportedSettings(currentSettings, importedSettings), importedSettings)
@@ -101,6 +105,7 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
       id: createUrlProfileId(new Set(settings.profiles.map((item) => item.id))),
       name: 'URL 参数配置',
       apiMode: profileApiMode,
+      upstreamMode: upstreamMode ?? 'server',
       model: profileApiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL,
     })
     if (modelParam !== null && modelParam.trim()) profile.model = modelParam.trim()

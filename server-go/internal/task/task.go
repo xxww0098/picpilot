@@ -11,11 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/xxww0098/picpilot/server-go/internal/auth"
+	"github.com/xxww0098/picpilot/server-go/internal/chatgptreverse"
 	"github.com/xxww0098/picpilot/server-go/internal/config"
 	"github.com/xxww0098/picpilot/server-go/internal/db"
 	"github.com/xxww0098/picpilot/server-go/internal/httpx"
 	"github.com/xxww0098/picpilot/server-go/internal/queue"
 	"github.com/xxww0098/picpilot/server-go/internal/settings"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
+	"github.com/xxww0098/picpilot/server-go/internal/upstreamcooldown"
 )
 
 // Module wires the task store, executor, and HTTP routes.
@@ -28,10 +31,18 @@ type Module struct {
 
 // New constructs the task module. Call Start to launch the executor.
 func New(d *db.DB, q *queue.Queue, sp *settings.Provider, cfg *config.Config, a *auth.Auth, logger *slog.Logger) *Module {
+	return NewWithCooldownGate(d, q, sp, cfg, a, logger, upstreamcooldown.NewGate())
+}
+
+func NewWithCooldownGate(d *db.DB, q *queue.Queue, sp *settings.Provider, cfg *config.Config, a *auth.Auth, logger *slog.Logger, gate *upstreamcooldown.Gate, reverse ...*chatgptreverse.Service) *Module {
 	store := NewStore(d)
+	var reverseService *chatgptreverse.Service
+	if len(reverse) > 0 {
+		reverseService = reverse[0]
+	}
 	return &Module{
 		store:  store,
-		exec:   NewExecutor(store, q, sp, cfg, logger),
+		exec:   NewExecutorWithCooldownGate(store, q, sp, cfg, logger, gate, reverseService),
 		auth:   a,
 		logger: logger,
 	}
@@ -64,6 +75,7 @@ type submitBody struct {
 	Payload        json.RawMessage `json:"payload"`
 	IdempotencyKey string          `json:"idempotencyKey"`
 	Type           string          `json:"type"`
+	UpstreamMode   string          `json:"upstreamMode"`
 }
 
 func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +94,12 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	if typ == "" {
 		typ = "image"
 	}
-	t, created, err := m.store.Create(m.userID(r), strings.TrimSpace(body.IdempotencyKey), typ, endpoint, string(body.Payload))
+	requestedMode := strings.TrimSpace(r.Header.Get("X-PicPilot-Upstream-Mode"))
+	if requestedMode == "" {
+		requestedMode = strings.TrimSpace(body.UpstreamMode)
+	}
+	upstreamMode := upstream.FromConfigForMode(m.exec.cfg, requestedMode).Mode
+	t, created, err := m.store.Create(m.userID(r), strings.TrimSpace(body.IdempotencyKey), typ, upstreamMode, endpoint, string(body.Payload))
 	if err != nil {
 		m.logger.Error("task create failed", "scope", "task", "err", err.Error())
 		httpx.Error(w, http.StatusInternalServerError, "提交任务失败，请稍后重试。")
@@ -90,7 +107,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if created {
 		m.exec.dispatch(t.ID)
-		m.logger.Info("task submitted", "scope", "task", "id", t.ID, "endpoint", endpoint)
+		m.logger.Info("task submitted", "scope", "task", "id", t.ID, "endpoint", endpoint, "upstreamMode", upstreamMode)
 	}
 	httpx.JSON(w, http.StatusOK, t.View())
 }

@@ -8,9 +8,11 @@ import type {
   AppMode,
   MultiImageMode,
   TaskParams,
+  TaskImageSource,
   InputImage,
   MaskDraft,
   TaskRecord,
+  UpstreamMode,
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
@@ -1245,6 +1247,53 @@ function createSettingsForApiProfile(settings: AppSettings, profile: ApiProfile)
   })
 }
 
+function getProfileUpstreamMode(profile: ApiProfile): UpstreamMode | undefined {
+  return profile.provider === 'openai' ? profile.upstreamMode : undefined
+}
+
+function sourceFromProfile(profile: ApiProfile): TaskImageSource {
+  return {
+    apiProvider: profile.provider,
+    apiProfileId: profile.id,
+    apiProfileName: profile.name,
+    apiMode: profile.apiMode,
+    apiModel: profile.model,
+    upstreamMode: getProfileUpstreamMode(profile),
+  }
+}
+
+function taskSourcePatchFromProfile(profile: ApiProfile): Partial<TaskRecord> {
+  return {
+    apiProvider: profile.provider,
+    apiProfileId: profile.id,
+    apiProfileName: profile.name,
+    apiMode: profile.apiMode,
+    apiModel: profile.model,
+    upstreamMode: getProfileUpstreamMode(profile),
+  }
+}
+
+function getFailedImageRetryProfile(settings: AppSettings, task: TaskRecord): ApiProfile {
+  const activeProfile = getActiveApiProfile(settings)
+  if (!task.apiProvider || activeProfile.provider === task.apiProvider) return activeProfile
+  return getTaskApiProfile(settings, task) ?? activeProfile
+}
+
+function imageSourcesFor(ids: string[], source: TaskImageSource): Record<string, TaskImageSource> | undefined {
+  const entries = ids.map((id) => [id, source] as const)
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+function mergeImageSources(
+  current: Record<string, TaskImageSource> | undefined,
+  ids: string[],
+  source: TaskImageSource,
+): Record<string, TaskImageSource> | undefined {
+  const next = { ...(current ?? {}) }
+  for (const id of ids) next[id] = source
+  return Object.keys(next).length ? next : undefined
+}
+
 function getReusedTaskApiProfile(settings: AppSettings, profileId: string | null): ApiProfile | null {
   if (!profileId) return null
   return normalizeSettings(settings).profiles.find((profile) => profile.id === profileId) ?? null
@@ -1264,7 +1313,7 @@ function shouldRetryWithoutImageStreaming(err: unknown, profile: ApiProfile, sig
   if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
 
   const message = err instanceof Error ? err.message : String(err)
-  return /empty_stream|upstream stream closed before first payload|stream disconnected before completion|stream closed before response\.completed|internal_server_error|server_error|\bHTTP (408|5\d\d)\b/i.test(message)
+  return /empty_stream|upstream stream closed before first payload|stream disconnected before completion|stream closed before response\.completed|流式接口未返回最终图片数据|流式接口未返回可用图片数据|internal_server_error|server_error|\bHTTP (408|5\d\d)\b/i.test(message)
 }
 
 function createSettingsWithoutImageStreaming(settings: AppSettings, profile: ApiProfile): AppSettings {
@@ -1289,7 +1338,7 @@ async function callImageApiWithStreamFallback(opts: CallApiOptions, context: Ima
   } catch (err) {
     if (!shouldRetryWithoutImageStreaming(err, context.profile, opts.signal)) throw err
 
-    logger.warn('task', '图像流式响应断开，关闭流式后自动重试', {
+    logger.warn('task', '图像流式响应异常，关闭流式后自动重试', {
       appMode: context.appMode,
       taskId: context.taskId,
       provider: context.profile.provider,
@@ -1619,11 +1668,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     id: genId(),
     prompt: promptText,
     params: normalizedParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
+    ...taskSourcePatchFromProfile(activeProfile),
     inputImageIds,
     maskTargetImageId: taskMaskTargetImageId,
     maskImageId: taskMaskImageId,
@@ -2108,7 +2153,7 @@ async function executeTask(taskId: string) {
     const notifyStreamFallback = () => {
       if (streamFallbackNotified) return
       streamFallbackNotified = true
-      useStore.getState().showToast('上游流式响应断开，正在关闭流式自动重试', 'info')
+      useStore.getState().showToast('上游流式响应异常，正在关闭流式自动重试', 'info')
     }
     const streamFallback: ImageStreamFallbackContext = {
       profile: activeProfile,
@@ -2213,6 +2258,7 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
     const failedImageCount = result.failedCount && result.failedCount > 0 ? result.failedCount : 0
+    const taskImageSource = sourceFromProfile(activeProfile)
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       streamPartialImageIds: undefined,
@@ -2220,7 +2266,9 @@ async function executeTask(taskId: string) {
       actualParams,
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
+      sourceByImage: imageSourcesFor(outputIds, taskImageSource),
       failedImageCount: failedImageCount > 0 ? failedImageCount : undefined,
+      failedImageSource: failedImageCount > 0 ? taskImageSource : undefined,
       partialImageErrors: failedImageCount > 0 && result.failedErrors?.length ? result.failedErrors : undefined,
       status: 'done',
       finishedAt: Date.now(),
@@ -2364,11 +2412,7 @@ export async function retryTask(task: TaskRecord) {
     id: taskId,
     prompt: task.prompt,
     params: normalizedParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
+    ...taskSourcePatchFromProfile(activeProfile),
     inputImageIds: [...task.inputImageIds],
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
@@ -2380,6 +2424,7 @@ export async function retryTask(task: TaskRecord) {
           apiProfileName: 'xAI Imagine',
           apiMode: 'images' as const,
           apiModel: task.apiModel || DEFAULT_VIDEO_MODEL,
+          upstreamMode: undefined,
           mediaType: 'video' as const,
           outputVideos: [],
           videoDurationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
@@ -2428,11 +2473,7 @@ export async function retryTaskInPlace(taskId: string) {
 
   updateTaskInStore(taskId, {
     params: normalizedParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
+    ...taskSourcePatchFromProfile(activeProfile),
     ...(task.mediaType === 'video'
       ? {
           apiProvider: 'xAI',
@@ -2440,6 +2481,7 @@ export async function retryTaskInPlace(taskId: string) {
           apiProfileName: 'xAI Imagine',
           apiMode: 'images' as const,
           apiModel: task.apiModel || DEFAULT_VIDEO_MODEL,
+          upstreamMode: undefined,
           mediaType: 'video' as const,
           outputVideos: [],
           videoDurationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
@@ -2452,7 +2494,9 @@ export async function retryTaskInPlace(taskId: string) {
     actualParams: undefined,
     actualParamsByImage: undefined,
     revisedPromptByImage: undefined,
+    sourceByImage: undefined,
     failedImageCount: undefined,
+    failedImageSource: undefined,
     partialImageErrors: undefined,
     customTaskId: undefined,
     customRecoverable: false,
@@ -2521,6 +2565,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
 
   let retrySlotIndex = -1
   let markedRegenerating = false
+  let retryFailureSource: TaskImageSource | null = null
 
   try {
     const state = useStore.getState()
@@ -2546,8 +2591,9 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     }
 
     const { settings } = state
-    const profile = getTaskApiProfile(settings, task) ?? getActiveApiProfile(settings)
+    const profile = getFailedImageRetryProfile(settings, task)
     const requestSettings = createSettingsForApiProfile(settings, profile)
+    retryFailureSource = sourceFromProfile(profile)
     retrySlotIndex = task.outputImages.length
     const requestedOutputCount = Number.isFinite(task.params.n) && task.params.n > 0 ? Math.trunc(task.params.n) : task.outputImages.length + failedCount
     const targetOutputCount = Math.max(1, requestedOutputCount)
@@ -2556,6 +2602,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     if (requestCount <= 0) {
       updateTaskInStore(taskId, {
         failedImageCount: undefined,
+        failedImageSource: undefined,
         partialImageErrors: undefined,
         actualParams: { ...task.actualParams, n: task.outputImages.length },
       })
@@ -2642,11 +2689,15 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
 
     const stillFailed = Math.max(0, targetOutputCount - latest.outputImages.length - newIds.length)
     const mergedOutput = [...latest.outputImages, ...newIds]
+    const retrySource = retryFailureSource ?? sourceFromProfile(profile)
     updateTaskInStore(taskId, {
       outputImages: mergedOutput,
       failedImageCount: stillFailed > 0 ? stillFailed : undefined,
+      failedImageSource: stillFailed > 0 ? retrySource : undefined,
       partialImageErrors: stillFailed > 0 ? (result.failedErrors?.length ? result.failedErrors : latest.partialImageErrors) : undefined,
       actualParams: { ...latest.actualParams, n: mergedOutput.length },
+      sourceByImage: mergeImageSources(latest.sourceByImage, newIds, retrySource),
+      ...(latest.outputImages.length === 0 ? taskSourcePatchFromProfile(profile) : {}),
     })
 
     logger.info('task', '重试失败图片完成', {
@@ -2673,6 +2724,9 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     const message = getUserFacingErrorMessage(err, '重试失败', { apiUpstream: !isNetworkOrTimeout })
     const task = useStore.getState().tasks.find((t) => t.id === taskId)
     logger.error('task', '重试失败图片出错', { appMode: task ? getTaskAppMode(task) : 'gallery', taskId, error: serializeError(err) })
+    if (task && (task.failedImageCount ?? 0) > 0 && retryFailureSource) {
+      updateTaskInStore(taskId, { failedImageSource: retryFailureSource })
+    }
     useStore.getState().showToast(`重试失败：${message}`, 'error')
     return null
   } finally {
@@ -2849,6 +2903,7 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
         newImageId,
         replacementRevisedPrompt || undefined,
       ),
+      sourceByImage: replaceImageKeyedValue(latest.sourceByImage, oldImageId, newImageId, sourceFromProfile(activeProfile)),
       error: null,
     })
     await deleteUnreferencedImageIds([oldImageId])
@@ -2945,12 +3000,17 @@ export async function reuseConfig(task: TaskRecord) {
 }
 
 /** 编辑输出：将输出图加入输入 */
-export async function editOutputs(task: TaskRecord) {
+export async function editOutputs(task: TaskRecord, selectedOutputImageIds?: string[]) {
   const { inputImages, addInputImage, showToast } = useStore.getState()
   if (!task.outputImages?.length) return
 
+  const taskOutputImageIds = new Set(task.outputImages)
+  const outputImageIds = (selectedOutputImageIds?.length ? selectedOutputImageIds : task.outputImages)
+    .filter((imgId, index, arr) => taskOutputImageIds.has(imgId) && arr.indexOf(imgId) === index)
+  if (!outputImageIds.length) return
+
   let added = 0
-  for (const imgId of task.outputImages) {
+  for (const imgId of outputImageIds) {
     if (inputImages.find((i) => i.id === imgId)) continue
     const dataUrl = await ensureImageCached(imgId)
     if (dataUrl) {

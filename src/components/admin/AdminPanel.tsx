@@ -6,8 +6,9 @@ import TeamSettings from './TeamSettings'
 import InviteManager from './InviteManager'
 import EventLog from './EventLog'
 import Diagnostics from './Diagnostics'
+import ReverseAuth from './ReverseAuth'
 
-type Tab = 'overview' | 'users' | 'settings' | 'invites' | 'events' | 'diagnostics'
+type Tab = 'overview' | 'users' | 'settings' | 'reverseAuth' | 'invites' | 'events' | 'diagnostics'
 
 interface Props {
   open: boolean
@@ -18,6 +19,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'overview', label: '概览' },
   { id: 'users', label: '用户' },
   { id: 'settings', label: '默认配置' },
+  { id: 'reverseAuth', label: '逆向账号' },
   { id: 'invites', label: '邀请码' },
   { id: 'events', label: '事件流水' },
   { id: 'diagnostics', label: '诊断' },
@@ -28,7 +30,7 @@ export default function AdminPanel({ open, onClose }: Props) {
 
   return (
     <PanelShell open={open} onClose={onClose} title="管理面板">
-      <div className="flex gap-1 border-b border-[hsl(var(--border))] px-6">
+      <div className="flex gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-6">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -51,6 +53,7 @@ export default function AdminPanel({ open, onClose }: Props) {
         {tab === 'overview' && <Overview />}
         {tab === 'users' && <UserList />}
         {tab === 'settings' && <TeamSettings />}
+        {tab === 'reverseAuth' && <ReverseAuth />}
         {tab === 'invites' && <InviteManager />}
         {tab === 'events' && <EventLog />}
         {tab === 'diagnostics' && <Diagnostics />}

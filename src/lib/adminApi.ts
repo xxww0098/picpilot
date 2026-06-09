@@ -38,7 +38,13 @@ export interface AdminTeamSettings {
   proxyUserSoftLimit: number
   streamFallbackEnabled: boolean
   requestTimeoutSeconds: number
+  outboundProxyType: AdminOutboundProxyType
+  outboundProxyUrl: string
+  cliproxyApiUrl: string
+  cliproxyManagementKeyConfigured: boolean
 }
+
+export type AdminOutboundProxyType = 'env' | 'none' | 'http' | 'https' | 'socks5' | 'socks5h'
 
 export interface AdminInviteRedemption {
   user_id: string
@@ -134,6 +140,99 @@ export interface AdminUpstreamHealth {
   }>
 }
 
+export interface AdminReverseAuthAccount {
+  name: string
+  email?: string
+  userId?: string
+  hasRefreshToken: boolean
+  hasPasswordLogin?: boolean
+  disabled: boolean
+  status?: AdminReverseAuthCheckStatus
+  statusReason?: string
+  httpStatus?: number
+  accountType?: string
+  quota?: number
+  imageQuotaUnknown?: boolean
+  restoreAt?: string
+  defaultModelSlug?: string
+  lastCheckedAt?: number
+  lastUsedAt?: number
+  successCount: number
+  failCount: number
+  size: number
+  modifiedAt: number
+}
+
+export interface AdminReverseAuthStatus {
+  configured: boolean
+  storage: 'database'
+  message: string | null
+  accounts: AdminReverseAuthAccount[]
+}
+
+export interface AdminReverseAuthAccountRaw {
+  account: AdminReverseAuthAccount
+  rawJson: string
+}
+
+export interface AdminReverseAuthCLIProxyAccount {
+  name: string
+  provider?: string
+  type?: string
+}
+
+export interface AdminReverseAuthImportSkipped {
+  name: string
+  reason: string
+}
+
+export interface AdminReverseAuthImportResponse {
+  imported: AdminReverseAuthAccount[]
+  skipped: AdminReverseAuthImportSkipped[]
+}
+
+export type AdminReverseAuthCheckStatus = 'ok' | 'quota_or_rate_limited' | 'expired' | 'invalid' | 'disabled' | 'error'
+
+export interface AdminReverseAuthCheckResult {
+  name: string
+  email?: string
+  userId?: string
+  hasRefreshToken: boolean
+  disabled: boolean
+  status: AdminReverseAuthCheckStatus
+  reason?: string
+  httpStatus?: number
+  checkedAt: number
+  type?: string
+  quota?: number
+  imageQuotaUnknown?: boolean
+  restoreAt?: string
+  defaultModelSlug?: string
+}
+
+export interface AdminReverseAuthCheckResponse {
+  checkedAt: number
+  results: AdminReverseAuthCheckResult[]
+}
+
+export type AdminReverseAuthCheckJobStatus = 'running' | 'succeeded' | 'failed'
+
+export interface AdminReverseAuthCheckJob {
+  id: string
+  status: AdminReverseAuthCheckJobStatus
+  total: number
+  completed: number
+  startedAt: number
+  updatedAt: number
+  finishedAt?: number
+  error?: string
+  results: AdminReverseAuthCheckResult[]
+}
+
+export interface AdminReverseAuthCheckJobResponse {
+  job: AdminReverseAuthCheckJob
+}
+
 export function fetchAdminOverview() {
   return authJson<AdminOverviewData>('/api/admin/overview', undefined, '加载失败')
 }
@@ -154,6 +253,10 @@ export function patchAdminTeamSettings(body: {
   proxyUserSoftLimit?: number
   streamFallbackEnabled?: boolean
   requestTimeoutSeconds?: number
+  outboundProxyType?: AdminOutboundProxyType
+  outboundProxyUrl?: string
+  cliproxyApiUrl?: string
+  cliproxyManagementKey?: string
 }) {
   return authJson<AdminTeamSettings>('/api/admin/team-settings', {
     method: 'PATCH',
@@ -201,6 +304,118 @@ export function fetchAdminFailureSummary(params = new URLSearchParams()) {
 
 export function fetchAdminUpstreamHealth() {
   return authJson<AdminUpstreamHealth>('/api/admin/upstream-health', undefined, '加载失败')
+}
+
+export function fetchAdminReverseAuth() {
+  return authJson<AdminReverseAuthStatus>('/api/admin/reverse-auth', undefined, '加载 reverse 账号失败')
+}
+
+export function checkAdminReverseAuth() {
+  return authJson<AdminReverseAuthCheckResponse>('/api/admin/reverse-auth/check', {
+    method: 'POST',
+  }, '检查 reverse 账号失败')
+}
+
+export function startAdminReverseAuthCheckJob(names?: string[]) {
+  const selectedNames = names?.map((name) => name.trim()).filter(Boolean) ?? []
+  return authJson<AdminReverseAuthCheckJobResponse>('/api/admin/reverse-auth/check-jobs', {
+    method: 'POST',
+    ...(selectedNames.length > 0
+      ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names: selectedNames }),
+        }
+      : {}),
+  }, '启动 reverse 账号检查失败')
+}
+
+export function fetchAdminReverseAuthCheckJob(id: string) {
+  return authJson<AdminReverseAuthCheckJobResponse>(`/api/admin/reverse-auth/check-jobs/${encodeURIComponent(id)}`, undefined, '加载 reverse 账号检查进度失败')
+}
+
+export function uploadAdminReverseAuthAccount(file: File) {
+  const body = new FormData()
+  body.set('file', file)
+  return authJson<{ account: AdminReverseAuthAccount }>('/api/admin/reverse-auth/accounts', {
+    method: 'POST',
+    body,
+  }, '导入 reverse 账号失败')
+}
+
+export function importAdminReverseAuthAccessToken(body: { accessToken: string; email?: string; name?: string }) {
+  return authJson<{ account: AdminReverseAuthAccount }>('/api/admin/reverse-auth/accounts/access-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, '导入 access_token 失败')
+}
+
+export function fetchAdminReverseAuthCLIProxyAccounts() {
+  return authJson<{ accounts: AdminReverseAuthCLIProxyAccount[] }>('/api/admin/reverse-auth/cliproxy/accounts', undefined, '读取 CLIProxyAPI 账号失败')
+}
+
+export function importAdminReverseAuthCLIProxyAccounts(names: string[]) {
+  return authJson<AdminReverseAuthImportResponse>('/api/admin/reverse-auth/cliproxy/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names }),
+  }, '导入 CLIProxyAPI 账号失败')
+}
+
+export function importAdminReverseAuthSub2APIAccounts(body: {
+  baseUrl: string
+  adminToken?: string
+  apiKey?: string
+  search?: string
+  status?: string
+}) {
+  return authJson<AdminReverseAuthImportResponse>('/api/admin/reverse-auth/sub2api/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, '导入 sub2api 账号失败')
+}
+
+export function fetchAdminReverseAuthAccount(name: string) {
+  return authJson<AdminReverseAuthAccountRaw>(`/api/admin/reverse-auth/accounts/${encodeURIComponent(name)}`, undefined, '加载 reverse 账号 JSON 失败')
+}
+
+export function updateAdminReverseAuthAccount(name: string, rawJson: string) {
+  return authJson<{ account: AdminReverseAuthAccount }>(`/api/admin/reverse-auth/accounts/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rawJson }),
+  }, '保存 reverse 账号失败')
+}
+
+export function deleteAdminReverseAuthAccount(name: string) {
+  return authJson<{ ok: true }>(`/api/admin/reverse-auth/accounts/${encodeURIComponent(name)}`, { method: 'DELETE' }, '删除 reverse 账号失败')
+}
+
+export function bulkDeleteAdminReverseAuthAccounts(names: string[]) {
+  return authJson<{ ok: true; deleted: string[]; missing: string[] }>('/api/admin/reverse-auth/accounts/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names }),
+  }, '批量删除 reverse 账号失败')
+}
+
+export async function downloadAdminReverseAuthAccounts(): Promise<void> {
+  const res = await authFetch('/api/admin/reverse-auth/accounts/export')
+  if (!res.ok) throw new Error(await readErrorMessage(res, '导出 reverse 账号失败'))
+  const blob = await res.blob()
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const match = disposition.match(/filename="?([^"]+)"?/i)
+  const filename = match?.[1] ?? `picpilot-reverse-auth-${new Date().toISOString().slice(0, 10)}.json`
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 export async function downloadAdminDiagnostics(): Promise<void> {

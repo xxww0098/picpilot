@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,6 +20,8 @@ import (
 	"github.com/xxww0098/picpilot/server-go/internal/db"
 	"github.com/xxww0098/picpilot/server-go/internal/queue"
 	"github.com/xxww0098/picpilot/server-go/internal/settings"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
+	"github.com/xxww0098/picpilot/server-go/internal/upstreamcooldown"
 )
 
 func TestResolveTarget(t *testing.T) {
@@ -29,7 +32,7 @@ func TestResolveTarget(t *testing.T) {
 		{"http://up", "/api-proxy/x/y", "", "/x/y", ""},
 	}
 	for _, c := range cases {
-		u, err := resolveTarget(c.base, c.path, c.raw)
+		u, err := (upstream.Target{URL: c.base, URLVar: "API_PROXY_URL"}).ResolveProxy(c.path, c.raw)
 		if err != nil || u == nil {
 			t.Fatalf("resolveTarget(%q,%q) -> %v / nil", c.base, c.path, err)
 		}
@@ -37,10 +40,10 @@ func TestResolveTarget(t *testing.T) {
 			t.Fatalf("resolveTarget(%q,%q) = %s?%s want %s?%s", c.base, c.path, u.Path, u.RawQuery, c.wantPath, c.wantQuery)
 		}
 	}
-	if u, _ := resolveTarget("", "/api-proxy/x", ""); u != nil {
+	if u, _ := (upstream.Target{URL: "", URLVar: "API_PROXY_URL"}).ResolveProxy("/api-proxy/x", ""); u != nil {
 		t.Fatal("empty API_PROXY_URL should yield nil target")
 	}
-	if u, _ := resolveTarget("http://up/v1", "/api-proxy/", ""); u != nil {
+	if u, _ := (upstream.Target{URL: "http://up/v1", URLVar: "API_PROXY_URL"}).ResolveProxy("/api-proxy/", ""); u != nil {
 		t.Fatal("empty endpoint should yield nil target")
 	}
 }
@@ -52,6 +55,10 @@ type upstreamRecord struct {
 }
 
 func setup(t *testing.T, maxConc, maxQueue, maxBatch int, upstream http.HandlerFunc) (http.Handler, string, *queue.Queue) {
+	return setupWithConfig(t, maxConc, maxQueue, maxBatch, upstream, nil)
+}
+
+func setupWithConfig(t *testing.T, maxConc, maxQueue, maxBatch int, upstream http.HandlerFunc, configure func(*config.Config, string)) (http.Handler, string, *queue.Queue) {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"), maxBatch)
 	if err != nil {
@@ -74,6 +81,9 @@ func setup(t *testing.T, maxConc, maxQueue, maxBatch int, upstream http.HandlerF
 		PerUserPublicQuotaBytes:      1,
 		APIProxyURL:                  up.URL + "/v1",
 		APIProxyAPIKey:               "test-key",
+	}
+	if configure != nil {
+		configure(cfg, up.URL)
 	}
 	q := queue.New(queue.Options{MaxConcurrent: maxConc, MaxQueue: maxQueue})
 	sp := settings.NewProvider(d, cfg)
@@ -114,6 +124,22 @@ func proxyReq(r http.Handler, method, path, token, body string) *httptest.Respon
 	return rec
 }
 
+func proxyReqWithHeaders(r http.Handler, method, path, token, body string, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("X-PicPilot-Authorization", "Bearer "+token)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	return rec
+}
+
 func TestProxyForwardsAndInjectsKey(t *testing.T) {
 	rec := &upstreamRecord{}
 	r, token, _ := setup(t, 5, 10, 10, func(w http.ResponseWriter, req *http.Request) {
@@ -138,6 +164,71 @@ func TestProxyForwardsAndInjectsKey(t *testing.T) {
 	}
 	if cc := resp.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control=%q want no-store", cc)
+	}
+}
+
+func TestProxyUpstreamModeHeaderSelectsReverseMode(t *testing.T) {
+	rec := &upstreamRecord{}
+	r, token, _ := setupWithConfig(t, 5, 10, 10, func(w http.ResponseWriter, req *http.Request) {
+		rec.path = req.URL.Path
+		rec.auth = req.Header.Get("Authorization")
+		if got := req.Header.Get("X-PicPilot-Upstream-Mode"); got != "" {
+			t.Fatalf("internal upstream mode header leaked to upstream: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":["reverse-selected"]}`)
+	}, func(cfg *config.Config, upstreamURL string) {
+		cfg.UpstreamMode = config.UpstreamModeAPI
+		cfg.APIProxyURL = "http://api-mode-should-not-be-used.invalid/v1"
+		cfg.APIProxyAPIKey = "api-key"
+		cfg.ReverseProxyURL = upstreamURL + "/v1"
+		cfg.ReverseProxyAPIKey = "reverse-key"
+	})
+
+	resp := proxyReqWithHeaders(r, "GET", "/api-proxy/v1/models", token, "", map[string]string{
+		"X-PicPilot-Upstream-Mode": "reverse",
+	})
+	if resp.Code != 200 {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if rec.path != "/v1/models" {
+		t.Fatalf("upstream path=%q want /v1/models", rec.path)
+	}
+	if rec.auth != "Bearer reverse-key" {
+		t.Fatalf("upstream auth=%q want reverse key", rec.auth)
+	}
+	if !strings.Contains(resp.Body.String(), "reverse-selected") {
+		t.Fatalf("body not forwarded from reverse upstream: %s", resp.Body.String())
+	}
+}
+
+func TestProxyReverseModeForwardsAndInjectsReverseKey(t *testing.T) {
+	rec := &upstreamRecord{}
+	r, token, _ := setupWithConfig(t, 5, 10, 10, func(w http.ResponseWriter, req *http.Request) {
+		rec.path = req.URL.Path
+		rec.auth = req.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":["reverse-model"]}`)
+	}, func(cfg *config.Config, upstreamURL string) {
+		cfg.UpstreamMode = config.UpstreamModeReverse
+		cfg.APIProxyURL = "http://api-mode-should-not-be-used.invalid/v1"
+		cfg.APIProxyAPIKey = "api-key"
+		cfg.ReverseProxyURL = upstreamURL + "/v1"
+		cfg.ReverseProxyAPIKey = "reverse-key"
+	})
+
+	resp := proxyReq(r, "GET", "/api-proxy/v1/models", token, "")
+	if resp.Code != 200 {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if rec.path != "/v1/models" {
+		t.Fatalf("upstream path=%q want /v1/models", rec.path)
+	}
+	if rec.auth != "Bearer reverse-key" {
+		t.Fatalf("upstream auth=%q want reverse key", rec.auth)
+	}
+	if !strings.Contains(resp.Body.String(), "reverse-model") {
+		t.Fatalf("body not forwarded from reverse upstream: %s", resp.Body.String())
 	}
 }
 
@@ -197,7 +288,6 @@ func TestProxyStreamsSSE(t *testing.T) {
 	}
 }
 
-
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestRetryTransportRetriesTransient(t *testing.T) {
@@ -224,6 +314,38 @@ func TestRetryTransportRetriesTransient(t *testing.T) {
 	}
 	if hits.Load() != 3 {
 		t.Fatalf("want 3 attempts (2x503 + 200), got %d", hits.Load())
+	}
+}
+
+func TestRetryTransportHonorsModelCooldown(t *testing.T) {
+	var hits atomic.Int32
+	start := time.Now()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		hits.Add(1)
+		if time.Since(start) < 600*time.Millisecond {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"code":"model_cooldown","message":"All credentials are cooling down","model":"gpt-image-2","provider":"codex","reset_seconds":0.65}}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	rt := &retryTransport{base: http.DefaultTransport, maxRetries: 1, logger: discardLogger(), cooldowns: upstreamcooldown.NewGate()}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(`{"model":"gpt-image-2","prompt":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 after cooldown retry, got %d body=%s", resp.StatusCode, string(body))
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("want 2 attempts, got %d", hits.Load())
 	}
 }
 

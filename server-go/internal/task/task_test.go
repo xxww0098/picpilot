@@ -30,6 +30,10 @@ type env struct {
 }
 
 func setup(t *testing.T, upstream http.HandlerFunc) *env {
+	return setupWithConfig(t, upstream, nil)
+}
+
+func setupWithConfig(t *testing.T, upstream http.HandlerFunc, configure func(*config.Config, string)) *env {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"), 10)
 	if err != nil {
@@ -52,6 +56,9 @@ func setup(t *testing.T, upstream http.HandlerFunc) *env {
 		PerUserPublicQuotaBytes:      1,
 		APIProxyURL:                  up.URL + "/v1",
 		APIProxyAPIKey:               "test-key",
+	}
+	if configure != nil {
+		configure(cfg, up.URL)
 	}
 	q := queue.New(queue.Options{MaxConcurrent: 3, MaxQueue: 10})
 	sp := settings.NewProvider(d, cfg)
@@ -84,12 +91,19 @@ func setup(t *testing.T, upstream http.HandlerFunc) *env {
 }
 
 func (e *env) req(method, path, token, body string) *httptest.ResponseRecorder {
+	return e.reqWithHeaders(method, path, token, body, nil)
+}
+
+func (e *env) reqWithHeaders(method, path, token, body string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 	rec := httptest.NewRecorder()
 	e.router.ServeHTTP(rec, req)
@@ -153,6 +167,49 @@ func TestSubmitRunsAndSucceeds(t *testing.T) {
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("upstream hit %d times, want 1", hits.Load())
+	}
+}
+
+func TestSubmitPersistsAndUsesUpstreamModeHeader(t *testing.T) {
+	var path, authHeader string
+	var hits atomic.Int32
+	e := setupWithConfig(t, func(w http.ResponseWriter, req *http.Request) {
+		hits.Add(1)
+		path = req.URL.Path
+		authHeader = req.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"url":"http://img/reverse.png"}]}`)
+	}, func(cfg *config.Config, upstreamURL string) {
+		cfg.UpstreamMode = config.UpstreamModeAPI
+		cfg.APIProxyURL = "http://api-mode-should-not-be-used.invalid/v1"
+		cfg.APIProxyAPIKey = "api-key"
+		cfg.ReverseProxyURL = upstreamURL + "/v1"
+		cfg.ReverseProxyAPIKey = "reverse-key"
+	})
+
+	rec := e.reqWithHeaders("POST", "/api/tasks", e.tokens["admin"], `{"endpoint":"images/generations","payload":{"prompt":"cat","n":1}}`, map[string]string{
+		"X-PicPilot-Upstream-Mode": "reverse",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("submit status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	start := decode(t, rec)
+	if start["upstreamMode"] != config.UpstreamModeReverse {
+		t.Fatalf("submitted upstreamMode=%v want reverse", start["upstreamMode"])
+	}
+	id, _ := start["id"].(string)
+	final := e.poll(t, e.tokens["admin"], id, "succeeded", 3*time.Second)
+	if final["upstreamMode"] != config.UpstreamModeReverse {
+		t.Fatalf("final upstreamMode=%v want reverse", final["upstreamMode"])
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("upstream hit %d times, want 1", hits.Load())
+	}
+	if path != "/v1/images/generations" {
+		t.Fatalf("upstream path=%q want /v1/images/generations", path)
+	}
+	if authHeader != "Bearer reverse-key" {
+		t.Fatalf("auth=%q want reverse key", authHeader)
 	}
 }
 

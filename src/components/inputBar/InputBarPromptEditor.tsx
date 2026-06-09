@@ -76,6 +76,7 @@ export default function InputBarPromptEditor({
       )}
       <div
         ref={textareaRef}
+        data-input-prompt-editor
         contentEditable
         suppressContentEditableWarning
         onInput={(e) => handlePromptInput(e.currentTarget)}
@@ -85,7 +86,7 @@ export default function InputBarPromptEditor({
         onCopy={handlePromptCopy}
         onClick={handlePromptClick}
         aria-label={promptPlaceholder}
-        className="col-start-1 row-start-1 min-h-[42px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-10 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30"
+        className="custom-scrollbar col-start-1 row-start-1 max-h-[38dvh] min-h-[42px] w-full overflow-y-auto ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-10 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30"
       />
       {prompt.length === 0 && (
         <div className="prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-10 py-3 text-sm leading-relaxed text-gray-400 dark:text-gray-500">

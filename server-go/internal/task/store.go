@@ -35,6 +35,7 @@ type Task struct {
 	UserID       string
 	Type         string
 	Status       Status
+	UpstreamMode string
 	Endpoint     string
 	RequestJSON  string
 	ResultJSON   string
@@ -49,12 +50,13 @@ type Task struct {
 // View is the JSON representation returned to clients (omits user_id/request payload).
 func (t *Task) View() map[string]any {
 	v := map[string]any{
-		"id":        t.ID,
-		"type":      t.Type,
-		"status":    string(t.Status),
-		"endpoint":  t.Endpoint,
-		"createdAt": t.CreatedAt,
-		"updatedAt": t.UpdatedAt,
+		"id":           t.ID,
+		"type":         t.Type,
+		"status":       string(t.Status),
+		"upstreamMode": t.UpstreamMode,
+		"endpoint":     t.Endpoint,
+		"createdAt":    t.CreatedAt,
+		"updatedAt":    t.UpdatedAt,
 	}
 	if t.StartedAt != nil {
 		v["startedAt"] = *t.StartedAt
@@ -79,23 +81,24 @@ type Store struct{ db *db.DB }
 
 func NewStore(d *db.DB) *Store { return &Store{db: d} }
 
-const taskCols = `id,user_id,idempotency_key,type,status,endpoint,request_json,result_json,error_type,error_message,created_at,updated_at,started_at,finished_at`
+const taskCols = `id,user_id,idempotency_key,type,status,upstream_mode,endpoint,request_json,result_json,error_type,error_message,created_at,updated_at,started_at,finished_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanTask(sc scanner) (*Task, error) {
 	var (
-		t                                Task
-		idem, endpoint, reqJSON, resJSON sql.NullString
-		errType, errMsg                  sql.NullString
-		started, finished                sql.NullInt64
-		status                           string
+		t                                              Task
+		idem, upstreamMode, endpoint, reqJSON, resJSON sql.NullString
+		errType, errMsg                                sql.NullString
+		started, finished                              sql.NullInt64
+		status                                         string
 	)
-	if err := sc.Scan(&t.ID, &t.UserID, &idem, &t.Type, &status, &endpoint, &reqJSON, &resJSON,
+	if err := sc.Scan(&t.ID, &t.UserID, &idem, &t.Type, &status, &upstreamMode, &endpoint, &reqJSON, &resJSON,
 		&errType, &errMsg, &t.CreatedAt, &t.UpdatedAt, &started, &finished); err != nil {
 		return nil, err
 	}
 	t.Status = Status(status)
+	t.UpstreamMode = upstreamMode.String
 	t.Endpoint = endpoint.String
 	t.RequestJSON = reqJSON.String
 	t.ResultJSON = resJSON.String
@@ -121,7 +124,7 @@ func (s *Store) getByIdem(userID, key string) (*Task, error) {
 
 // Create inserts a queued task. When idemKey is set and an existing task with the same
 // (user, key) exists, it returns that task with created=false (idempotency).
-func (s *Store) Create(userID, idemKey, typ, endpoint, requestJSON string) (task *Task, created bool, err error) {
+func (s *Store) Create(userID, idemKey, typ, upstreamMode, endpoint, requestJSON string) (task *Task, created bool, err error) {
 	if idemKey != "" {
 		if existing, e := s.getByIdem(userID, idemKey); e == nil {
 			return existing, false, nil
@@ -133,9 +136,13 @@ func (s *Store) Create(userID, idemKey, typ, endpoint, requestJSON string) (task
 	if idemKey != "" {
 		keyArg = idemKey
 	}
+	var upstreamModeArg any
+	if upstreamMode != "" {
+		upstreamModeArg = upstreamMode
+	}
 	_, err = s.db.Exec(
-		"INSERT INTO tasks (id,user_id,idempotency_key,type,status,endpoint,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		id, userID, keyArg, typ, string(StatusQueued), endpoint, requestJSON, now, now,
+		"INSERT INTO tasks (id,user_id,idempotency_key,type,status,upstream_mode,endpoint,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+		id, userID, keyArg, typ, string(StatusQueued), upstreamModeArg, endpoint, requestJSON, now, now,
 	)
 	if err != nil {
 		// Lost an idempotency race: the unique index rejected us, so return the winner.

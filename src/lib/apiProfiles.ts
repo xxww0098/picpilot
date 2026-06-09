@@ -13,6 +13,7 @@ import type {
   CustomProviderTemplate,
   ReferenceImageEditAction,
   MultiImageMode,
+  UpstreamMode,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
 import { DEFAULT_AGENT_MODEL } from './chatModels'
@@ -76,6 +77,19 @@ function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAc
 
 function normalizeMultiImageMode(value: unknown): MultiImageMode {
   return value === 'merge' ? 'merge' : 'each'
+}
+
+export function normalizeUpstreamMode(value: unknown, fallback: UpstreamMode = 'server'): UpstreamMode {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (normalized === 'server' || normalized === 'default' || normalized === 'auto' || normalized === 'follow-server') return 'server'
+  if (normalized === 'reverse' || normalized === 'rev' || normalized === 'chatgpt2api') return 'reverse'
+  if (normalized === 'api') return 'api'
+  return fallback
+}
+
+export function explicitUpstreamModeHeader(value: unknown): 'api' | 'reverse' | undefined {
+  const mode = normalizeUpstreamMode(value)
+  return mode === 'server' ? undefined : mode
 }
 
 function isCustomProviderTemplate(value: unknown): value is CustomProviderTemplate {
@@ -292,6 +306,7 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     model: DEFAULT_IMAGES_MODEL,
     timeout: DEFAULT_API_TIMEOUT,
     apiMode: 'images',
+    upstreamMode: 'server',
     codexCli: false,
     streamImages: true,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -311,6 +326,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       baseUrl: CLIENT_VISIBLE_BASE_URL,
       model: profile.model,
       apiMode: profile.apiMode,
+      upstreamMode: profile.upstreamMode,
       codexCli: profile.codexCli,
       responseFormatB64Json: profile.responseFormatB64Json,
       streamImages: profile.streamImages,
@@ -326,6 +342,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       baseUrl: CLIENT_VISIBLE_BASE_URL,
       model: savedDraft?.model ?? (profile.model || DEFAULT_IMAGES_MODEL),
       apiMode: savedDraft?.apiMode ?? 'images',
+      upstreamMode: 'api',
       codexCli: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
@@ -340,6 +357,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     baseUrl: CLIENT_VISIBLE_BASE_URL,
     model: savedDraft?.model ?? getDefaultModelForProvider(provider),
     apiMode: provider === 'xAI' ? 'images' : savedDraft?.apiMode ?? profile.apiMode,
+    upstreamMode: provider === 'openai' ? normalizeUpstreamMode(savedDraft?.upstreamMode, profile.provider === 'openai' ? profile.upstreamMode : 'api') : 'api',
     codexCli: provider === 'openai' ? savedDraft?.codexCli ?? profile.codexCli : false,
     responseFormatB64Json: savedDraft?.responseFormatB64Json,
     streamImages: provider === 'openai' ? savedDraft?.streamImages ?? (profile.provider === 'openai' ? profile.streamImages : true) : false,
@@ -360,6 +378,7 @@ function normalizeProviderDraft(input: unknown, provider: ApiProvider, customPro
     baseUrl: CLIENT_VISIBLE_BASE_URL,
     model,
     apiMode,
+    upstreamMode: provider === 'openai' ? normalizeUpstreamMode(input.upstreamMode, fallback.upstreamMode) : 'api',
     codexCli: typeof input.codexCli === 'boolean' ? input.codexCli : fallback.codexCli,
     responseFormatB64Json: input.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof input.streamImages === 'boolean' ? input.streamImages : fallback.streamImages,
@@ -402,6 +421,7 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     model: shouldUseRecordModel && typeof record.model === 'string' && record.model.trim() ? record.model : defaultModel,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
+    upstreamMode: provider === 'openai' ? normalizeUpstreamMode(record.upstreamMode, defaults.upstreamMode) : 'api',
     codexCli: provider === 'openai' ? Boolean(record.codexCli) : false,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: provider === 'openai' ? (typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages) : false,
@@ -433,6 +453,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     model: typeof record.model === 'string' && record.model.trim() ? record.model : DEFAULT_IMAGES_MODEL,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : DEFAULT_API_TIMEOUT,
     apiMode: record.apiMode === 'responses' ? 'responses' : 'images',
+    upstreamMode: normalizeUpstreamMode(record.upstreamMode),
     codexCli: Boolean(record.codexCli),
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
@@ -574,6 +595,7 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
     model: typeof record.model === 'string' && record.model.trim() ? record.model : profile.model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : profile.timeout,
     apiMode: record.apiMode === 'images' || record.apiMode === 'responses' ? record.apiMode : profile.apiMode,
+    upstreamMode: normalizeUpstreamMode(record.upstreamMode, profile.upstreamMode),
     codexCli: typeof record.codexCli === 'boolean' ? record.codexCli : profile.codexCli,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : profile.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, profile.streamPartialImages),
@@ -595,6 +617,7 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.model === DEFAULT_IMAGES_MODEL &&
     profile.timeout === DEFAULT_API_TIMEOUT &&
     profile.apiMode === 'images' &&
+    profile.upstreamMode === 'server' &&
     profile.codexCli === false &&
     profile.streamImages === true &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
@@ -621,6 +644,7 @@ function getApiProfileDedupKey(profile: ApiProfile): string {
     profile.provider,
     profile.model.trim(),
     profile.apiMode,
+    profile.upstreamMode,
   ])
 }
 
@@ -629,6 +653,7 @@ function getApiProfileConnectionKey(profile: ApiProfile): string {
     profile.provider,
     profile.model.trim(),
     profile.apiMode,
+    profile.upstreamMode,
   ])
 }
 

@@ -1,5 +1,5 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
-import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, getActiveApiProfile, normalizeSettings } from './apiProfiles'
+import { DEFAULT_RESPONSES_MODEL, createDefaultOpenAIProfile, explicitUpstreamModeHeader, getActiveApiProfile, normalizeSettings } from './apiProfiles'
 import { chatModelSupportsHostedImageTool, getAgentImageEngine } from './chatModels'
 import { callImageApi } from './api'
 import { getStoredAuthToken } from './auth'
@@ -97,6 +97,8 @@ function createHeaders(profile: ApiProfile, includeAppAuth = false): Record<stri
   const apiKey = profile.apiKey.trim()
   if (!includeAppAuth && apiKey) headers.Authorization = `Bearer ${apiKey}`
   if (includeAppAuth) {
+    const upstreamMode = explicitUpstreamModeHeader(profile.upstreamMode)
+    if (upstreamMode) headers['X-PicPilot-Upstream-Mode'] = upstreamMode
     const token = getStoredAuthToken()
     if (token) headers['X-PicPilot-Authorization'] = `Bearer ${token}`
   }
@@ -278,17 +280,23 @@ function getStreamEventErrorMessage(event: Record<string, unknown>): string | nu
   return null
 }
 
-function parseServerSentEventBlock(block: string): string | null {
+function parseServerSentEventBlock(block: string): { data: string; eventType?: string } | null {
   const dataLines: string[] = []
+  let eventType: string | undefined
   for (const line of block.split(/\r?\n/)) {
     if (!line || line.startsWith(':')) continue
+    if (line.startsWith('event:')) {
+      const value = line.slice(6).trim()
+      if (value) eventType = value
+      continue
+    }
     if (!line.startsWith('data:')) continue
     dataLines.push(line.slice(5).replace(/^ /, ''))
   }
 
   const data = dataLines.join('\n').trim()
   if (!data || data === '[DONE]') return null
-  return data
+  return { data, eventType }
 }
 
 function getAbortedSignal(signals: Array<AbortSignal | undefined>) {
@@ -314,22 +322,25 @@ async function readJsonServerSentEvents(response: Response, onEvent: (event: Rec
   for (const signal of signals) signal?.addEventListener('abort', cancelReader, { once: true })
 
   const processBlock = async (block: string) => {
-    const data = parseServerSentEventBlock(block)
-    if (!data) return
+    const parsed = parseServerSentEventBlock(block)
+    if (!parsed) return
 
     let event: unknown
     try {
-      event = JSON.parse(data)
+      event = JSON.parse(parsed.data)
     } catch {
       throw new Error('Agent 流式响应包含无法解析的 JSON 事件')
     }
     if (!isRecordValue(event)) return
+    const eventRecord = parsed.eventType && !getStringValue(event, 'type')
+      ? { ...event, type: parsed.eventType }
+      : event
 
-    const errorMessage = getStreamEventErrorMessage(event)
+    const errorMessage = getStreamEventErrorMessage(eventRecord)
     if (errorMessage) throw new Error(errorMessage)
 
     throwIfAborted(...signals)
-    await onEvent(event)
+    await onEvent(eventRecord)
     await Promise.resolve()
     throwIfAborted(...signals)
   }

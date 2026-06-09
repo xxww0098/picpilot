@@ -14,13 +14,22 @@ import (
 
 // Payload is the normalized, effective team settings exposed to clients.
 type Payload struct {
-	DefaultMaxBatchImages int  `json:"defaultMaxBatchImages"`
-	GalleryAutoRetryCount int  `json:"galleryAutoRetryCount"`
-	MaxConcurrent         int  `json:"maxConcurrent"`
-	MaxQueue              int  `json:"maxQueue"`
-	ProxyUserSoftLimit    int  `json:"proxyUserSoftLimit"`
-	StreamFallbackEnabled bool `json:"streamFallbackEnabled"`
-	RequestTimeoutSeconds int  `json:"requestTimeoutSeconds"`
+	DefaultMaxBatchImages int    `json:"defaultMaxBatchImages"`
+	GalleryAutoRetryCount int    `json:"galleryAutoRetryCount"`
+	MaxConcurrent         int    `json:"maxConcurrent"`
+	MaxQueue              int    `json:"maxQueue"`
+	ProxyUserSoftLimit    int    `json:"proxyUserSoftLimit"`
+	StreamFallbackEnabled bool   `json:"streamFallbackEnabled"`
+	RequestTimeoutSeconds int    `json:"requestTimeoutSeconds"`
+	OutboundProxyType     string `json:"outboundProxyType"`
+	OutboundProxyURL      string `json:"outboundProxyUrl"`
+	CLIProxyAPIURL        string `json:"cliproxyApiUrl"`
+	CLIProxyKeyConfigured bool   `json:"cliproxyManagementKeyConfigured"`
+}
+
+type CLIProxyConfig struct {
+	APIURL        string
+	ManagementKey string
 }
 
 // Provider loads/caches team settings and resolves them against env defaults.
@@ -71,6 +80,11 @@ func (p *Provider) record() map[string]any {
 // Payload resolves the effective settings (admin overrides clamped, else env defaults).
 func (p *Provider) Payload() Payload {
 	s := p.record()
+	outboundProxyURL := config.NormalizeOutboundProxyURL(s["outboundProxyUrl"])
+	if outboundProxyURL == "" {
+		outboundProxyURL = p.cfg.OutboundProxyURL
+	}
+	cliproxy := p.CLIProxyConfig()
 	return Payload{
 		DefaultMaxBatchImages: config.NormalizeBatchImageLimit(s["defaultMaxBatchImages"], p.cfg.DefaultMaxBatchImages),
 		GalleryAutoRetryCount: config.NormalizeGalleryAutoRetryCount(s["galleryAutoRetryCount"], p.cfg.DefaultGalleryAutoRetryCount),
@@ -79,11 +93,28 @@ func (p *Provider) Payload() Payload {
 		ProxyUserSoftLimit:    config.NormalizeProxyUserSoftLimit(s["proxyUserSoftLimit"], p.cfg.ProxyUserSoftLimit),
 		StreamFallbackEnabled: config.NormalizeBooleanSetting(s["streamFallbackEnabled"], p.cfg.DefaultStreamFallbackEnabled),
 		RequestTimeoutSeconds: config.NormalizeRequestTimeoutSeconds(s["requestTimeoutSeconds"], p.cfg.DefaultRequestTimeoutSeconds),
+		OutboundProxyType:     config.NormalizeOutboundProxyType(s["outboundProxyType"], p.cfg.OutboundProxyType),
+		OutboundProxyURL:      outboundProxyURL,
+		CLIProxyAPIURL:        cliproxy.APIURL,
+		CLIProxyKeyConfigured: cliproxy.ManagementKey != "",
 	}
 }
 
 // DefaultMaxBatchImages is the effective per-batch limit for new users.
 func (p *Provider) DefaultMaxBatchImages() int { return p.Payload().DefaultMaxBatchImages }
+
+func (p *Provider) CLIProxyConfig() CLIProxyConfig {
+	s := p.record()
+	apiURL := config.NormalizeCLIProxyAPIURL(s["cliproxyApiUrl"])
+	if apiURL == "" {
+		apiURL = config.NormalizeCLIProxyAPIURL(p.cfg.CLIProxyAPIURL)
+	}
+	key := config.NormalizeCLIProxyManagementKey(s["cliproxyManagementKey"])
+	if key == "" {
+		key = config.NormalizeCLIProxyManagementKey(p.cfg.CLIProxyManagementKey)
+	}
+	return CLIProxyConfig{APIURL: apiURL, ManagementKey: key}
+}
 
 // Record returns a copy of the raw stored settings (for admin PATCH merge).
 func (p *Provider) Record() map[string]any { return p.record() }

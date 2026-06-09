@@ -6,6 +6,7 @@ import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { getImageModelLabel, isKnownImageModel } from '../lib/imageModels'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getTaskFailedImageSource, getTaskImageSource, getUpstreamModeLabel, hasMixedTaskImageSources } from '../lib/taskSource'
 import { CodeIcon, RefreshIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 import { getVideo } from '../lib/db'
@@ -374,7 +375,19 @@ function TaskCard({
 
   // 始终标注可选图像模型（gpt-image-2 / grok-imagine-image），便于一眼区分是哪个模型生的；
   // 其余情况沿用旧规则——仅当非默认模型时显示，避免给历史卡片平添噪声。
-  const showModel = Boolean(task.apiModel) && (isKnownImageModel(task.apiModel ?? '') || task.apiModel !== DEFAULT_IMAGES_MODEL)
+  const cardSource = task.outputImages[0]
+    ? getTaskImageSource(task, task.outputImages[0])
+    : (task.failedImageCount ?? 0) > 0
+    ? getTaskFailedImageSource(task)
+    : {
+        apiProvider: task.apiProvider,
+        apiModel: task.apiModel,
+        upstreamMode: task.upstreamMode,
+      }
+  const cardModel = cardSource.apiModel ?? task.apiModel
+  const showModel = Boolean(cardModel) && (isKnownImageModel(cardModel ?? '') || cardModel !== DEFAULT_IMAGES_MODEL)
+  const upstreamLabel = cardSource.apiProvider === 'openai' ? getUpstreamModeLabel(cardSource.upstreamMode) : ''
+  const isMixedSource = hasMixedTaskImageSources(task)
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
   const isRegeneratingImage = regeneratingImageIndex !== null
 
@@ -688,16 +701,25 @@ function TaskCard({
               {showModel && (
                 <span 
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
-                  title={task.apiModel}
+                  title={cardModel}
                 >
                   <svg className="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                   </svg>
                   <span className="truncate max-w-[8rem]">
-                    {getImageModelLabel(task.apiModel ?? '')}
+                    {getImageModelLabel(cardModel ?? '')}
                   </span>
                 </span>
               )}
+              {isMixedSource ? (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 text-xs flex-shrink-0" title="这条记录包含不同上游补生成的图片">
+                  混合来源
+                </span>
+              ) : upstreamLabel ? (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0">
+                  {upstreamLabel}
+                </span>
+              ) : null}
               {isVideoTask && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 text-xs flex-shrink-0">
                   视频{task.videoDurationSeconds ? ` · ${task.videoDurationSeconds}s` : ''}

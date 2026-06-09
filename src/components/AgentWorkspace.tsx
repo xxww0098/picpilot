@@ -1,178 +1,21 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
+import type { AgentMessage, AgentRound, TaskRecord } from '../types'
 import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, sendTaskOutputsToGallery, updateTaskInStore, useStore } from '../store'
 import { logger, serializeError } from '../lib/logger'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
 import { downloadImageIds } from '../lib/downloadImages'
+import { openConfirmDialog, openDestructiveConfirm } from '../lib/dialog'
 import TaskCard from './TaskCard'
 import MarkdownRenderer from './MarkdownRenderer'
-import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
+import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon, PhotoIcon } from './icons'
 import AgentActionButton from './agentWorkspace/AgentActionButton'
-import ConversationListItem from './agentWorkspace/ConversationListItem'
-import { groupConversationsByTime } from '../lib/agentConversationGroups'
+import AgentConversationHeader from './agentWorkspace/AgentConversationHeader'
+import AgentConversationSidebar from './agentWorkspace/AgentConversationSidebar'
+import AgentStarterPanel from './agentWorkspace/AgentStarterPanel'
+import { getAgentAssistantBlocks, getAgentAssistantCopyContent, getRoundStatusLabel, getRoundTasks, getRoundTaskSlots, isAgentRoundInterrupted } from './agentWorkspace/assistantBlocks'
+import { getConversationGeneratedImageCount, getConversationOutputTaskIds, getConversationSearchText } from './agentWorkspace/conversationMetrics'
 import { ChatImageThumb, AgentStreamingCursor, AgentWebSearchInlineStatus, AgentWebSearchStatusLines } from './agentWorkspace/messageParts'
-
-const AGENT_STOPPED_MESSAGE = '已停止生成。'
-
-type AgentAssistantBlock =
-  | { type: 'web-search'; status: AgentWebSearchStatus; key: string }
-  | { type: 'batch-params'; status: AgentWebSearchStatus; key: string }
-  | { type: 'image-task'; task: TaskRecord; key: string }
-  | { type: 'deleted-image-task'; taskId: string; key: string }
-  | { type: 'text'; key: string; content?: string }
-
-interface AgentRoundTaskSlot {
-  taskId: string
-  task: TaskRecord | null
-}
-
-function isAgentRoundInterrupted(round: AgentRound | null) {
-  return round?.status === 'error' && round.error === AGENT_STOPPED_MESSAGE
-}
-
-function markToolStatusStopped(status: AgentWebSearchStatus): AgentWebSearchStatus {
-  if (status.completed) return status
-  return { text: status.text.replace(/^正在/, '已停止'), completed: true }
-}
-
-function getImageTaskForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type !== 'image_generation_call') return null
-  return tasksForRound.find((task) => task.agentToolCallId && task.agentToolCallId === item.id) ?? null
-}
-
-function getBatchImageTasksForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type !== 'function_call' || item.name !== 'generate_image_batch' || !item.call_id) return []
-  return tasksForRound.filter((task) => task.agentBatchCallId === item.call_id)
-}
-
-function getTextFromOutputItem(item: ResponsesOutputItem) {
-  if (item.type !== 'message') return ''
-  return (item.content ?? [])
-    .map((part) => typeof part.text === 'string' ? part.text : '')
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
-function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRoundTaskSlot[], allTasks: TaskRecord[], hasText: boolean): AgentAssistantBlock[] {
-  const outputItems = getAgentRoundOutputItems(round, allTasks)
-  const tasksForRound = taskSlots.map((slot) => slot.task).filter(Boolean) as TaskRecord[]
-  const roundInterrupted = isAgentRoundInterrupted(round)
-  if (outputItems.length === 0) {
-    return [
-      ...(hasText ? [{ type: 'text' as const, key: 'text:fallback' }] : []),
-      ...taskSlots.map((slot) => slot.task
-        ? ({ type: 'image-task' as const, task: slot.task, key: `image:${slot.task.id}` })
-        : ({ type: 'deleted-image-task' as const, taskId: slot.taskId, key: `deleted-image:${slot.taskId}` }),
-      ),
-    ]
-  }
-
-  const blocks: AgentAssistantBlock[] = []
-  const renderedTaskIds = new Set<string>()
-  let renderedTextBlocks = 0
-  let webSearchGroup: ResponsesOutputItem[] = []
-
-  const flushWebSearchGroup = () => {
-    if (webSearchGroup.length === 0) return
-    const status = getWebSearchStatusForCalls(collectWebSearchCalls(webSearchGroup))
-    if (status) blocks.push({ type: 'web-search', status: roundInterrupted ? markToolStatusStopped(status) : status, key: `web-search:${blocks.length}:${webSearchGroup.map((item) => item.id).join(':')}` })
-    webSearchGroup = []
-  }
-
-  for (const item of outputItems) {
-    if (item.type === 'web_search_call') {
-      webSearchGroup.push(item)
-      continue
-    }
-
-    flushWebSearchGroup()
-
-    const imageTask = getImageTaskForOutputItem(item, tasksForRound)
-    if (imageTask && !renderedTaskIds.has(imageTask.id)) {
-      renderedTaskIds.add(imageTask.id)
-      blocks.push({ type: 'image-task', task: imageTask, key: `image:${imageTask.id}` })
-      continue
-    }
-
-    const batchImageTasks = getBatchImageTasksForOutputItem(item, tasksForRound)
-    if (batchImageTasks.length > 0) {
-      for (const task of batchImageTasks) {
-        if (renderedTaskIds.has(task.id)) continue
-        renderedTaskIds.add(task.id)
-        blocks.push({ type: 'image-task', task, key: `image:${task.id}` })
-      }
-      continue
-    }
-
-    if ((round?.status === 'running' || roundInterrupted) && item.type === 'function_call' && item.name === 'generate_image_batch') {
-      blocks.push({
-        type: 'batch-params',
-        status: roundInterrupted
-          ? markToolStatusStopped({ text: '正在填写并发图像生成参数', completed: false })
-          : { text: '正在填写并发图像生成参数', completed: false },
-        key: `batch-params:${item.call_id ?? item.id ?? blocks.length}`,
-      })
-      continue
-    }
-
-    if (item.type === 'message') {
-      const content = getTextFromOutputItem(item)
-      if (content) {
-        renderedTextBlocks += 1
-        blocks.push({ type: 'text', key: `text:${item.id ?? blocks.length}`, content })
-      }
-    }
-  }
-
-  flushWebSearchGroup()
-
-  if (hasText && renderedTextBlocks === 0) blocks.push({ type: 'text', key: 'text:fallback' })
-  for (const slot of taskSlots) {
-    if (slot.task) {
-      if (!renderedTaskIds.has(slot.task.id)) blocks.push({ type: 'image-task', task: slot.task, key: `image:${slot.task.id}` })
-    } else {
-      blocks.push({ type: 'deleted-image-task', taskId: slot.taskId, key: `deleted-image:${slot.taskId}` })
-    }
-  }
-  return blocks
-}
-
-function getAgentAssistantCopyContent(fallbackContent: string, blocks: AgentAssistantBlock[]) {
-  if (!blocks.some((block) => block.type !== 'text')) return fallbackContent
-
-  const parts = blocks
-    .filter((block): block is Extract<AgentAssistantBlock, { type: 'text' }> => block.type === 'text')
-    .map((block) => block.content ?? '')
-    .map((content) => content.trim())
-    .filter(Boolean)
-
-  return parts.length > 0 ? parts.join('\n\n') : fallbackContent
-}
-
-function getConversationSearchText(conversation: AgentConversation) {
-  return [
-    conversation.title,
-    ...conversation.messages.map((message) => message.content),
-    ...conversation.rounds.map((round) => round.prompt),
-  ].join('\n').toLocaleLowerCase()
-}
-
-function getRoundTasks(round: AgentRound | null, tasks: TaskRecord[]) {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => tasks.find((task) => task.id === taskId) ?? null)
-}
-
-function getRoundTaskSlots(round: AgentRound | null, tasks: TaskRecord[]): AgentRoundTaskSlot[] {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => ({
-    taskId,
-    task: tasks.find((task) => task.id === taskId) ?? null,
-  }))
-}
-
 const MOBILE_HEADER_PULL_THRESHOLD = 24
 const MOBILE_HEADER_PULL_MAX_OFFSET = 48
 const MOBILE_HEADER_EDGE_GUARD = 24
@@ -412,6 +255,30 @@ export default function AgentWorkspace() {
     return messages
   }, [activeRounds, conversation])
 
+  const activeConversationImageCount = useMemo(
+    () => getConversationGeneratedImageCount(conversation, tasks),
+    [conversation, tasks],
+  )
+  const activeConversationRunning = Boolean(conversation?.rounds.some((round) => round.status === 'running'))
+  const activeConversationErrorCount = conversation?.rounds.filter((round) => round.status === 'error' && !isAgentRoundInterrupted(round)).length ?? 0
+  const activeConversationStatus = activeConversationRunning
+    ? '生成中'
+    : activeConversationErrorCount > 0
+    ? `${activeConversationErrorCount} 个失败轮次`
+    : activeRounds.length > 0
+    ? '就绪'
+    : '新对话'
+
+  const applyStarterPrompt = useCallback((promptText: string) => {
+    if (!conversation) createConversation()
+    setPrompt(promptText)
+    const focusPromptEditor = () => {
+      const editor = document.querySelector<HTMLElement>('[data-input-prompt-editor]')
+      editor?.focus()
+    }
+    window.requestAnimationFrame(focusPromptEditor)
+  }, [conversation, createConversation, setPrompt])
+
   useEffect(() => {
     const conversationId = conversation?.id ?? null
     const lastMessage = activeMessages[activeMessages.length - 1] ?? null
@@ -566,12 +433,13 @@ export default function AgentWorkspace() {
 
   const handleDeleteMessage = (message: AgentMessage, round: AgentRound) => {
     const isUserMessage = message.role === 'user'
-    setConfirmDialog({
+    openDestructiveConfirm({
       title: isUserMessage ? '删除轮次' : '删除消息',
       message: isUserMessage
         ? '确定要删除这轮记录吗？这会删除这条消息和它的输出，后续消息会被保留。'
         : '确定要删除这条消息吗？关联的图片任务不会从画廊中删除。',
-      action: async () => {
+      confirmText: isUserMessage ? '删除轮次' : '删除消息',
+      onConfirm: async () => {
         if (isUserMessage) {
           if (round.outputTaskIds.length > 0) await removeMultipleTasks(round.outputTaskIds)
 
@@ -626,12 +494,12 @@ export default function AgentWorkspace() {
   }
 
   const handleReuse = (task: TaskRecord) => {
-    setConfirmDialog({
+    openConfirmDialog({
       title: '切换到画廊模式？',
       message: '复用参数会应用到画廊输入区。切换到画廊模式后，当前 Agent 对话仍会保留。',
       confirmText: '切换并复用',
       cancelText: '取消',
-      action: () => {
+      onConfirm: () => {
         setAppMode('gallery')
         void reuseConfig(task)
       },
@@ -695,7 +563,7 @@ export default function AgentWorkspace() {
   return (
     <main 
       data-agent-workspace 
-      className="safe-area-x mx-auto flex min-h-[calc(100vh-100px)] flex-col lg:flex-row max-w-7xl lg:gap-3 px-3 lg:px-0 relative overflow-visible transition-all duration-300"
+      className="relative flex min-h-[calc(100vh-100px)] w-full flex-col overflow-visible px-0 transition-all duration-300 lg:flex-row lg:gap-3"
     >
       {/* Pull Down Indicator */}
       {pullDownOffset > 0 && !agentMobileHeaderVisible && (
@@ -714,67 +582,28 @@ export default function AgentWorkspace() {
         <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
       
-      {/* Left Sidebar — mobile: overlay drawer; desktop: persistent ChatGPT-style history panel */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 ${!sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'} lg:sticky lg:top-16 lg:z-auto lg:h-[calc(100vh-5rem)] lg:w-[17rem] lg:max-w-none lg:translate-x-0 lg:rounded-2xl lg:border lg:border-[hsl(var(--border))] lg:bg-[hsl(var(--sidebar))] lg:shadow-none lg:backdrop-blur-none`}>
-        <div className="pl-[max(1rem,env(safe-area-inset-left))] lg:pl-0 flex h-full min-h-0 w-full flex-col">
-          {/* Mobile header: collapse + new chat */}
-          <div className="safe-area-top shrink-0 lg:hidden">
-            <div className="flex h-14 items-center justify-between gap-2 px-4">
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
-                <SidebarLeftIcon className="w-5 h-5" />
-              </button>
-              <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="新对话">
-                <EditIcon className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-          {/* Desktop: full-width New chat button */}
-          <div className="hidden lg:block px-3 pt-3 pb-1">
-            <button type="button" onClick={createConversation} className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-200 dark:hover:bg-white/[0.09]">
-              <EditIcon className="h-4 w-4" />
-              新对话
-            </button>
-          </div>
-          <div className="shrink-0 px-4 pb-3">
-            <input
-              type="text"
-              value={conversationSearchQuery}
-              onChange={(e) => setConversationSearchQuery(e.target.value)}
-              placeholder="搜索聊天..."
-              className="w-full rounded-xl border border-gray-200 bg-gray-100/80 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
-            />
-          </div>
-          <div className="space-y-1 overflow-y-auto flex-1 px-4 pb-4">
-          {filteredConversations.length === 0 && (
-            <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
-          )}
-          {groupConversationsByTime(filteredConversations).map((group) => (
-            <div key={group.label}>
-              <div className="mt-3 mb-1 px-2 text-xs font-medium text-gray-400 dark:text-gray-500">{group.label}</div>
-              {group.items.map((item) => (
-                <ConversationListItem
-                  key={item.id}
-                  item={item}
-                  isGeneratingTitle={Boolean(agentGeneratingTitleIds[item.id])}
-                  isEditing={agentEditingConversationId === item.id}
-                  isActive={item.id === activeConversationId}
-                  showActions={conversationActionsId === item.id}
-                  editingTitle={editingConversationTitle}
-                  onPointerDown={handleConversationPointerDown}
-                  onLongPressClear={clearConversationLongPressTimer}
-                  onSelect={handleConversationSelect}
-                  onEditingTitleChange={setEditingConversationTitle}
-                  onRenameKeyDown={handleRenameKeyDown}
-                  onConfirmRename={confirmRenameConversation}
-                  onStartRename={startRenameConversation}
-                  onDelete={handleDeleteConversation}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-        </div>
-      </aside>
+      <AgentConversationSidebar
+        sidebarCollapsed={sidebarCollapsed}
+        setSidebarCollapsed={setSidebarCollapsed}
+        conversations={conversations}
+        filteredConversations={filteredConversations}
+        activeConversationId={activeConversationId}
+        conversationSearchQuery={conversationSearchQuery}
+        setConversationSearchQuery={setConversationSearchQuery}
+        conversationActionsId={conversationActionsId}
+        agentEditingConversationId={agentEditingConversationId}
+        agentGeneratingTitleIds={agentGeneratingTitleIds}
+        editingConversationTitle={editingConversationTitle}
+        createConversation={createConversation}
+        handleConversationPointerDown={handleConversationPointerDown}
+        clearConversationLongPressTimer={clearConversationLongPressTimer}
+        handleConversationSelect={handleConversationSelect}
+        setEditingConversationTitle={setEditingConversationTitle}
+        handleRenameKeyDown={handleRenameKeyDown}
+        confirmRenameConversation={confirmRenameConversation}
+        startRenameConversation={startRenameConversation}
+        handleDeleteConversation={handleDeleteConversation}
+      />
 
       {/* Center Chat Area */}
       <section className="min-w-0 flex-1 flex flex-col relative">
@@ -822,33 +651,43 @@ export default function AgentWorkspace() {
           </div>
         </div>
 
+        {conversation && (
+          <AgentConversationHeader
+            title={conversation.title || 'Agent'}
+            activeConversationRunning={activeConversationRunning}
+            activeConversationErrorCount={activeConversationErrorCount}
+            activeConversationStatus={activeConversationStatus}
+            roundCount={activeRounds.length}
+            imageCount={activeConversationImageCount}
+            outputTaskCount={getConversationOutputTaskIds(conversation).length}
+            onCreateConversation={createConversation}
+          />
+        )}
+
         <div 
           ref={scrollContainerRef}
-          className="flex-1 space-y-4 overflow-visible pb-[calc(var(--input-bar-clearance,12rem)+1.5rem)] px-1 lg:pt-14 lg:px-4"
+          className="flex-1 space-y-4 overflow-visible pb-[calc(var(--input-bar-clearance,12rem)+1.5rem)] px-1 lg:px-6 lg:pt-6"
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
           {!conversation ? (
-            <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
-                <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.96 7.96 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-              </div>
-              <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">还没有 Agent 对话</h2>
-              <p className="mb-4 mt-1.5 max-w-sm text-sm text-[hsl(var(--muted-foreground))]">创建一个对话，开始与 Agent 多轮生成、编辑图片。</p>
-              <button type="button" onClick={createConversation} className="rounded-lg bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity hover:opacity-90">创建对话</button>
-            </div>
+            <AgentStarterPanel
+              label="PicPilot Agent"
+              title="把出图任务拆成可执行轮次"
+              description="适合商品主图、参考图变体、细节修复和详情页卖点图。选择一个任务后，可以继续补充参考图和约束。"
+              onApplyPrompt={applyStarterPrompt}
+            />
           ) : (
             (() => {
               if (activeMessages.length === 0) {
                 return (
-                  <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
-                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
-                      <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.96 7.96 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                    </div>
-                    <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">开始新的 Agent 对话</h2>
-                    <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[hsl(var(--muted-foreground))]">在下方输入框发送消息即可创建第一轮对话，Agent 会按需调用图像工具。</p>
-                  </div>
+                  <AgentStarterPanel
+                    label="新对话"
+                    title="先选一个图片任务"
+                    description="Agent 会在同一轮里保留提示词、参考图、工具调用和输出图片，后续可直接编辑、重试或发回画廊。"
+                    onApplyPrompt={applyStarterPrompt}
+                  />
                 )
               }
 
@@ -868,26 +707,44 @@ export default function AgentWorkspace() {
                 const assistantBlocks = isAssistant ? getAgentAssistantBlocks(round ?? null, taskSlotsForRound, tasks, Boolean(message.content.trim())) : []
                 const inputImagesForRound = (round?.inputImageIds || []).map(id => ({ id, dataUrl: '' }))
                 const parts = getPromptMentionParts(message.content, inputImagesForRound)
+                const roundStatusLabel = getRoundStatusLabel(round ?? null)
+                const roundImageCount = tasksForRound.reduce((count, task) => count + (task.outputImages?.length ?? 0), 0)
                 return (
-                  <div key={message.id} className={`flex w-full mb-6 ${isAssistant ? 'justify-start' : 'justify-end'}`}>
+                  <div key={message.id} className={`mb-4 flex w-full ${isAssistant ? 'justify-start' : 'justify-end'}`}>
                     <div
                       ref={(node) => {
                         if (!isAssistant && node) messageRefs.current.set(message.roundId, node)
                         else if (!isAssistant) messageRefs.current.delete(message.roundId)
                       }}
-                      className={`group flex max-w-[95%] flex-col md:max-w-[85%] lg:max-w-[75%] ${isAssistant ? 'items-start' : 'items-end'}`}
+                      className={`group flex max-w-[95%] flex-col ${isAssistant ? 'items-start md:max-w-[88%] lg:max-w-[82%]' : 'items-end md:max-w-[78%] lg:max-w-[68%]'}`}
                     >
-                      <article 
-                        className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl p-4 transition-all duration-200 ${
-                        isAssistant 
-                          ? 'bg-white/70 dark:bg-white/[0.03] border border-gray-200 dark:border-white/[0.08] rounded-tl-sm hover:bg-white dark:hover:bg-white/[0.04]' 
-                          : `bg-gray-100 dark:bg-[#2A2D31] rounded-tr-sm ${isEditing ? 'ring-2 ring-blue-500/50 dark:ring-blue-400/50' : ''}`
+                      <article
+                        className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl border p-4 transition-colors duration-200 sm:p-5 ${
+                        isAssistant
+                          ? 'rounded-tl-md border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.035] dark:hover:bg-white/[0.05]'
+                          : `rounded-tr-md border-gray-200/80 bg-gray-100 dark:border-white/[0.06] dark:bg-[#25282d] ${isEditing ? 'ring-2 ring-blue-500/50 dark:ring-blue-400/50' : ''}`
                       }`}
                       >
-                    <div className="mb-2 flex items-center justify-between gap-4 text-sm text-gray-500 dark:text-gray-400">
-                      <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedRoundId(message.roundId); }} className="hover:text-gray-800 dark:hover:text-gray-200 transition-colors font-medium">
-                         <span className={isAssistant ? 'text-blue-600 dark:text-blue-400 font-semibold' : 'text-gray-700 dark:text-gray-200 font-semibold'}>{isAssistant ? 'Agent' : '用户'}</span> <span className="opacity-60 font-normal ml-1">· 第 {round?.index ?? '?'} 轮</span>
+                    <div className="mb-3 flex items-center justify-between gap-4 text-sm text-gray-500 dark:text-gray-400">
+                      <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedRoundId(message.roundId); }} className="inline-flex min-w-0 items-center gap-2 transition-colors hover:text-gray-800 dark:hover:text-gray-200">
+                         <span className={isAssistant ? 'font-semibold text-blue-600 dark:text-blue-400' : 'font-semibold text-gray-700 dark:text-gray-200'}>{isAssistant ? 'PicPilot Agent' : '你'}</span>
+                         <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">第 {round?.index ?? '?'} 轮</span>
+                         {isAssistant && roundStatusLabel && (
+                           <span className={`inline-flex h-5 shrink-0 items-center rounded-md px-1.5 text-[11px] font-medium ${
+                             round?.status === 'running'
+                               ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                               : round?.status === 'error'
+                               ? 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-300'
+                               : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
+                           }`}>{roundStatusLabel}</span>
+                         )}
                       </button>
+                      {isAssistant && roundImageCount > 0 && (
+                        <span className="hidden shrink-0 items-center gap-1 rounded-md bg-gray-100 px-1.5 py-1 text-[11px] font-medium text-gray-500 dark:bg-white/[0.06] dark:text-gray-400 sm:inline-flex">
+                          <PhotoIcon className="h-3.5 w-3.5" />
+                          {roundImageCount} 张图
+                        </span>
+                      )}
                     </div>
                     
                     {message.role === 'user' && round && round.inputImageIds.length > 0 && (
@@ -963,7 +820,7 @@ export default function AgentWorkspace() {
                                     onClick={() => setDetailTaskId(block.task.id)}
                                     onReuse={() => handleReuse(block.task)}
                                     onEditOutputs={() => editOutputs(block.task)}
-                                    onDelete={() => setConfirmDialog({ title: '删除记录', message: '确定要删除这条记录吗？', action: () => removeTask(block.task) })}
+                                    onDelete={() => openDestructiveConfirm({ title: '删除记录', message: '确定要删除这条记录吗？', confirmText: '删除记录', onConfirm: () => removeTask(block.task) })}
                                   />
                                   {block.task.outputImages.length > 0 && (
                                     <button
@@ -1106,20 +963,16 @@ export default function AgentWorkspace() {
                 <>
                   {renderedMessages}
                   {runningRounds.map((round) => (
-                    <div key={`running-${round.id}`} className="flex w-full justify-start mb-6">
-                      <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-gray-200 bg-white/70 p-4 dark:border-white/[0.08] dark:bg-white/[0.03] md:max-w-[85%] lg:max-w-[75%]">
-                        <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
-                          <span className="text-blue-600 dark:text-blue-400 font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">· 第 {round.index} 轮</span>
+                    <div key={`running-${round.id}`} className="mb-4 flex w-full justify-start">
+                      <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-white/[0.035] md:max-w-[88%] lg:max-w-[82%] sm:p-5">
+                        <div className="mb-3 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                          <span className="font-semibold text-blue-600 dark:text-blue-400">PicPilot Agent</span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500">第 {round.index} 轮</span>
+                          <span className="inline-flex h-5 items-center rounded-md bg-blue-50 px-1.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">生成中</span>
                         </div>
-                        <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span>正在生成回复</span>
-                            <span className="flex gap-1">
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current [animation-delay:150ms]" />
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current [animation-delay:300ms]" />
-                            </span>
-                          </span>
+                        <div className="flex items-center gap-3 rounded-xl bg-gray-50 px-3 py-2.5 text-sm text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                          <span>正在规划回复和图像工具调用</span>
                         </div>
                       </article>
                     </div>

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, filterGalleryTasks } from '../store'
 import TaskCard from './TaskCard'
+import { openDestructiveConfirm } from '../lib/dialog'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
@@ -9,7 +10,6 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
-  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
@@ -36,10 +36,14 @@ export default function TaskGrid() {
   )
 
   const handleDelete = (task: typeof tasks[0]) => {
-    setConfirmDialog({
-      title: '删除记录',
-      message: '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      action: () => removeTask(task),
+    const isVideo = task.mediaType === 'video'
+    openDestructiveConfirm({
+      title: isVideo ? '删除视频记录' : '删除记录',
+      message: isVideo
+        ? '确定要删除这条视频记录吗？缓存的视频文件也会被清理（如果没有其他任务引用）。'
+        : '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      confirmText: isVideo ? '删除视频' : '删除记录',
+      onConfirm: () => removeTask(task),
     })
   }
 

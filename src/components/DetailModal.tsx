@@ -12,6 +12,7 @@ import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getProviderDisplayName, getUserFacingErrorMessage } from '../lib/userFacingText'
 import { getImageModelLabel } from '../lib/imageModels'
+import { getTaskFailedImageSource, getTaskImageSource, getUpstreamModeLabel } from '../lib/taskSource'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, RefreshIcon, TrashIcon } from './icons'
 import PublishGalleryButton from './PublishGalleryButton'
 import ModalShell from './ModalShell'
@@ -249,13 +250,15 @@ export default function DetailModal() {
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
   const codexCliPromptKey = getCodexCliPromptKey(settings)
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
-  const taskProvider = task.apiProvider
+  const taskSource = isFailedSlot ? getTaskFailedImageSource(task) : getTaskImageSource(task, currentOutputImageId)
+  const taskProvider = taskSource.apiProvider
   const isOpenAiTask = (taskProvider ?? 'openai') === 'openai'
-  const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
+  const showPromptWarning = Boolean(isOpenAiTask && taskSource.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const taskProviderName = getProviderDisplayName(taskProvider)
-  const taskProfileName = task.apiProfileName || '未知'
-  const taskModel = task.apiModel ? getImageModelLabel(task.apiModel) : '未知'
-  const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
+  const taskProfileName = taskSource.apiProfileName || '未知'
+  const taskModel = taskSource.apiModel ? getImageModelLabel(taskSource.apiModel) : '未知'
+  const taskUpstreamLabel = taskProvider === 'openai' ? getUpstreamModeLabel(taskSource.upstreamMode) : ''
+  const showSourceInfo = Boolean(taskSource.apiProvider || taskSource.apiProfileName || taskSource.apiModel)
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const rawImageUrls = task.rawImageUrls ?? []
   const streamPreviewLen = streamPreviewItems.length
@@ -306,7 +309,8 @@ export default function DetailModal() {
   }
 
   const handleEdit = () => {
-    editOutputs(task)
+    if (!currentOutputImageId) return
+    editOutputs(task, [currentOutputImageId])
     setDetailTaskId(null)
   }
 
@@ -655,6 +659,11 @@ export default function DetailModal() {
                 </svg>
               </div>
               <p className="text-sm font-medium text-red-500 dark:text-red-400">这一张生成失败</p>
+              {showSourceInfo && (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  失败来源：{[taskProviderName, taskUpstreamLabel].filter(Boolean).join(' · ')}
+                </p>
+              )}
               {task.partialImageErrors?.[0] && (
                 <p className="line-clamp-3 max-w-xs text-xs leading-relaxed text-gray-500 dark:text-gray-400">{getUserFacingErrorMessage(task.partialImageErrors[0])}</p>
               )}
@@ -1022,11 +1031,12 @@ export default function DetailModal() {
             </h3>
             {showSourceInfo && (
               <div className="mb-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
-                <span className="text-gray-400 dark:text-gray-500">来源</span>
+                <span className="text-gray-400 dark:text-gray-500">{isFailedSlot ? '失败来源' : '来源'}</span>
                 <br />
                 <span className="font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</span>
+                {taskUpstreamLabel && <span className="text-gray-400 dark:text-gray-500"> · {taskUpstreamLabel}</span>}
                 <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · </span>
-                <span className="text-gray-400 dark:text-gray-500" title={task.apiModel || undefined}>{taskModel}</span>
+                <span className="text-gray-400 dark:text-gray-500" title={taskSource.apiModel || undefined}>{taskModel}</span>
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 text-xs mb-4">
@@ -1103,7 +1113,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleEdit}
-              disabled={isVideoTask || !outputLen}
+              disabled={isVideoTask || !currentOutputImageId}
               className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />

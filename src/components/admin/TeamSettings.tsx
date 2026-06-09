@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { fetchAdminTeamSettings, patchAdminTeamSettings } from '../../lib/adminApi'
+import { useEffect, useState } from 'react'
+import { fetchAdminTeamSettings, patchAdminTeamSettings, type AdminOutboundProxyType } from '../../lib/adminApi'
 import { openPromptDialog, showAppToast } from '../../lib/dialog'
 import { getUserFacingErrorMessage } from '../../lib/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
@@ -70,6 +70,37 @@ export default function TeamSettings() {
       })
       await reload()
       showAppToast(updated.streamFallbackEnabled ? '流式失败回退已开启。' : '流式失败回退已关闭。', 'success')
+    } catch (e) {
+      showAppToast(getUserFacingErrorMessage(e, '保存失败'), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateOutboundProxy(proxyType: AdminOutboundProxyType, proxyUrl: string) {
+    setSaving(true)
+    try {
+      await patchAdminTeamSettings({
+        outboundProxyType: proxyType,
+        outboundProxyUrl: proxyTypeNeedsUrl(proxyType) ? proxyUrl.trim() : '',
+      })
+      await reload()
+      showAppToast('全局出站代理已更新。', 'success')
+    } catch (e) {
+      showAppToast(getUserFacingErrorMessage(e, '保存失败'), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateCLIProxySettings(apiUrl: string, managementKey: string) {
+    setSaving(true)
+    try {
+      const body: Parameters<typeof patchAdminTeamSettings>[0] = { cliproxyApiUrl: apiUrl.trim() }
+      if (managementKey.trim()) body.cliproxyManagementKey = managementKey.trim()
+      await patchAdminTeamSettings(body)
+      await reload()
+      showAppToast('CPA 服务器配置已更新。', 'success')
     } catch (e) {
       showAppToast(getUserFacingErrorMessage(e, '保存失败'), 'error')
     } finally {
@@ -183,10 +214,159 @@ export default function TeamSettings() {
               disabled={saving}
               onToggle={() => void toggleStreamFallback(data.streamFallbackEnabled)}
             />
+            <ProxySettingCard
+              proxyType={data.outboundProxyType}
+              proxyUrl={data.outboundProxyUrl}
+              disabled={saving}
+              onSave={(proxyType, proxyUrl) => void updateOutboundProxy(proxyType, proxyUrl)}
+            />
+            <CLIProxySettingCard
+              apiUrl={data.cliproxyApiUrl}
+              keyConfigured={data.cliproxyManagementKeyConfigured}
+              disabled={saving}
+              onSave={(apiUrl, managementKey) => void updateCLIProxySettings(apiUrl, managementKey)}
+            />
           </dl>
         </article>
       )}
     </QueryState>
+  )
+}
+
+function CLIProxySettingCard({ apiUrl, keyConfigured, disabled, onSave }: {
+  apiUrl: string
+  keyConfigured: boolean
+  disabled: boolean
+  onSave: (apiUrl: string, managementKey: string) => void
+}) {
+  const [nextUrl, setNextUrl] = useState(apiUrl)
+  const [nextKey, setNextKey] = useState('')
+
+  useEffect(() => {
+    setNextUrl(apiUrl)
+    setNextKey('')
+  }, [apiUrl, keyConfigured])
+
+  const normalizedUrl = nextUrl.trim()
+  const normalizedKey = nextKey.trim()
+  const dirty = normalizedUrl !== apiUrl.trim() || normalizedKey.length > 0
+  const canSave = dirty && (normalizedUrl === '' || /^https?:\/\//i.test(normalizedUrl))
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+        <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+          <span className="mb-1 block">CPA 服务器地址</span>
+          <input
+            value={nextUrl}
+            disabled={disabled}
+            onChange={(event) => setNextUrl(event.target.value)}
+            placeholder="https://cpa.example.com"
+            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
+        <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+          <span className="mb-1 block">管理密钥</span>
+          <input
+            value={nextKey}
+            disabled={disabled}
+            type="password"
+            onChange={(event) => setNextKey(event.target.value)}
+            placeholder={keyConfigured ? '已配置，留空保留' : '未配置'}
+            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={disabled || !canSave}
+          onClick={() => onSave(normalizedUrl, normalizedKey)}
+          className="h-9 rounded bg-[hsl(var(--primary))] px-3 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          保存 CPA
+        </button>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+        用于在逆向账号页读取远程 CPA / CLIProxyAPI 的 OpenAI OAuth 账号列表并批量导入。
+      </p>
+    </div>
+  )
+}
+
+const OUTBOUND_PROXY_OPTIONS: Array<{ value: AdminOutboundProxyType; label: string }> = [
+  { value: 'env', label: '环境变量' },
+  { value: 'none', label: '不使用代理' },
+  { value: 'http', label: 'HTTP' },
+  { value: 'https', label: 'HTTPS' },
+  { value: 'socks5', label: 'SOCKS5' },
+  { value: 'socks5h', label: 'SOCKS5H' },
+]
+
+function proxyTypeNeedsUrl(proxyType: AdminOutboundProxyType) {
+  return proxyType === 'http' || proxyType === 'https' || proxyType === 'socks5' || proxyType === 'socks5h'
+}
+
+function ProxySettingCard({ proxyType, proxyUrl, disabled, onSave }: {
+  proxyType: AdminOutboundProxyType
+  proxyUrl: string
+  disabled: boolean
+  onSave: (proxyType: AdminOutboundProxyType, proxyUrl: string) => void
+}) {
+  const [nextType, setNextType] = useState<AdminOutboundProxyType>(proxyType)
+  const [nextUrl, setNextUrl] = useState(proxyUrl)
+
+  useEffect(() => {
+    setNextType(proxyType)
+    setNextUrl(proxyUrl)
+  }, [proxyType, proxyUrl])
+
+  const needsUrl = proxyTypeNeedsUrl(nextType)
+  const normalizedUrl = needsUrl ? nextUrl.trim() : ''
+  const dirty = nextType !== proxyType || normalizedUrl !== (proxyTypeNeedsUrl(proxyType) ? proxyUrl.trim() : '')
+  const canSave = dirty && (!needsUrl || normalizedUrl.length > 0)
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+        <label className="min-w-40 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+          <span className="mb-1 block">出站代理类型</span>
+          <select
+            value={nextType}
+            disabled={disabled}
+            onChange={(event) => {
+              const value = event.target.value as AdminOutboundProxyType
+              setNextType(value)
+              if (!proxyTypeNeedsUrl(value)) setNextUrl('')
+            }}
+            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {OUTBOUND_PROXY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+          <span className="mb-1 block">代理地址</span>
+          <input
+            value={nextUrl}
+            disabled={disabled || !needsUrl}
+            onChange={(event) => setNextUrl(event.target.value)}
+            placeholder={needsUrl ? 'host:port 或 scheme://host:port' : '当前模式不需要地址'}
+            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={disabled || !canSave}
+          onClick={() => onSave(nextType, normalizedUrl)}
+          className="h-9 rounded bg-[hsl(var(--primary))] px-3 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          保存代理
+        </button>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+        作用于服务端访问 ChatGPT、上游 API 与图片下载；环境变量模式继续读取容器的代理环境变量。
+      </p>
+    </div>
   )
 }
 

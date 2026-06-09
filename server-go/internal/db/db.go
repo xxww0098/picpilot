@@ -155,6 +155,31 @@ CREATE TABLE IF NOT EXISTS team_config (
   updated_by    TEXT
 );
 
+CREATE TABLE IF NOT EXISTS reverse_auth_accounts (
+  name                TEXT PRIMARY KEY,
+  email               TEXT,
+  user_id             TEXT,
+  raw_json            TEXT NOT NULL,
+  disabled            INTEGER NOT NULL DEFAULT 0,
+  status              TEXT,
+  status_reason       TEXT,
+  http_status         INTEGER,
+  account_type        TEXT,
+  quota               INTEGER,
+  image_quota_unknown INTEGER NOT NULL DEFAULT 0,
+  restore_at          TEXT,
+  default_model_slug  TEXT,
+  last_checked_at     INTEGER,
+  last_used_at        INTEGER,
+  success_count       INTEGER NOT NULL DEFAULT 0,
+  fail_count          INTEGER NOT NULL DEFAULT 0,
+  size                INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reverse_auth_accounts_updated ON reverse_auth_accounts(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reverse_auth_accounts_status ON reverse_auth_accounts(status);
+
 CREATE TABLE IF NOT EXISTS notifications (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    TEXT NOT NULL,
@@ -178,6 +203,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   idempotency_key TEXT,
   type            TEXT NOT NULL,
   status          TEXT NOT NULL,
+  upstream_mode   TEXT,
   endpoint        TEXT,
   request_json    TEXT,
   result_json     TEXT,
@@ -213,7 +239,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idem ON tasks(user_id, idempotency_k
 		{"request_events", "task_id", "task_id TEXT"},
 		{"request_events", "image_index", "image_index INTEGER"},
 		{"request_events", "app_mode", "app_mode TEXT"},
+		{"tasks", "upstream_mode", "upstream_mode TEXT"},
 		{"public_images", "featured", "featured INTEGER NOT NULL DEFAULT 0"},
+		{"reverse_auth_accounts", "user_id", "user_id TEXT"},
+		{"reverse_auth_accounts", "status", "status TEXT"},
+		{"reverse_auth_accounts", "status_reason", "status_reason TEXT"},
+		{"reverse_auth_accounts", "http_status", "http_status INTEGER"},
+		{"reverse_auth_accounts", "account_type", "account_type TEXT"},
+		{"reverse_auth_accounts", "quota", "quota INTEGER"},
+		{"reverse_auth_accounts", "image_quota_unknown", "image_quota_unknown INTEGER NOT NULL DEFAULT 0"},
+		{"reverse_auth_accounts", "restore_at", "restore_at TEXT"},
+		{"reverse_auth_accounts", "default_model_slug", "default_model_slug TEXT"},
+		{"reverse_auth_accounts", "last_checked_at", "last_checked_at INTEGER"},
+		{"reverse_auth_accounts", "last_used_at", "last_used_at INTEGER"},
+		{"reverse_auth_accounts", "success_count", "success_count INTEGER NOT NULL DEFAULT 0"},
+		{"reverse_auth_accounts", "fail_count", "fail_count INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		if err := d.ensureColumn(m.table, m.column, m.def); err != nil {
@@ -222,6 +262,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idem ON tasks(user_id, idempotency_k
 	}
 	if _, err := d.Exec("CREATE INDEX IF NOT EXISTS idx_events_app_mode_time ON request_events(app_mode, created_at DESC)"); err != nil {
 		return fmt.Errorf("create idx_events_app_mode_time: %w", err)
+	}
+	if _, err := d.Exec("CREATE INDEX IF NOT EXISTS idx_reverse_auth_accounts_status ON reverse_auth_accounts(status)"); err != nil {
+		return fmt.Errorf("create idx_reverse_auth_accounts_status: %w", err)
 	}
 	return nil
 }

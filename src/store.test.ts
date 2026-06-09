@@ -186,6 +186,21 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().maskDraft).toEqual(maskDraft)
   })
 
+  it('adds only the selected output image when editing a multi-output task from detail', async () => {
+    try {
+      await putImage(imageA)
+      await putImage(imageB)
+
+      await editOutputs(task({ outputImages: [imageA.id, imageB.id] }), [imageB.id])
+
+      const state = useStore.getState()
+      expect(state.inputImages.map((img) => img.id)).toEqual([imageB.id])
+      expect(state.showToast).toHaveBeenCalledWith('已添加 1 张输出图到输入', 'success')
+    } finally {
+      await clearImages()
+    }
+  })
+
   it('clears an invalid mask draft when submit cannot find the mask target image', async () => {
     useStore.setState({
       inputImages: [imageA],

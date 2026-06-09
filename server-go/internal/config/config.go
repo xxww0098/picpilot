@@ -47,8 +47,17 @@ type Config struct {
 	AvatarsDir                   string
 	EventRetentionDays           int
 	PerUserPublicQuotaBytes      int64
+	UpstreamMode                 string
 	APIProxyURL                  string
 	APIProxyAPIKey               string
+	ReverseProxyURL              string
+	ReverseProxyAPIKey           string
+	ReverseProxyInternal         bool
+	ChatGPTReverseAuthDir        string
+	ChatGPTReverseAccessTokens   string
+	ChatGPTReverseBaseURL        string
+	OutboundProxyType            string
+	OutboundProxyURL             string
 	MaxConcurrent                int
 	ProxyQueueMaxWaitMs          int
 	ProxyQueueMax                int
@@ -58,6 +67,8 @@ type Config struct {
 	DefaultStreamFallbackEnabled bool
 	DefaultRequestTimeoutSeconds int
 	UpstreamMaxRetries           int
+	CLIProxyAPIURL               string
+	CLIProxyManagementKey        string
 	CLIProxyLogDir               string
 }
 
@@ -66,6 +77,15 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func envInt(key string, def int) int {
@@ -120,8 +140,17 @@ func Load(logger *slog.Logger) *Config {
 		AvatarsDir:                   filepath.Join(dataDir, "avatars"),
 		EventRetentionDays:           envInt("EVENT_RETENTION_DAYS", 30),
 		PerUserPublicQuotaBytes:      envInt64("PER_USER_PUBLIC_QUOTA_BYTES", 500*1024*1024),
+		UpstreamMode:                 NormalizeUpstreamMode(firstEnv("UPSTREAM_MODE", "PICPILOT_UPSTREAM_MODE")),
 		APIProxyURL:                  strings.TrimSpace(os.Getenv("API_PROXY_URL")),
 		APIProxyAPIKey:               strings.TrimSpace(os.Getenv("API_PROXY_API_KEY")),
+		ReverseProxyURL:              firstEnv("REVERSE_PROXY_URL", "CHATGPT2API_URL"),
+		ReverseProxyAPIKey:           firstEnv("REVERSE_PROXY_API_KEY", "CHATGPT2API_AUTH_KEY"),
+		ReverseProxyInternal:         NormalizeBooleanSetting(os.Getenv("CHATGPT_REVERSE_INTERNAL"), false),
+		ChatGPTReverseAuthDir:        strings.TrimSpace(os.Getenv("CHATGPT_REVERSE_AUTH_DIR")),
+		ChatGPTReverseAccessTokens:   strings.TrimSpace(os.Getenv("CHATGPT_REVERSE_ACCESS_TOKENS")),
+		ChatGPTReverseBaseURL:        env("CHATGPT_REVERSE_BASE_URL", "https://chatgpt.com"),
+		OutboundProxyType:            NormalizeOutboundProxyType(os.Getenv("OUTBOUND_PROXY_TYPE"), OutboundProxyModeEnv),
+		OutboundProxyURL:             NormalizeOutboundProxyURL(os.Getenv("OUTBOUND_PROXY_URL")),
 		MaxConcurrent:                max(1, envInt("MAX_CONCURRENT_PROXY_REQUESTS", 5)),
 		ProxyQueueMaxWaitMs:          clampInt(envInt("PROXY_QUEUE_MAX_WAIT_MS", 240000), 0, 240000),
 		ProxyQueueMax:                max(0, envInt("PROXY_QUEUE_MAX", 10)),
@@ -131,6 +160,8 @@ func Load(logger *slog.Logger) *Config {
 		DefaultStreamFallbackEnabled: NormalizeBooleanSetting(os.Getenv("STREAM_FALLBACK_ENABLED"), true),
 		DefaultRequestTimeoutSeconds: NormalizeRequestTimeoutSeconds(os.Getenv("REQUEST_TIMEOUT_SECONDS"), 900),
 		UpstreamMaxRetries:           clampInt(envInt("UPSTREAM_MAX_RETRIES", 2), 0, 5),
+		CLIProxyAPIURL:               strings.TrimSpace(os.Getenv("CLIPROXY_API_URL")),
+		CLIProxyManagementKey:        strings.TrimSpace(os.Getenv("CLIPROXY_MGMT_KEY")),
 		CLIProxyLogDir:               strings.TrimSpace(os.Getenv("CLIPROXY_LOG_DIR")),
 	}
 

@@ -26,6 +26,7 @@ import (
 	"github.com/xxww0098/picpilot/server-go/internal/httpx"
 	"github.com/xxww0098/picpilot/server-go/internal/queue"
 	"github.com/xxww0098/picpilot/server-go/internal/settings"
+	"github.com/xxww0098/picpilot/server-go/internal/upstream"
 )
 
 const maxLogTailBytes = 2 * 1024 * 1024
@@ -618,12 +619,20 @@ func (m *Module) buildDiagnosticsBundle() map[string]any {
 	rng := [2]int64{now - 7*24*60*60*1000, now}
 	st := m.q.Stats("")
 	lim := m.q.Limits()
+	activeUpstream := upstream.FromConfig(m.cfg)
+	upstreamConfigured := activeUpstream.Configured()
+	if activeUpstream.Internal {
+		var activeReverseAccounts int
+		upstreamConfigured = m.db.QueryRow("SELECT COUNT(*) FROM reverse_auth_accounts WHERE disabled = 0").Scan(&activeReverseAccounts) == nil && activeReverseAccounts > 0
+	}
 	return map[string]any{
 		"generatedAt": now,
 		"runtime": map[string]any{
 			"dataDir": m.cfg.DataDir, "dbPath": m.cfg.DBPath,
-			"apiProxyConfigured": m.cfg.APIProxyURL != "", "cliproxyLogDirConfigured": m.cfg.CLIProxyLogDir != "",
-			"eventRetentionDays": m.cfg.EventRetentionDays,
+			"upstreamMode": activeUpstream.Mode, "upstreamConfigured": upstreamConfigured,
+			"apiProxyConfigured": m.cfg.APIProxyURL != "", "reverseProxyConfigured": m.cfg.ReverseProxyURL != "",
+			"cliproxyLogDirConfigured": m.cfg.CLIProxyLogDir != "",
+			"eventRetentionDays":       m.cfg.EventRetentionDays,
 		},
 		"teamSettings": m.settings.Payload(),
 		"queue": map[string]any{

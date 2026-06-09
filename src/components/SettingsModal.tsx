@@ -46,6 +46,7 @@ import SettingsAgentSection from './settingsModal/SettingsAgentSection'
 import SettingsAboutSection from './settingsModal/SettingsAboutSection'
 import SettingsDataSection from './settingsModal/SettingsDataSection'
 import SettingsCustomProviderModal from './settingsModal/SettingsCustomProviderModal'
+import UpstreamModeField from './settingsModal/UpstreamModeField'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -281,6 +282,7 @@ export default function SettingsModal() {
       url.searchParams.set('apiMode', profile.apiMode)
       const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode, profile.provider)
       url.searchParams.set('model', model)
+      if (profile.upstreamMode === 'api' || profile.upstreamMode === 'reverse') url.searchParams.set('upstreamMode', profile.upstreamMode)
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
       if (profile.streamImages !== DEFAULT_SETTINGS.streamImages) url.searchParams.set('streamImages', String(Boolean(profile.streamImages)))
       if (profile.streamPartialImages !== DEFAULT_STREAM_PARTIAL_IMAGES) url.searchParams.set('streamPartialImages', String(normalizeStreamPartialImages(profile.streamPartialImages)))
@@ -1090,6 +1092,13 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </div>
+
+              {activeProfile.provider === 'openai' && (
+                <UpstreamModeField
+                  value={activeProfile.upstreamMode ?? 'server'}
+                  onChange={(upstreamMode) => updateActiveProfile({ upstreamMode }, true)}
+                />
+              )}
 
               {/* 模型 ID */}
               <label className="block">

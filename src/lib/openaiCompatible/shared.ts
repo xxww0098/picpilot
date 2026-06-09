@@ -1,5 +1,6 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type ImageApiResponse } from '../../types'
 import { getStoredAuthToken } from '../auth'
+import { explicitUpstreamModeHeader } from '../apiProfiles'
 import type { CallApiResult } from '../imageApiShared'
 
 export const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
@@ -80,6 +81,8 @@ export function createRequestHeaders(profile: ApiProfile, options: { includeAppA
   if (!options.includeAppAuth && apiKey) headers.Authorization = `Bearer ${apiKey}`
 
   if (options.includeAppAuth) {
+    const upstreamMode = explicitUpstreamModeHeader(profile.upstreamMode)
+    if (upstreamMode) headers['X-PicPilot-Upstream-Mode'] = upstreamMode
     const token = getStoredAuthToken()
     if (token) headers['X-PicPilot-Authorization'] = `Bearer ${token}`
   }
@@ -120,17 +123,23 @@ function getStreamEventErrorMessage(event: Record<string, unknown>): string | nu
   return null
 }
 
-function parseServerSentEventBlock(block: string): string | null {
+function parseServerSentEventBlock(block: string): { data: string; eventType?: string } | null {
   const dataLines: string[] = []
+  let eventType: string | undefined
   for (const line of block.split(/\r?\n/)) {
     if (!line || line.startsWith(':')) continue
+    if (line.startsWith('event:')) {
+      const value = line.slice(6).trim()
+      if (value) eventType = value
+      continue
+    }
     if (!line.startsWith('data:')) continue
     dataLines.push(line.slice(5).replace(/^ /, ''))
   }
 
   const data = dataLines.join('\n').trim()
   if (!data || data === '[DONE]') return null
-  return data
+  return { data, eventType }
 }
 
 export async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void | Promise<void>): Promise<void> {
@@ -141,21 +150,24 @@ export async function readJsonServerSentEvents(response: Response, onEvent: (eve
   let buffer = ''
 
   const processBlock = async (block: string) => {
-    const data = parseServerSentEventBlock(block)
-    if (!data) return
+    const parsed = parseServerSentEventBlock(block)
+    if (!parsed) return
 
     let event: unknown
     try {
-      event = JSON.parse(data)
+      event = JSON.parse(parsed.data)
     } catch {
       throw new Error('流式响应包含无法解析的 JSON 事件')
     }
     if (!isRecordValue(event)) return
+    const eventRecord = parsed.eventType && !getStringValue(event, 'type')
+      ? { ...event, type: parsed.eventType }
+      : event
 
-    const errorMessage = getStreamEventErrorMessage(event)
+    const errorMessage = getStreamEventErrorMessage(eventRecord)
     if (errorMessage) throw new Error(errorMessage)
 
-    await onEvent(event)
+    await onEvent(eventRecord)
   }
 
   while (true) {

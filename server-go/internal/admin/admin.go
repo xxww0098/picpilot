@@ -4,6 +4,7 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/xxww0098/picpilot/server-go/internal/auth"
+	"github.com/xxww0098/picpilot/server-go/internal/chatgptreverse"
 	"github.com/xxww0098/picpilot/server-go/internal/config"
 	"github.com/xxww0098/picpilot/server-go/internal/db"
 	"github.com/xxww0098/picpilot/server-go/internal/gallery"
@@ -25,16 +27,39 @@ import (
 
 // Module wires the admin routes.
 type Module struct {
-	db       *db.DB
-	cfg      *config.Config
-	q        *queue.Queue
-	settings *settings.Provider
-	auth     *auth.Auth
-	logger   *slog.Logger
+	db           *db.DB
+	cfg          *config.Config
+	q            *queue.Queue
+	settings     *settings.Provider
+	auth         *auth.Auth
+	logger       *slog.Logger
+	reverse      reverseAuthChecker
+	reverseStore *chatgptreverse.Store
+	reverseJobs  *reverseAuthCheckJobManager
 }
 
-func New(d *db.DB, cfg *config.Config, q *queue.Queue, sp *settings.Provider, a *auth.Auth, logger *slog.Logger) *Module {
-	return &Module{db: d, cfg: cfg, q: q, settings: sp, auth: a, logger: logger}
+type reverseAuthChecker interface {
+	CheckAuthAccounts(context.Context) ([]chatgptreverse.AuthCheckResult, error)
+}
+
+type reverseAuthProgressChecker interface {
+	CountAuthAccounts(context.Context) (int, error)
+	CheckAuthAccountsWithProgress(context.Context, func(chatgptreverse.AuthCheckResult)) ([]chatgptreverse.AuthCheckResult, error)
+}
+
+type reverseAuthSelectiveProgressChecker interface {
+	CheckAuthAccountsByNameWithProgress(context.Context, []string, func(chatgptreverse.AuthCheckResult)) ([]chatgptreverse.AuthCheckResult, error)
+}
+
+func New(d *db.DB, cfg *config.Config, q *queue.Queue, sp *settings.Provider, a *auth.Auth, logger *slog.Logger, reverse ...reverseAuthChecker) *Module {
+	var checker reverseAuthChecker
+	if len(reverse) > 0 {
+		checker = reverse[0]
+	}
+	return &Module{
+		db: d, cfg: cfg, q: q, settings: sp, auth: a, logger: logger,
+		reverse: checker, reverseStore: chatgptreverse.NewStore(d), reverseJobs: newReverseAuthCheckJobManager(),
+	}
 }
 
 // Register mounts admin routes behind JWT + RequireAdmin.
@@ -54,6 +79,20 @@ func (m *Module) Register(r chi.Router) {
 		pr.Get("/api/admin/events", m.listEvents)
 		pr.Get("/api/admin/events/export", m.exportEvents)
 		pr.Get("/api/admin/overview", m.overview)
+		pr.Get("/api/admin/reverse-auth", m.getReverseAuth)
+		pr.Post("/api/admin/reverse-auth/check", m.checkReverseAuth)
+		pr.Post("/api/admin/reverse-auth/check-jobs", m.startReverseAuthCheckJob)
+		pr.Get("/api/admin/reverse-auth/check-jobs/{id}", m.getReverseAuthCheckJob)
+		pr.Post("/api/admin/reverse-auth/accounts", m.uploadReverseAuthAccount)
+		pr.Post("/api/admin/reverse-auth/accounts/access-token", m.importReverseAuthAccessToken)
+		pr.Get("/api/admin/reverse-auth/accounts/export", m.exportReverseAuthAccounts)
+		pr.Post("/api/admin/reverse-auth/accounts/bulk-delete", m.bulkDeleteReverseAuthAccounts)
+		pr.Get("/api/admin/reverse-auth/cliproxy/accounts", m.listCLIProxyReverseAuthAccounts)
+		pr.Post("/api/admin/reverse-auth/cliproxy/import", m.importCLIProxyReverseAuthAccounts)
+		pr.Post("/api/admin/reverse-auth/sub2api/import", m.importSub2APIReverseAuthAccounts)
+		pr.Get("/api/admin/reverse-auth/accounts/{name}", m.getReverseAuthAccount)
+		pr.Patch("/api/admin/reverse-auth/accounts/{name}", m.updateReverseAuthAccount)
+		pr.Delete("/api/admin/reverse-auth/accounts/{name}", m.deleteReverseAuthAccount)
 		pr.Post("/api/admin/gallery/{id}/revoke", m.revokeImage)
 		pr.Post("/api/admin/gallery/{id}/feature", m.featureImage)
 	})
@@ -147,9 +186,56 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 		settingsRec["streamFallbackEnabled"] = v
 		hasUpdates = true
 	}
+	if raw, ok := record["outboundProxyType"]; ok {
+		v, valid := config.ParseOutboundProxyTypePatchValue(raw)
+		if !valid {
+			httpx.Error(w, http.StatusBadRequest, "出站代理类型必须是 env、none、http、https、socks5 或 socks5h。")
+			return
+		}
+		settingsRec["outboundProxyType"] = v
+		hasUpdates = true
+	}
+	if raw, ok := record["outboundProxyUrl"]; ok {
+		v, valid := config.ParseOutboundProxyURLPatchValue(raw)
+		if !valid {
+			httpx.Error(w, http.StatusBadRequest, "出站代理地址必须是 2048 字以内的单行文本。")
+			return
+		}
+		settingsRec["outboundProxyUrl"] = v
+		hasUpdates = true
+	}
+	if raw, ok := record["cliproxyApiUrl"]; ok {
+		v, valid := config.ParseCLIProxyAPIURLPatchValue(raw)
+		if !valid {
+			httpx.Error(w, http.StatusBadRequest, "CLIProxyAPI 地址必须是 2048 字以内的 http/https URL。")
+			return
+		}
+		settingsRec["cliproxyApiUrl"] = v
+		hasUpdates = true
+	}
+	if raw, ok := record["cliproxyManagementKey"]; ok {
+		v, valid := config.ParseCLIProxyManagementKeyPatchValue(raw)
+		if !valid {
+			httpx.Error(w, http.StatusBadRequest, "CLIProxyAPI 管理密钥必须是 4096 字以内的单行文本。")
+			return
+		}
+		settingsRec["cliproxyManagementKey"] = v
+		hasUpdates = true
+	}
 	if !hasUpdates {
 		httpx.Error(w, http.StatusBadRequest, "没有可更新的字段。")
 		return
+	}
+	nextProxyType := config.NormalizeOutboundProxyType(settingsRec["outboundProxyType"], m.cfg.OutboundProxyType)
+	nextProxyURL := config.NormalizeOutboundProxyURL(settingsRec["outboundProxyUrl"])
+	if nextProxyURL == "" {
+		nextProxyURL = m.cfg.OutboundProxyURL
+	}
+	if config.OutboundProxyTypeRequiresURL(nextProxyType) {
+		if _, err := config.BuildOutboundProxyURL(nextProxyType, nextProxyURL); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "出站代理地址无效，请填写 host:port 或完整代理 URL。")
+			return
+		}
 	}
 
 	if err := m.settings.Save(settingsRec, m.actor(r)); err != nil {

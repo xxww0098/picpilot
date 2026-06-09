@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { useStore } from '../store'
+import { useStore, type AppState } from '../store'
 import Select from './Select'
 
 // 无 props，只订阅自身用到的过滤状态：memo 隔离父级（画廊容器）的无关重渲。
@@ -30,7 +30,7 @@ function SearchBar() {
         <div className="relative min-w-0 flex-1 sm:w-28 sm:flex-none">
           <Select
             value={filterStatus}
-            onChange={(val) => setFilterStatus(val as any)}
+            onChange={(val) => setFilterStatus(val as AppState['filterStatus'])}
             options={[
               { label: '全部状态', value: 'all' },
               { label: '已完成', value: 'done' },
