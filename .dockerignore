@@ -1,11 +1,17 @@
 node_modules
+**/node_modules
 dist
+docs
+deploy
 .git
 .gitignore
 .github
 *.md
 Dockerfile
 .dockerignore
+
+# 已删除的旧 TS 后端目录（本地可能残留 node_modules）
+server
 
 # Local-only runtime data and editor state
 data
@@ -16,7 +22,6 @@ tmp
 .vscode
 .idea
 .DS_Store
-.wrangler
 
 # Env / secrets / local overrides
 .env

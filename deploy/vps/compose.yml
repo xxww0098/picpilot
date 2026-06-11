@@ -35,18 +35,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/dockercopilot:/data
 
-  frontend:
-    image: picpilot-frontend:${PICPILOT_VERSION:-latest}
-    build:
-      context: /root/picpilot
-      dockerfile: deploy/Dockerfile
-    restart: unless-stopped
-
+  # 单镜像 = Go 后端 + 前端静态文件（构建上下文必须是仓库根，见 server-go/Dockerfile 头注）
   auth:
     image: picpilot-auth:${PICPILOT_VERSION:-latest}
     build:
-      context: /root/picpilot/server-go
-      dockerfile: Dockerfile
+      context: /root/picpilot
+      dockerfile: server-go/Dockerfile
       args:
         APP_VERSION: ${PICPILOT_VERSION:-dev}
     restart: unless-stopped

@@ -3,7 +3,7 @@ services:
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped
-    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN:-localhost}", "--to", "frontend:80"]
+    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN:-localhost}", "--to", "auth:3001"]
     ports:
       - "80:80"
       - "443:443"
@@ -11,27 +11,15 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - frontend
-    networks:
-      - picpilot_net
-
-  frontend:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    container_name: picpilot-frontend
-    restart: unless-stopped
-    depends_on:
       - auth
-    expose:
-      - "80"
     networks:
       - picpilot_net
 
+  # 单镜像 = Go 后端 + 前端静态文件（构建上下文是仓库根，见 server-go/Dockerfile 头注）
   auth:
     build:
-      context: ../server-go
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: server-go/Dockerfile
       args:
         APP_VERSION: ${PICPILOT_VERSION:-dev}
     container_name: picpilot-auth

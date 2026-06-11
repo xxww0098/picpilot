@@ -29,9 +29,9 @@
 
 **后端只有 Go 一套**：
 
-- `server-go/` —— 唯一后端（chi + modernc.org/sqlite，无 CGO；compose 的 `auth` 服务由它构建，v0.1.17 起替换 TS 版，旧 `server/` TS 后端已删除）。internal 包速查：`auth`（JWT / 注册登录）、`proxy`（`/api-proxy/*` 转发）、`queue`（FIFO 并发队列）、`task`（异步任务执行器，带重试）、`chatgptreverse`（逆向 ChatGPT 账号池，`UPSTREAM_MODE=reverse` 的内置实现）、`upstream`（上游模式选择）、`settings`（运行时团队配置，管理端改了即生效）、`admin` / `gallery` / `telemetry` / `db`。
+- `server-go/` —— 唯一后端（chi + modernc.org/sqlite，无 CGO；compose 的 `auth` 服务由它构建，v0.1.17 起替换 TS 版，旧 `server/` TS 后端已删除）。internal 包速查：`auth`（JWT / 注册登录）、`proxy`（`/api-proxy/*` 转发）、`queue`（FIFO 并发队列）、`task`（异步任务执行器，带重试）、`chatgptreverse`（逆向 ChatGPT 账号池，reverse 模式的内置实现）、`upstream`（上游模式选择）、`upstreamcooldown`（按模型挡住对冷却中上游的重试/排队请求）、`outboundproxy`（出站代理，管理端可配）、`imageproc`（无 CGO 图像解码/缩放/WebP 编码）、`settings`（运行时团队配置，管理端改了即生效）、`admin` / `gallery` / `telemetry` / `db`。
 
-**出图调用链**：`src/lib/api.ts` → `src/lib/openaiCompatibleImageApi.ts` 按 API 模式分发（`src/lib/openaiCompatible/` 下 Images、Responses 流式、自定义服务商等实现）→ 同源 `fetch('/api-proxy/v1/…')` 带 JWT（上游地址与 key 永不进前端）→ 后端并发队列 → 按 `UPSTREAM_MODE` 选上游：`api`（CLIProxyAPI 等 OpenAI 兼容端点，服务端注入 key）或 `reverse`（内置账号池直连 chatgpt.com）。
+**出图调用链**：`src/lib/api.ts` → `src/lib/openaiCompatibleImageApi.ts` 按 API 模式分发（`src/lib/openaiCompatible/` 下 Images、Responses 流式、自定义服务商等实现）→ 同源 `fetch('/api-proxy/v1/…')` 带 JWT（上游地址与 key 永不进前端）→ 后端并发队列 → 选上游：`api`（CLIProxyAPI 等 OpenAI 兼容端点，服务端注入 key）或 `reverse`（内置账号池直连 chatgpt.com）；模式按请求选择——前端按激活档案的 `upstreamMode` 发 `X-PicPilot-Upstream-Mode` 头（画廊顶栏模型选择器切换），无效或缺省时回退 env `UPSTREAM_MODE`。
 
 **前端**：zustand 单 store（`src/store.ts`，persist 到 IndexedDB）。`App.tsx` 四个工作区：画廊（默认出图）、Agent 多轮对话、工作流画布、视频。关键模块：
 
@@ -39,7 +39,7 @@
 - `src/lib/workflow/engine.ts` —— 纯逻辑数据流引擎（无 React 依赖），`templates.ts` 平台模板、`runtime.ts` 桥接 store 与出图 API；画布组件 `src/components/workflow/WorkflowCanvas.tsx`（@xyflow/react）。
 - `src/lib/imageModels.ts` / `chatModels.ts` —— 模型注册表；`src/lib/paramCompatibility.ts` —— 按服务商归一化参数并做批量 clamp；`src/lib/apiProfiles.ts` —— API 配置档案（`normalize*` 是恢复策略而非拒绝，勿改写成 reject 式校验）。
 
-**部署**：生产在 VPS `/opt/picpilot`（Caddy + frontend + auth + cliproxy），发布 / 回滚用 `deploy-vps` skill；实盘 compose 的脱敏备份在 `deploy/vps/compose.yml`，改实盘后须同步回该文件。
+**部署**：生产在 VPS `/opt/picpilot`（Caddy + auth + cliproxy；`auth` 为单镜像 = Go 后端 + 前端静态文件，`server-go/Dockerfile` 多阶段构建、上下文为仓库根），发布 / 回滚用 `deploy-vps` skill；实盘 compose 的脱敏备份在 `deploy/vps/compose.yml`，改实盘后须同步回该文件。
 
 ## 用户对话框（必读）
 
@@ -84,12 +84,11 @@ showAppToast('邀请链接已复制', 'success')
 
 ## 日志路径（排查线上问题用）
 
-部署在 `/opt/picpilot`（`compose.yml`，服务名 `auth`/`frontend`/`cliproxy`/`caddy`/`dockercopilot`）。
+部署在 `/opt/picpilot`（`compose.yml`，服务名 `auth`/`cliproxy`/`caddy`/`dockercopilot`；前端静态文件由 `auth` 容器内的 Go server 托管）。
 
 | 组件 | 位置 | 查看方式 |
 |------|------|---------|
-| picpilot 后端（`server-go/`，slog JSON） | 输出到 stdout，无文件 | `docker logs picpilot-auth-1`（加 `-f`/`--tail 200`/`--since 1h`） |
-| picpilot 前端（静态资源 / nginx） | stdout | `docker logs picpilot-frontend-1` |
+| picpilot 后端 + 前端静态（`server-go/`，slog JSON） | 输出到 stdout，无文件 | `docker logs picpilot-auth-1`（加 `-f`/`--tail 200`/`--since 1h`） |
 | CLIProxyAPI（上游出图代理） | `/opt/picpilot/data/cliproxy/logs/` | `main.log` 为主日志（含每个请求路由账号与耗时）；`error-*.log` 为单请求错误快照（请求头 + 上游响应） |
 | Caddy（反代/TLS） | stdout | `docker logs picpilot-caddy-1` |
 

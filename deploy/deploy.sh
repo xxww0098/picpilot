@@ -19,25 +19,25 @@ else
 fi
 echo ">>> 部署版本: $VERSION"
 
-# 3. 构建带版本标签的镜像
+# 3. 构建带版本标签的镜像（auth 单镜像内含前端静态文件）
 echo ">>> 构建镜像..."
 cd "$COMPOSE_DIR"
-PICPILOT_VERSION="$VERSION" docker compose build frontend auth
+PICPILOT_VERSION="$VERSION" docker compose build auth
 
-# 4. 启动新容器（Compose 检测到镜像变化会自动更新）
+# 4. 启动新容器（Compose 检测到镜像变化会自动更新；--remove-orphans 清理已下线的旧 frontend 容器）
 echo ">>> 启动新版本..."
-PICPILOT_VERSION="$VERSION" docker compose up -d frontend auth
+PICPILOT_VERSION="$VERSION" docker compose up -d --remove-orphans auth
 
 # 5. 等待容器启动
 sleep 3
 
 # 6. 验证部署
 echo ">>> 验证部署..."
-if docker ps | grep -q "picpilot-frontend:$VERSION" && docker ps | grep -q "picpilot-auth:$VERSION"; then
+if docker ps | grep -q "picpilot-auth:$VERSION"; then
     echo "✅ 部署成功: $VERSION"
 else
     echo "❌ 部署失败，请检查日志"
-    docker compose logs --tail=20 frontend auth
+    docker compose logs --tail=20 auth
     exit 1
 fi
 

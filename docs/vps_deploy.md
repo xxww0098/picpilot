@@ -1,6 +1,6 @@
 # VPS 部署指南
 
-picpilot 在 VPS 上通过 Docker Compose 部署，包含 5 个服务：Caddy（反向代理）、CLIProxyAPI（上游 API 代理）、DockerCopilot（容器管理）、PicPilot Frontend、PicPilot Auth。
+picpilot 在 VPS 上通过 Docker Compose 部署，包含 4 个服务：Caddy（反向代理 / TLS）、CLIProxyAPI（上游 API 代理）、DockerCopilot（容器管理）、PicPilot Auth（单镜像：Go 后端 + 前端静态文件）。
 
 ## 目录结构
 
@@ -116,16 +116,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/dockercopilot:/data
 
-  frontend:
-    build:
-      context: /root/picpilot
-      dockerfile: deploy/Dockerfile
-    restart: unless-stopped
-
+  # 单镜像 = Go 后端 + 前端静态文件（构建上下文必须是仓库根）
   auth:
     build:
-      context: /root/picpilot/server-go
-      dockerfile: Dockerfile
+      context: /root/picpilot
+      dockerfile: server-go/Dockerfile
     restart: unless-stopped
     environment:
       - ADMIN_USERS=${ADMIN_USERS}
@@ -158,8 +153,24 @@ volumes:
   email your-email@example.com
 }
 
+# auth（Go server）同时托管前端静态文件与 /api、/api-proxy；
+# 长超时用于出图流式响应，request_body 上限保护大图上传。
 image.xxww.online {
-  reverse_proxy frontend:80
+  encode zstd gzip
+
+  request_body {
+    max_size 600MB
+  }
+
+  reverse_proxy auth:3001 {
+    header_up X-Real-IP {remote_host}
+    transport http {
+      dial_timeout 60s
+      response_header_timeout 600s
+      read_timeout 600s
+      write_timeout 600s
+    }
+  }
 }
 
 api.xxww.online {
