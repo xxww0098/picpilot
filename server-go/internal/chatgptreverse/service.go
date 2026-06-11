@@ -61,6 +61,25 @@ type imageItem struct {
 	RevisedPrompt string
 }
 
+type retryableCodexStreamError struct {
+	message string
+}
+
+func (e *retryableCodexStreamError) Error() string { return e.message }
+
+func newRetryableCodexStreamError(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "ChatGPT 上游生成失败，请重试。"
+	}
+	return &retryableCodexStreamError{message: "ChatGPT 上游生成临时失败：" + message}
+}
+
+func isRetryableCodexStreamError(err error) bool {
+	var target *retryableCodexStreamError
+	return errors.As(err, &target)
+}
+
 // New constructs the built-in reverse service. It is cheap to create even when
 // the feature is not enabled.
 func New(cfg *config.Config, store *Store, logger *slog.Logger, sp ...*settings.Provider) *Service {
@@ -235,13 +254,9 @@ func (s *Service) collectCodexImages(ctx context.Context, imageBody map[string]a
 	}
 	data := make([]map[string]any, 0, n)
 	for i := 0; i < n; i++ {
-		response, err := s.collectCodexResponse(ctx, codexBodyFromImageRequest(imageBody, inputImages))
+		items, err := s.collectCodexImageItems(ctx, codexBodyFromImageRequest(imageBody, inputImages))
 		if err != nil {
 			return nil, err
-		}
-		items := extractImageItems(response)
-		if len(items) == 0 {
-			return nil, errors.New("内置 reverse 未从上游响应中解析到图片。")
 		}
 		for _, item := range items {
 			row := map[string]any{"b64_json": item.B64}
@@ -262,6 +277,32 @@ func (s *Service) collectCodexImages(ctx context.Context, imageBody map[string]a
 	}, nil
 }
 
+func (s *Service) collectCodexImageItems(ctx context.Context, body map[string]any) ([]imageItem, error) {
+	attempts := 1
+	if s != nil && s.cfg != nil && s.cfg.UpstreamMaxRetries > 0 {
+		attempts += s.cfg.UpstreamMaxRetries
+	}
+	var last error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		response, err := s.collectCodexResponse(ctx, cloneMap(body))
+		if err == nil {
+			items := extractImageItems(response)
+			if len(items) > 0 {
+				return items, nil
+			}
+			err = errors.New("内置 reverse 未从上游响应中解析到图片。")
+		}
+		last = err
+		if attempt >= attempts || !isRetryableCodexStreamError(err) {
+			return nil, err
+		}
+		if s.logger != nil {
+			s.logger.Warn("chatgpt reverse codex image stream failed; retrying", "scope", "reverse", "attempt", attempt, "maxAttempts", attempts, "err", truncateLogValue(err.Error(), 240))
+		}
+	}
+	return nil, last
+}
+
 func isCodexImageModel(value any) bool {
 	return strings.EqualFold(strings.TrimSpace(stringValue(value, "")), "codex-gpt-image-2")
 }
@@ -275,6 +316,9 @@ func (s *Service) collectCodexResponse(ctx context.Context, body map[string]any)
 	defer resp.Body.Close()
 	events, err := readSSEEvents(resp.Body)
 	if err != nil {
+		return nil, err
+	}
+	if err := codexStreamFailure(events); err != nil {
 		return nil, err
 	}
 	completed := completedResponse(events)

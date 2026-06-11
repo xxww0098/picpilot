@@ -281,6 +281,51 @@ func completedResponse(events []map[string]any) map[string]any {
 	return nil
 }
 
+func codexStreamFailure(events []map[string]any) error {
+	for _, event := range events {
+		switch stringValue(event["type"], "") {
+		case "error":
+			return codexStreamEventError(event["error"])
+		case "response.failed":
+			if err := codexStreamEventError(event["error"]); err != nil {
+				return err
+			}
+			if response, ok := event["response"].(map[string]any); ok {
+				if err := codexStreamEventError(response["error"]); err != nil {
+					return err
+				}
+			}
+			return newRetryableCodexStreamError("上游返回 response.failed。")
+		}
+	}
+	return nil
+}
+
+func codexStreamEventError(value any) error {
+	m, _ := value.(map[string]any)
+	if len(m) == 0 {
+		return nil
+	}
+	code := strings.TrimSpace(stringValue(m["code"], ""))
+	message := strings.TrimSpace(stringValue(m["message"], ""))
+	if message == "" {
+		message = strings.TrimSpace(stringValue(m["detail"], ""))
+	}
+	if message == "" {
+		message = strings.TrimSpace(stringValue(m["reason"], ""))
+	}
+	if code == "" && message == "" {
+		return nil
+	}
+	if code != "" && message != "" {
+		return newRetryableCodexStreamError(code + ": " + message)
+	}
+	if code != "" {
+		return newRetryableCodexStreamError(code)
+	}
+	return newRetryableCodexStreamError(message)
+}
+
 func appendOutputItems(out []any, value any) []any {
 	switch v := value.(type) {
 	case []any:
