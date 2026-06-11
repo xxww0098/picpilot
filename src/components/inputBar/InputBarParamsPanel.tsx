@@ -115,8 +115,8 @@ export default function InputBarParamsPanel({
             value={params.output_format}
             onChange={(val) => setParams({ output_format: val as any })}
             options={[
-              { label: 'PNG', value: 'png' },
               { label: 'JPEG', value: 'jpeg' },
+              { label: 'PNG', value: 'png' },
               { label: 'WebP', value: 'webp' },
             ]}
             className={selectClass}

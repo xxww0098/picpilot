@@ -253,20 +253,43 @@ func readSSEEvents(r io.Reader) ([]map[string]any, error) {
 }
 
 func completedResponse(events []map[string]any) map[string]any {
+	var outputItems []any
+	for _, event := range events {
+		if item, ok := event["item"]; ok {
+			outputItems = append(outputItems, item)
+		}
+		if output, ok := event["output"]; ok {
+			outputItems = appendOutputItems(outputItems, output)
+		}
+	}
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
 		if stringValue(event["type"], "") == "response.completed" {
 			if response, ok := event["response"].(map[string]any); ok {
+				if len(extractImageItems(response)) == 0 && len(extractImageItems(outputItems)) > 0 {
+					next := cloneMap(response)
+					next["output"] = outputItems
+					return next
+				}
 				return response
 			}
 		}
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if _, ok := events[i]["output"]; ok {
-			return events[i]
-		}
+	if len(outputItems) > 0 {
+		return map[string]any{"output": outputItems}
 	}
 	return nil
+}
+
+func appendOutputItems(out []any, value any) []any {
+	switch v := value.(type) {
+	case []any:
+		return append(out, v...)
+	case map[string]any:
+		return append(out, v)
+	default:
+		return out
+	}
 }
 
 func extractImageItems(value any) []imageItem {
