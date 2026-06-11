@@ -1,4 +1,5 @@
-const CACHE_NAME = 'picpilot-v0.1.26'
+// __APP_VERSION__ 由 build:sw 的 scripts/inject-sw-version.ts 在编译产物里替换为 package.json 的 version
+const CACHE_NAME = 'picpilot-v__APP_VERSION__'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.png', './pwa-icon-192.png', './pwa-icon-512.png']
 
 const sw = self as unknown as ServiceWorkerGlobalScope
