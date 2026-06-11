@@ -46,7 +46,6 @@ import SettingsAgentSection from './settingsModal/SettingsAgentSection'
 import SettingsAboutSection from './settingsModal/SettingsAboutSection'
 import SettingsDataSection from './settingsModal/SettingsDataSection'
 import SettingsCustomProviderModal from './settingsModal/SettingsCustomProviderModal'
-import UpstreamModeField from './settingsModal/UpstreamModeField'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -1092,13 +1091,6 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </div>
-
-              {activeProfile.provider === 'openai' && (
-                <UpstreamModeField
-                  value={activeProfile.upstreamMode ?? 'server'}
-                  onChange={(upstreamMode) => updateActiveProfile({ upstreamMode }, true)}
-                />
-              )}
 
               {/* 模型 ID */}
               <label className="block">
