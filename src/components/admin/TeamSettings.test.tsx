@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import TeamSettings from './TeamSettings'
+
+afterEach(() => {
+  cleanup()
+})
 
 vi.mock('../../hooks/useAsyncQuery', () => ({
   useAsyncQuery: () => ({
@@ -14,6 +18,7 @@ vi.mock('../../hooks/useAsyncQuery', () => ({
       reverseAccountConcurrency: 4,
       streamFallbackEnabled: true,
       requestTimeoutSeconds: 900,
+      allowedOutputFormats: ['jpeg', 'png'],
       outboundProxyType: 'env',
       outboundProxyUrl: '',
       cliproxyApiUrl: '',
@@ -50,5 +55,12 @@ describe('TeamSettings', () => {
     expect(screen.getByText('逆向单账号并发')).toBeTruthy()
     expect(screen.getByText('4')).toBeTruthy()
     expect(screen.getByText('个请求/账号')).toBeTruthy()
+  })
+
+  it('renders allowed output formats in team settings', () => {
+    render(<TeamSettings />)
+
+    expect(screen.getAllByText('可选出图格式').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('JPEG / PNG').length).toBeGreaterThan(0)
   })
 })

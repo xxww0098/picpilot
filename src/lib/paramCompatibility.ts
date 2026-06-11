@@ -1,5 +1,7 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
 import { getActiveApiProfile } from './apiProfiles'
+import { getCachedAuthUser } from './auth'
+import { normalizeAllowedOutputFormats, resolveAllowedOutputFormat } from './outputFormats'
 import { normalizeImageSize } from './size'
 
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
@@ -17,13 +19,15 @@ export function getOutputImageLimitForSettings(_settings: AppSettings, maxOutput
 export function normalizeParamsForSettings(
   params: TaskParams,
   settings: AppSettings,
-  options: { hasInputImages?: boolean; maxOutputImages?: number } = {},
+  options: { hasInputImages?: boolean; maxOutputImages?: number; allowedOutputFormats?: readonly string[] } = {},
 ): TaskParams {
   const activeProfile = getActiveApiProfile(settings)
   const outputImageLimit = getOutputImageLimitForSettings(settings, options.maxOutputImages)
+  const allowedOutputFormats = normalizeAllowedOutputFormats(options.allowedOutputFormats ?? getCachedAuthUser()?.allowedOutputFormats)
   const nextParams: TaskParams = {
     ...params,
     size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
+    output_format: resolveAllowedOutputFormat(params.output_format, allowedOutputFormats),
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 

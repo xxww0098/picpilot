@@ -248,6 +248,7 @@ func (a *Auth) authUserPayload(userID string) (map[string]any, bool) {
 		"proxyUserSoftLimit":      lim.PerUserSoftLimit,
 		"streamFallbackEnabled":   sp.StreamFallbackEnabled,
 		"requestTimeoutSeconds":   sp.RequestTimeoutSeconds,
+		"allowedOutputFormats":    sp.AllowedOutputFormats,
 		"publicGalleryCount":      galleryCount,
 		"publicStorageBytes":      publicStorageBytes,
 		"publicStorageQuotaBytes": a.cfg.PerUserPublicQuotaBytes,

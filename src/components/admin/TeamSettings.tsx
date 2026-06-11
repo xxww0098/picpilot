@@ -1,15 +1,30 @@
 import { useEffect, useState } from 'react'
 import { fetchAdminTeamSettings, patchAdminTeamSettings, type AdminOutboundProxyType } from '../../lib/adminApi'
+import { OUTPUT_FORMAT_OPTIONS, formatOutputFormatList, normalizeAllowedOutputFormats } from '../../lib/outputFormats'
 import { openPromptDialog, showAppToast } from '../../lib/dialog'
 import { getUserFacingErrorMessage } from '../../lib/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
 import QueryState from './QueryState'
+import type { OutputImageFormat } from '../../types'
 
 export default function TeamSettings() {
   const { data, loading, error, reload } = useAsyncQuery(() => fetchAdminTeamSettings(), [])
   const { patchUser } = useAuth()
   const [saving, setSaving] = useState(false)
+
+  function syncCurrentUser(updated: Awaited<ReturnType<typeof patchAdminTeamSettings>>) {
+    patchUser({
+      maxBatchImages: updated.defaultMaxBatchImages,
+      galleryAutoRetryCount: updated.galleryAutoRetryCount,
+      maxConcurrent: updated.maxConcurrent,
+      maxQueue: updated.maxQueue,
+      proxyUserSoftLimit: updated.proxyUserSoftLimit,
+      streamFallbackEnabled: updated.streamFallbackEnabled,
+      requestTimeoutSeconds: updated.requestTimeoutSeconds,
+      allowedOutputFormats: normalizeAllowedOutputFormats(updated.allowedOutputFormats),
+    })
+  }
 
   // 通用编辑器：弹数字输入框 → 校验 → PATCH → 重载 → toast。
   function editNumber(opts: {
@@ -35,15 +50,7 @@ export default function TeamSettings() {
         setSaving(true)
         try {
           const updated = await patchAdminTeamSettings(opts.toField(Math.trunc(Number(raw))))
-          patchUser({
-            maxBatchImages: updated.defaultMaxBatchImages,
-            galleryAutoRetryCount: updated.galleryAutoRetryCount,
-            maxConcurrent: updated.maxConcurrent,
-            maxQueue: updated.maxQueue,
-            proxyUserSoftLimit: updated.proxyUserSoftLimit,
-            streamFallbackEnabled: updated.streamFallbackEnabled,
-            requestTimeoutSeconds: updated.requestTimeoutSeconds,
-          })
+          syncCurrentUser(updated)
           await reload()
           showAppToast(opts.successMessage, 'success')
         } catch (e) {
@@ -59,15 +66,7 @@ export default function TeamSettings() {
     setSaving(true)
     try {
       const updated = await patchAdminTeamSettings({ streamFallbackEnabled: !current })
-      patchUser({
-        maxBatchImages: updated.defaultMaxBatchImages,
-        galleryAutoRetryCount: updated.galleryAutoRetryCount,
-        maxConcurrent: updated.maxConcurrent,
-        maxQueue: updated.maxQueue,
-        proxyUserSoftLimit: updated.proxyUserSoftLimit,
-        streamFallbackEnabled: updated.streamFallbackEnabled,
-        requestTimeoutSeconds: updated.requestTimeoutSeconds,
-      })
+      syncCurrentUser(updated)
       await reload()
       showAppToast(updated.streamFallbackEnabled ? '流式失败回退已开启。' : '流式失败回退已关闭。', 'success')
     } catch (e) {
@@ -101,6 +100,20 @@ export default function TeamSettings() {
       await patchAdminTeamSettings(body)
       await reload()
       showAppToast('CPA 服务器配置已更新。', 'success')
+    } catch (e) {
+      showAppToast(getUserFacingErrorMessage(e, '保存失败'), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateAllowedOutputFormats(nextFormats: OutputImageFormat[]) {
+    setSaving(true)
+    try {
+      const updated = await patchAdminTeamSettings({ allowedOutputFormats: nextFormats })
+      syncCurrentUser(updated)
+      await reload()
+      showAppToast('可选出图格式已更新。', 'success')
     } catch (e) {
       showAppToast(getUserFacingErrorMessage(e, '保存失败'), 'error')
     } finally {
@@ -207,6 +220,11 @@ export default function TeamSettings() {
                 toField: (val) => ({ galleryAutoRetryCount: val }),
                 successMessage: '失败自动重试次数已更新。',
               })}
+            />
+            <OutputFormatSettingCard
+              allowedOutputFormats={data.allowedOutputFormats}
+              disabled={saving}
+              onSave={(formats) => void updateAllowedOutputFormats(formats)}
             />
             <SettingCard
               label="统一请求超时"
@@ -407,6 +425,76 @@ function BooleanSettingCard({ label, enabled, disabled, onToggle }: {
       <dd className="mt-1 flex items-baseline gap-1 text-[hsl(var(--foreground))]">
         <span className="text-2xl font-semibold">{enabled ? '开启' : '关闭'}</span>
       </dd>
+    </div>
+  )
+}
+
+function OutputFormatSettingCard({ allowedOutputFormats, disabled, onSave }: {
+  allowedOutputFormats: OutputImageFormat[]
+  disabled: boolean
+  onSave: (formats: OutputImageFormat[]) => void
+}) {
+  const normalized = normalizeAllowedOutputFormats(allowedOutputFormats)
+  const [draft, setDraft] = useState<OutputImageFormat[]>(normalized)
+
+  useEffect(() => {
+    setDraft(normalizeAllowedOutputFormats(allowedOutputFormats))
+  }, [allowedOutputFormats])
+
+  const dirty = draft.join(',') !== normalized.join(',')
+  const canSave = dirty && draft.length > 0
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+      <div className="flex items-center justify-between">
+        <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">可选出图格式</dt>
+        <button
+          type="button"
+          disabled={disabled || !canSave}
+          onClick={() => onSave(draft)}
+          className="text-xs font-medium text-[hsl(var(--primary))] transition-colors hover:underline disabled:opacity-50"
+        >
+          保存
+        </button>
+      </div>
+      <dd className="mt-1 flex items-center justify-between gap-3">
+        <span className="text-2xl font-semibold tabular-nums text-[hsl(var(--foreground))]">
+          {formatOutputFormatList(normalized) || '无'}
+        </span>
+      </dd>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {OUTPUT_FORMAT_OPTIONS.map((option) => {
+          const checked = draft.includes(option.value)
+          const allowToggleOff = draft.length > 1 || !checked
+          return (
+            <label
+              key={option.value}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium transition ${
+                checked
+                  ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--foreground))]'
+                  : 'border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--muted-foreground))]'
+              } ${disabled ? 'opacity-50' : ''}`}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={disabled || !allowToggleOff}
+                onChange={() => {
+                  setDraft((current) => current.includes(option.value)
+                    ? current.filter((item) => item !== option.value)
+                    : [...current, option.value],
+                  )
+                }}
+                className="h-3.5 w-3.5 rounded border-[hsl(var(--border))] accent-[hsl(var(--primary))]"
+              />
+              <span>{option.label}</span>
+            </label>
+          )
+        })}
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+        用户端只会看到这里勾选的格式。至少保留一种，保存后立即生效。
+      </p>
     </div>
   )
 }

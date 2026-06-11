@@ -26,4 +26,25 @@ describe('parameter compatibility', () => {
 
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 4 }, settings).n).toBe(4)
   })
+
+  it('falls back to the first team-allowed output format', () => {
+    const result = normalizeParamsForSettings(
+      { ...DEFAULT_PARAMS, output_format: 'png', output_compression: null },
+      DEFAULT_SETTINGS,
+      { allowedOutputFormats: ['jpeg', 'webp'] },
+    )
+
+    expect(result.output_format).toBe('jpeg')
+  })
+
+  it('clears compression when team policy forces PNG output', () => {
+    const result = normalizeParamsForSettings(
+      { ...DEFAULT_PARAMS, output_format: 'jpeg', output_compression: 80 },
+      DEFAULT_SETTINGS,
+      { allowedOutputFormats: ['png'] },
+    )
+
+    expect(result.output_format).toBe('png')
+    expect(result.output_compression).toBeNull()
+  })
 })

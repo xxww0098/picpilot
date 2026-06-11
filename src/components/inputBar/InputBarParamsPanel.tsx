@@ -1,15 +1,17 @@
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import { useHintTooltip } from '../../hooks/useHintTooltip'
 import { getProviderCapabilities } from '../../lib/imageProviderCapabilities'
+import { getOutputFormatSelectOptions } from '../../lib/outputFormats'
 import Select from '../Select'
 import ButtonTooltip from './ButtonTooltip'
-import type { TaskParams } from '../../types'
+import type { OutputImageFormat, TaskParams } from '../../types'
 
 export type InputBarParamsPanelProps = {
   cols: string
   params: TaskParams
   setParams: (patch: Partial<TaskParams>) => void
   settings: { codexCli?: boolean }
+  allowedOutputFormats?: readonly OutputImageFormat[]
   provider?: string
   displaySize: string
   qualityOptions: { label: string; value: string }[]
@@ -41,6 +43,7 @@ export default function InputBarParamsPanel({
   params,
   setParams,
   settings,
+  allowedOutputFormats,
   provider,
   displaySize,
   qualityOptions,
@@ -114,11 +117,7 @@ export default function InputBarParamsPanel({
           <Select
             value={params.output_format}
             onChange={(val) => setParams({ output_format: val as any })}
-            options={[
-              { label: 'JPEG', value: 'jpeg' },
-              { label: 'PNG', value: 'png' },
-              { label: 'WebP', value: 'webp' },
-            ]}
+            options={getOutputFormatSelectOptions(allowedOutputFormats)}
             className={selectClass}
           />
         ) : (

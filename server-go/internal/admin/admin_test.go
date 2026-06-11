@@ -204,6 +204,41 @@ func TestTeamSettingsReverseAccountConcurrencyRuntime(t *testing.T) {
 	}
 }
 
+func TestTeamSettingsAllowedOutputFormats(t *testing.T) {
+	e := setup(t)
+	rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"allowedOutputFormats":["webp","jpeg","webp"]}`)
+	if rec.Code != 200 {
+		t.Fatalf("patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		AllowedOutputFormats []string `json:"allowedOutputFormats"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
+	if strings.Join(body.AllowedOutputFormats, ",") != "webp,jpeg" {
+		t.Fatalf("allowed formats not normalized: %+v body=%s", body, rec.Body.String())
+	}
+
+	rec = e.req("GET", "/api/admin/team-settings", e.adminTok, "")
+	if rec.Code != 200 {
+		t.Fatalf("get status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode persisted settings: %v", err)
+	}
+	if strings.Join(body.AllowedOutputFormats, ",") != "webp,jpeg" {
+		t.Fatalf("allowed formats not persisted: %+v body=%s", body, rec.Body.String())
+	}
+
+	if rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"allowedOutputFormats":[]}`); rec.Code != 400 {
+		t.Fatalf("empty formats should be 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"allowedOutputFormats":["png","bmp"]}`); rec.Code != 400 {
+		t.Fatalf("unknown format should be 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTeamSettingsOutboundProxy(t *testing.T) {
 	e := setup(t)
 	rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"outboundProxyType":"socks5h","outboundProxyUrl":"127.0.0.1:1080"}`)

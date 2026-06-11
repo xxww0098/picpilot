@@ -189,6 +189,15 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 		settingsRec["streamFallbackEnabled"] = v
 		hasUpdates = true
 	}
+	if raw, ok := record["allowedOutputFormats"]; ok {
+		v, valid := config.ParseAllowedOutputFormatsPatchValue(raw)
+		if !valid {
+			httpx.Error(w, http.StatusBadRequest, "可选出图格式至少保留一种，且只能包含 PNG、JPEG 或 WebP。")
+			return
+		}
+		settingsRec["allowedOutputFormats"] = v
+		hasUpdates = true
+	}
 	if raw, ok := record["outboundProxyType"]; ok {
 		v, valid := config.ParseOutboundProxyTypePatchValue(raw)
 		if !valid {

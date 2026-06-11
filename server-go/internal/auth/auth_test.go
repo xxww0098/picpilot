@@ -127,6 +127,10 @@ func TestLoginMeRefreshFlow(t *testing.T) {
 	if _, ok := body["maxConcurrent"]; !ok {
 		t.Fatal("expected maxConcurrent in profile")
 	}
+	formats, ok := body["allowedOutputFormats"].([]any)
+	if !ok || len(formats) != 3 {
+		t.Fatalf("expected allowedOutputFormats in profile, got %#v", body["allowedOutputFormats"])
+	}
 
 	// wrong password
 	if rec := do(r, "POST", "/api/auth/login", `{"username":"admin","password":"nope"}`, nil); rec.Code != 401 {

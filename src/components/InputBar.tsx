@@ -5,6 +5,7 @@ import type { MultiImageMode, TaskRecord } from '../types'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
 import { getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getProviderCapabilities } from '../lib/imageProviderCapabilities'
+import { normalizeAllowedOutputFormats, resolveAllowedOutputFormat } from '../lib/outputFormats'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getParamValueLabel, getUserFacingErrorMessage } from '../lib/userFacingText'
@@ -281,7 +282,9 @@ export default function InputBar() {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
   const agentAutoImageCount = appMode === 'agent'
-  const compressionDisabled = !getProviderCapabilities(activeProfile.provider).supportsCompression || params.output_format === 'png'
+  const allowedOutputFormats = useMemo(() => normalizeAllowedOutputFormats(user?.allowedOutputFormats), [user?.allowedOutputFormats])
+  const effectiveOutputFormat = resolveAllowedOutputFormat(params.output_format, allowedOutputFormats)
+  const compressionDisabled = !getProviderCapabilities(activeProfile.provider).supportsCompression || effectiveOutputFormat === 'png'
   const providerOutputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings, user?.maxBatchImages)
   const limitedByAdminBatchLimit = Boolean(user && user.maxBatchImages < providerOutputImageLimit)
@@ -351,12 +354,13 @@ export default function InputBar() {
     const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, {
       hasInputImages: inputImages.length > 0,
       maxOutputImages: user?.maxBatchImages,
+      allowedOutputFormats,
     })
     const patch = getChangedParams(params, normalizedParams)
     if (Object.keys(patch).length) {
       setParams(patch)
     }
-  }, [inputImages.length, params, effectiveSettings, setParams, user?.maxBatchImages])
+  }, [allowedOutputFormats, inputImages.length, params, effectiveSettings, setParams, user?.maxBatchImages])
 
 
   useEffect(() => {
@@ -728,6 +732,7 @@ export default function InputBar() {
       params={params}
       setParams={setParams}
       settings={settings}
+      allowedOutputFormats={allowedOutputFormats}
       provider={activeProfile.provider}
       displaySize={displaySize}
       qualityOptions={qualityOptions}

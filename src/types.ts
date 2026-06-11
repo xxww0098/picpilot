@@ -114,11 +114,13 @@ export interface AppSettings {
 export interface TaskParams {
   size: string
   quality: 'auto' | 'low' | 'medium' | 'high'
-  output_format: 'png' | 'jpeg' | 'webp'
+  output_format: OutputImageFormat
   output_compression: number | null
   moderation: 'auto' | 'low'
   n: number
 }
+
+export type OutputImageFormat = 'png' | 'jpeg' | 'webp'
 
 export const DEFAULT_PARAMS: TaskParams = {
   size: 'auto',

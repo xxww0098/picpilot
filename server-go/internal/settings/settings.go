@@ -14,18 +14,19 @@ import (
 
 // Payload is the normalized, effective team settings exposed to clients.
 type Payload struct {
-	DefaultMaxBatchImages     int    `json:"defaultMaxBatchImages"`
-	GalleryAutoRetryCount     int    `json:"galleryAutoRetryCount"`
-	MaxConcurrent             int    `json:"maxConcurrent"`
-	MaxQueue                  int    `json:"maxQueue"`
-	ProxyUserSoftLimit        int    `json:"proxyUserSoftLimit"`
-	ReverseAccountConcurrency int    `json:"reverseAccountConcurrency"`
-	StreamFallbackEnabled     bool   `json:"streamFallbackEnabled"`
-	RequestTimeoutSeconds     int    `json:"requestTimeoutSeconds"`
-	OutboundProxyType         string `json:"outboundProxyType"`
-	OutboundProxyURL          string `json:"outboundProxyUrl"`
-	CLIProxyAPIURL            string `json:"cliproxyApiUrl"`
-	CLIProxyKeyConfigured     bool   `json:"cliproxyManagementKeyConfigured"`
+	DefaultMaxBatchImages     int      `json:"defaultMaxBatchImages"`
+	GalleryAutoRetryCount     int      `json:"galleryAutoRetryCount"`
+	MaxConcurrent             int      `json:"maxConcurrent"`
+	MaxQueue                  int      `json:"maxQueue"`
+	ProxyUserSoftLimit        int      `json:"proxyUserSoftLimit"`
+	ReverseAccountConcurrency int      `json:"reverseAccountConcurrency"`
+	StreamFallbackEnabled     bool     `json:"streamFallbackEnabled"`
+	RequestTimeoutSeconds     int      `json:"requestTimeoutSeconds"`
+	AllowedOutputFormats      []string `json:"allowedOutputFormats"`
+	OutboundProxyType         string   `json:"outboundProxyType"`
+	OutboundProxyURL          string   `json:"outboundProxyUrl"`
+	CLIProxyAPIURL            string   `json:"cliproxyApiUrl"`
+	CLIProxyKeyConfigured     bool     `json:"cliproxyManagementKeyConfigured"`
 }
 
 type CLIProxyConfig struct {
@@ -95,6 +96,7 @@ func (p *Provider) Payload() Payload {
 		ReverseAccountConcurrency: config.NormalizeReverseAccountConcurrency(s["reverseAccountConcurrency"], p.cfg.ReverseAccountConcurrency),
 		StreamFallbackEnabled:     config.NormalizeBooleanSetting(s["streamFallbackEnabled"], p.cfg.DefaultStreamFallbackEnabled),
 		RequestTimeoutSeconds:     config.NormalizeRequestTimeoutSeconds(s["requestTimeoutSeconds"], p.cfg.DefaultRequestTimeoutSeconds),
+		AllowedOutputFormats:      config.NormalizeAllowedOutputFormats(s["allowedOutputFormats"], config.DefaultAllowedOutputFormats),
 		OutboundProxyType:         config.NormalizeOutboundProxyType(s["outboundProxyType"], p.cfg.OutboundProxyType),
 		OutboundProxyURL:          outboundProxyURL,
 		CLIProxyAPIURL:            cliproxy.APIURL,

@@ -23,6 +23,7 @@ import { validateMaskMatchesImage } from './canvasImage'
 import { normalizeParamsForSettings } from './paramCompatibility'
 import { getApiRequestNetworkErrorHint, getUpstreamApiErrorHint } from './taskErrorHints'
 import { getUserFacingErrorMessage } from './userFacingText'
+import { shouldRunAgentNoImageFallback } from './agentNoImageFallback'
 import { storeImage } from './db'
 import { cacheImage, ensureImageCached } from '../store/imageCache'
 import { getCachedAuthUser } from './auth'
@@ -1144,6 +1145,7 @@ async function executeAgentRound(
     let toolCallsUsed = 0
     let reachedToolLimit = false
     let pendingToolTextSeparator = false
+    let usedNoImageFallback = false
 
     // Helper: resolve reference image ids to data URLs for batch image calls
     const resolveReferenceImages = async (referenceIds: string[]): Promise<{ dataUrls: string[]; imageIds: string[] }> => {
@@ -1177,6 +1179,106 @@ async function executeAgentRound(
         }
       }
       return { dataUrls, imageIds }
+    }
+
+    const resolveNoImageFallbackReferences = async (): Promise<{ dataUrls: string[]; imageIds: string[]; referenceIds: string[] }> => {
+      const latestConversation = getState().agentConversations.find((item) => item.id === conversationId)
+      const latestRound = latestConversation?.rounds.find((item) => item.id === roundId) ?? null
+      if (!latestConversation || !latestRound) return { dataUrls: [], imageIds: [], referenceIds: [] }
+
+      const referenceIds: string[] = []
+      if (latestRound.inputImageIds.length > 0) {
+        for (let index = 0; index < latestRound.inputImageIds.length; index++) {
+          referenceIds.push(getAgentCurrentReferenceId(latestRound, index))
+        }
+      }
+
+      if (referenceIds.length === 0) {
+        const path = getAgentRoundPath(latestConversation, roundId)
+        for (let roundIndex = path.length - 2; roundIndex >= 0; roundIndex--) {
+          const previousRound = path[roundIndex]
+          const outputImages = collectAgentRoundOutputImageSlots(previousRound, getState().tasks)
+          if (outputImages.length === 0) continue
+          for (let imageIndex = 0; imageIndex < outputImages.length; imageIndex++) {
+            if (outputImages[imageIndex]) referenceIds.push(getAgentGeneratedImageReferenceId(previousRound, imageIndex))
+          }
+          break
+        }
+      }
+
+      const references = await resolveReferenceImages(uniqueIds(referenceIds))
+      return { ...references, referenceIds: uniqueIds(referenceIds) }
+    }
+
+    const executeNoImageFallback = async () => {
+      const references = await resolveNoImageFallbackReferences()
+      const fallbackToolCallId = genId()
+      const referenceHint = references.referenceIds.length > 0
+        ? `Use the attached reference image(s) as the visual source: ${references.referenceIds.map((id) => `<ref id="${id}" />`).join(', ')}.`
+        : ''
+      const fallbackPrompt = [
+        'The previous Agent response ended without an image-generation tool call even though the user explicitly requested an image. Generate exactly one image now. Do not answer with text only.',
+        referenceHint,
+        userMessage.content,
+      ].filter(Boolean).join('\n\n')
+      const taskId = await ensureStreamingAgentTask(fallbackToolCallId, userMessage.content, references.imageIds, {
+        createdAt: Date.now(),
+        maskTargetImageId: round.maskTargetImageId ?? null,
+        maskImageId: round.maskImageId ?? null,
+      })
+
+      logger.warn('agent', 'Agent 未调用出图工具，启动单图兜底', {
+        appMode: 'agent',
+        conversationId,
+        roundId,
+        taskId,
+        referenceImages: references.imageIds.length,
+      })
+
+      const fallbackResult = await callBatchImageSingle({
+        settings: requestSettings,
+        profile: agentProfile,
+        params,
+        batchItemId: 'agent_no_image_fallback',
+        prompt: fallbackPrompt,
+        referenceImageDataUrls: references.dataUrls,
+        referenceIds: references.referenceIds,
+        signal: controller.signal,
+        onImageToolStarted: shouldStreamAssistantMessage
+          ? async () => {
+              if (controller.signal.aborted) return
+            }
+          : undefined,
+        onPartialImage: shouldStreamAssistantMessage
+          ? async ({ image, partialImageIndex }) => {
+              if (controller.signal.aborted || !taskId) return
+              getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+              if (partialImageIndex === 0 || partialImageIndex == null) {
+                void persistTaskStreamPartialImage(taskId, image)
+              }
+            }
+          : undefined,
+        onImageToolCompleted: shouldStreamAssistantMessage
+          ? async (image) => {
+              if (controller.signal.aborted) return
+              await completeAgentImageTask({ ...image, toolCallId: fallbackToolCallId })
+            }
+          : undefined,
+      })
+
+      if (fallbackResult.image && !shouldStreamAssistantMessage) {
+        await completeAgentImageTask({ ...fallbackResult.image, toolCallId: fallbackToolCallId }, fallbackResult.rawResponsePayload)
+      }
+      if (fallbackResult.rawResponsePayload && taskId) {
+        const latestTask = getState().tasks.find((task) => task.id === taskId)
+        if (latestTask && !latestTask.rawResponsePayload) updateTaskInStore(taskId, { rawResponsePayload: fallbackResult.rawResponsePayload })
+      }
+      if (!fallbackResult.image) {
+        const error = fallbackResult.error || 'Agent 兜底出图未返回图片'
+        markAgentTaskError(taskId ?? undefined, error)
+        throw new Error(error)
+      }
+      toolCallsUsed += 1
     }
 
     // Helper: execute a generate_image_batch function call concurrently
@@ -1493,6 +1595,25 @@ async function executeAgentRound(
 
       // If no function calls need output → model decided the task is done → break
       if (functionCallOutputs.length === 0) {
+        const latestRoundForFallback = getState().agentConversations
+          .find((item) => item.id === conversationId)
+          ?.rounds.find((item) => item.id === roundId)
+        const latestTaskIds = latestRoundForFallback?.outputTaskIds ?? streamingTaskIds
+        const latestTasksForFallback = getState().tasks
+        const latestOutputImageCount = latestTaskIds.reduce(
+          (count, taskId) => count + (latestTasksForFallback.find((task) => task.id === taskId)?.outputImages.length ?? 0),
+          0,
+        )
+        if (!usedNoImageFallback && shouldRunAgentNoImageFallback({
+          prompt: userMessage.content,
+          outputTaskCount: latestTaskIds.length,
+          outputImageCount: latestOutputImageCount,
+          responseOutput: accumulatedOutputItems,
+        })) {
+          usedNoImageFallback = true
+          await executeNoImageFallback()
+        }
+
         updateAgentConversation(conversationId, (current) => ({
           ...current,
           updatedAt: Date.now(),

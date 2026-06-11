@@ -42,6 +42,7 @@ describe('adminApi team settings', () => {
       reverseAccountConcurrency: 1,
       streamFallbackEnabled: true,
       requestTimeoutSeconds: 900,
+      allowedOutputFormats: ['jpeg', 'png'],
       outboundProxyType: 'socks5h',
       outboundProxyUrl: '127.0.0.1:1080',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -58,6 +59,34 @@ describe('adminApi team settings', () => {
       outboundProxyType: 'socks5h',
       outboundProxyUrl: '127.0.0.1:1080',
     })
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
+  })
+
+  it('sends allowed output formats in the team-settings patch body', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      defaultMaxBatchImages: 10,
+      galleryAutoRetryCount: 1,
+      maxConcurrent: 5,
+      maxQueue: 10,
+      proxyUserSoftLimit: 3,
+      reverseAccountConcurrency: 1,
+      streamFallbackEnabled: true,
+      requestTimeoutSeconds: 900,
+      allowedOutputFormats: ['jpeg', 'webp'],
+      outboundProxyType: 'env',
+      outboundProxyUrl: '',
+      cliproxyApiUrl: '',
+      cliproxyManagementKeyConfigured: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const result = await patchAdminTeamSettings({ allowedOutputFormats: ['jpeg', 'webp'] })
+
+    expect(result.allowedOutputFormats).toEqual(['jpeg', 'webp'])
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/team-settings', expect.any(Object))
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ allowedOutputFormats: ['jpeg', 'webp'] })
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
   })
 

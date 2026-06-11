@@ -1,5 +1,6 @@
 import { authJson, readErrorMessage } from './apiClient'
 import { authFetch } from './auth'
+import type { OutputImageFormat } from '../types'
 
 export interface AdminOverviewData {
   totals: {
@@ -39,6 +40,7 @@ export interface AdminTeamSettings {
   reverseAccountConcurrency: number
   streamFallbackEnabled: boolean
   requestTimeoutSeconds: number
+  allowedOutputFormats: OutputImageFormat[]
   outboundProxyType: AdminOutboundProxyType
   outboundProxyUrl: string
   cliproxyApiUrl: string
@@ -266,6 +268,7 @@ export function patchAdminTeamSettings(body: {
   reverseAccountConcurrency?: number
   streamFallbackEnabled?: boolean
   requestTimeoutSeconds?: number
+  allowedOutputFormats?: OutputImageFormat[]
   outboundProxyType?: AdminOutboundProxyType
   outboundProxyUrl?: string
   cliproxyApiUrl?: string

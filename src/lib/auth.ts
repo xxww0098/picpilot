@@ -1,3 +1,5 @@
+import type { OutputImageFormat } from '../types'
+import { normalizeAllowedOutputFormats } from './outputFormats'
 import { logger, serializeError } from './logger'
 import { getUserFacingErrorMessage } from './userFacingText'
 
@@ -54,6 +56,7 @@ export interface AuthUser {
   proxyUserSoftLimit: number
   streamFallbackEnabled: boolean
   requestTimeoutSeconds: number
+  allowedOutputFormats: OutputImageFormat[]
   publicGalleryCount: number
   publicStorageBytes: number
   publicStorageQuotaBytes: number
@@ -85,6 +88,7 @@ function normalizeAuthUser(data: Partial<AuthUser>): AuthUser {
     proxyUserSoftLimit: Number(data.proxyUserSoftLimit ?? 0),
     streamFallbackEnabled: data.streamFallbackEnabled !== false,
     requestTimeoutSeconds: Number(data.requestTimeoutSeconds ?? 900),
+    allowedOutputFormats: normalizeAllowedOutputFormats(data.allowedOutputFormats),
     publicGalleryCount: Number(data.publicGalleryCount ?? 0),
     publicStorageBytes: Number(data.publicStorageBytes ?? 0),
     publicStorageQuotaBytes: Number(data.publicStorageQuotaBytes ?? 0),

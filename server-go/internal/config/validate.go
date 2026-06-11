@@ -137,6 +137,83 @@ const (
 	OutboundProxyModeSOCKS5H = "socks5h"
 )
 
+var DefaultAllowedOutputFormats = []string{"jpeg", "png", "webp"}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
+func normalizeOutputFormat(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "png":
+		return "png", true
+	case "jpeg", "jpg":
+		return "jpeg", true
+	case "webp":
+		return "webp", true
+	default:
+		return "", false
+	}
+}
+
+func normalizeOutputFormatList(v any, fallback []string, strict bool) ([]string, bool) {
+	var items []any
+	switch raw := v.(type) {
+	case []any:
+		items = raw
+	case []string:
+		items = make([]any, len(raw))
+		for i, item := range raw {
+			items[i] = item
+		}
+	default:
+		if strict {
+			return nil, false
+		}
+		return cloneStringSlice(fallback), true
+	}
+	out := make([]string, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		format, ok := normalizeOutputFormat(item)
+		if !ok {
+			if strict {
+				return nil, false
+			}
+			continue
+		}
+		if seen[format] {
+			continue
+		}
+		seen[format] = true
+		out = append(out, format)
+	}
+	if len(out) == 0 {
+		if strict {
+			return nil, false
+		}
+		return cloneStringSlice(fallback), true
+	}
+	return out, true
+}
+
+func NormalizeAllowedOutputFormats(v any, fallback []string) []string {
+	if len(fallback) == 0 {
+		fallback = DefaultAllowedOutputFormats
+	}
+	out, _ := normalizeOutputFormatList(v, fallback, false)
+	return out
+}
+
 func NormalizeUpstreamMode(v any) string {
 	switch s := strings.ToLower(strings.TrimSpace(toString(v))); s {
 	case "reverse", "rev", "chatgpt2api":
@@ -329,6 +406,10 @@ func ParseCLIProxyManagementKeyPatchValue(v any) (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+func ParseAllowedOutputFormatsPatchValue(v any) ([]string, bool) {
+	return normalizeOutputFormatList(v, DefaultAllowedOutputFormats, true)
 }
 
 func GetPositiveIntegerValue(v any) (int, bool) {
