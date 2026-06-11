@@ -164,6 +164,21 @@ export default function TeamSettings() {
               })}
             />
             <SettingCard
+              label="逆向单账号并发"
+              value={data.reverseAccountConcurrency}
+              unit="个请求/账号"
+              disabled={saving}
+              onEdit={() => editNumber({
+                title: '逆向单账号并发',
+                message: '内置 ChatGPT reverse 每个账号同时执行的请求数。单 IP 账号池建议保持 1；调高可能触发上游限流或 Cloudflare 拦截。范围 1-5。',
+                current: data.reverseAccountConcurrency,
+                min: 1,
+                max: 5,
+                toField: (val) => ({ reverseAccountConcurrency: val }),
+                successMessage: '逆向单账号并发已更新。',
+              })}
+            />
+            <SettingCard
               label="默认批量上限"
               value={data.defaultMaxBatchImages}
               unit="张 / 次"

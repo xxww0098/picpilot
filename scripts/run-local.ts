@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
 import pino from 'pino'
 
 type CommandResult = ReturnType<typeof spawnSync>
@@ -51,25 +52,32 @@ if (!npmVersion) {
   process.exit(1)
 }
 
-logger.info({ mode: 'local-hono', npm: npmVersion, node: nodeVersion }, 'Starting local picpilot')
+const goVersion = readCommandOutput('go', ['version'])
+if (!goVersion) {
+  logger.error({ scope: 'runtime' }, 'Go is not installed (the backend is Go, see server-go/)')
+  process.exit(1)
+}
+
+logger.info({ mode: 'local-go', npm: npmVersion, node: nodeVersion, go: goVersion }, 'Starting local picpilot')
 
 logger.info({ step: '1/3' }, 'Installing dependencies')
 run(npmCommand, ['install'], 'npm install')
-run(npmCommand, ['install'], 'npm install server', 'server')
 
 logger.info({ step: '2/3' }, 'Building frontend')
 run(npmCommand, ['run', 'build'], 'npm run build')
 
 const authPort = process.env.AUTH_PORT ?? '3001'
+const repoRoot = process.cwd()
 const localEnv = {
   ...process.env,
   AUTH_PORT: authPort,
   JWT_SECRET: process.env.JWT_SECRET ?? 'local-dev-jwt-secret-change-before-deploy',
   ADMIN_USERS: process.env.ADMIN_USERS ?? 'admin:admin',
-  LOG_PRETTY: process.env.LOG_PRETTY ?? '1',
+  STATIC_DIR: process.env.STATIC_DIR ?? join(repoRoot, 'dist'),
+  DATA_DIR: process.env.DATA_DIR ?? join(repoRoot, 'data'),
 }
 
-logger.info({ step: '3/3', url: `http://localhost:${authPort}` }, 'Starting Hono server')
+logger.info({ step: '3/3', url: `http://localhost:${authPort}` }, 'Starting Go server')
 if (!process.env.ADMIN_USERS) logger.warn({ username: 'admin', password: 'admin' }, 'Using default local admin')
-const result = spawnSync(npmCommand, ['start'], { stdio: 'inherit', cwd: 'server', env: localEnv })
-ensureSuccess(result, 'npm start server')
+const result = spawnSync('go', ['run', '.'], { stdio: 'inherit', cwd: 'server-go', env: localEnv })
+ensureSuccess(result, 'go run server-go')

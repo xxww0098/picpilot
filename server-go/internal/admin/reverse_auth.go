@@ -305,7 +305,7 @@ func (m *Module) exportReverseAuthAccounts(w http.ResponseWriter, r *http.Reques
 }
 
 func (m *Module) listCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *http.Request) {
-	candidates, err := m.fetchCLIProxyAuthFileCandidates(r.Context())
+	candidates, err := m.fetchCLIProxyAuthFileCandidates(r.Context(), strings.TrimSpace(r.URL.Query().Get("sourceId")))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -319,7 +319,8 @@ func (m *Module) importCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *htt
 		return
 	}
 	var body struct {
-		Names []string `json:"names"`
+		SourceID string   `json:"sourceId"`
+		Names    []string `json:"names"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "请求 JSON 无法解析。")
@@ -343,7 +344,8 @@ func (m *Module) importCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *htt
 		httpx.Error(w, http.StatusBadRequest, "单次最多导入 200 个 CLIProxyAPI 账号。")
 		return
 	}
-	candidates, err := m.fetchCLIProxyAuthFileCandidates(r.Context())
+	sourceID := strings.TrimSpace(body.SourceID)
+	candidates, err := m.fetchCLIProxyAuthFileCandidates(r.Context(), sourceID)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -360,7 +362,7 @@ func (m *Module) importCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *htt
 			skipped = append(skipped, cliproxyImportSkipped{Name: name, Reason: "不是 OpenAI OAuth 账号文件。"})
 			continue
 		}
-		raw, err := m.downloadCLIProxyAuthFile(r.Context(), candidate.Name)
+		raw, err := m.downloadCLIProxyAuthFile(r.Context(), sourceID, candidate.Name)
 		if err != nil {
 			skipped = append(skipped, cliproxyImportSkipped{Name: name, Reason: err.Error()})
 			continue
@@ -370,11 +372,7 @@ func (m *Module) importCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *htt
 			skipped = append(skipped, cliproxyImportSkipped{Name: name, Reason: err.Error()})
 			continue
 		}
-		localName, err := uniqueReverseAuthName(r.Context(), m.reverseStore, candidate.Name)
-		if err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "读取逆向账号数据库失败。")
-			return
-		}
+		localName := reverseAuthImportTargetName(candidate.Name)
 		now := time.Now().UnixMilli()
 		if err := m.reverseStore.SaveAuthAccount(r.Context(), chatgptreverse.StoredAuthAccount{
 			Name:      localName,
@@ -397,8 +395,12 @@ func (m *Module) importCLIProxyReverseAuthAccounts(w http.ResponseWriter, r *htt
 	httpx.JSON(w, http.StatusOK, map[string]any{"imported": imported, "skipped": skipped})
 }
 
-func (m *Module) fetchCLIProxyAuthFileCandidates(ctx context.Context) ([]cliproxyAuthFileCandidate, error) {
-	req, err := m.newCLIProxyManagementRequest(ctx, http.MethodGet, "/v0/management/auth-files")
+func (m *Module) fetchCLIProxyAuthFileCandidates(ctx context.Context, sourceID string) ([]cliproxyAuthFileCandidate, error) {
+	cfg, err := m.cpaConfigForSourceID(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	req, err := newCLIProxyManagementRequestWithConfig(ctx, http.MethodGet, "/v0/management/auth-files", cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -425,8 +427,12 @@ func (m *Module) fetchCLIProxyAuthFileCandidates(ctx context.Context) ([]cliprox
 	return out, nil
 }
 
-func (m *Module) downloadCLIProxyAuthFile(ctx context.Context, name string) ([]byte, error) {
-	req, err := m.newCLIProxyManagementRequest(ctx, http.MethodGet, "/v0/management/auth-files/download?name="+url.QueryEscape(name))
+func (m *Module) downloadCLIProxyAuthFile(ctx context.Context, sourceID, name string) ([]byte, error) {
+	cfg, err := m.cpaConfigForSourceID(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	req, err := newCLIProxyManagementRequestWithConfig(ctx, http.MethodGet, "/v0/management/auth-files/download?name="+url.QueryEscape(name), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -447,27 +453,6 @@ func (m *Module) downloadCLIProxyAuthFile(ctx context.Context, name string) ([]b
 		return nil, errors.New("JSON 过大，请控制在 2MB 以内。")
 	}
 	return raw, nil
-}
-
-func (m *Module) newCLIProxyManagementRequest(ctx context.Context, method, path string) (*http.Request, error) {
-	if m.settings == nil {
-		return nil, errors.New("团队设置未初始化。")
-	}
-	cfg := m.settings.CLIProxyConfig()
-	if strings.TrimSpace(cfg.APIURL) == "" {
-		return nil, errors.New("请先在团队设置中配置 CLIProxyAPI 地址。")
-	}
-	if strings.TrimSpace(cfg.ManagementKey) == "" {
-		return nil, errors.New("请先在团队设置中配置 CLIProxyAPI 管理密钥。")
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(cfg.APIURL, "/")+path, nil)
-	if err != nil {
-		return nil, errors.New("CLIProxyAPI 地址无效。")
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.ManagementKey)
-	req.Header.Set("X-Management-Key", cfg.ManagementKey)
-	return req, nil
 }
 
 func extractCLIProxyAuthFiles(payload any) []cliproxyAuthFileCandidate {
@@ -722,12 +707,8 @@ func uniqueReverseAuthName(ctx context.Context, store *chatgptreverse.Store, ori
 	if err != nil {
 		return "", err
 	}
-	base := strings.TrimSuffix(filepath.Base(original), filepath.Ext(original))
-	base = strings.Trim(reverseAuthFilenameUnsafe.ReplaceAllString(base, "-"), ".-_")
-	if base == "" || base == "." {
-		base = "chatgpt-auth"
-	}
-	candidate := base + ".json"
+	base := reverseAuthImportTargetBase(original)
+	candidate := reverseAuthImportTargetName(original)
 	if !existing[candidate] {
 		return candidate, nil
 	}
@@ -739,6 +720,19 @@ func uniqueReverseAuthName(ctx context.Context, store *chatgptreverse.Store, ori
 		}
 	}
 	return "chatgpt-auth-" + stamp + "-" + randomHex(8) + ".json", nil
+}
+
+func reverseAuthImportTargetName(original string) string {
+	return reverseAuthImportTargetBase(original) + ".json"
+}
+
+func reverseAuthImportTargetBase(original string) string {
+	base := strings.TrimSuffix(filepath.Base(original), filepath.Ext(original))
+	base = strings.Trim(reverseAuthFilenameUnsafe.ReplaceAllString(base, "-"), ".-_")
+	if base == "" || base == "." {
+		base = "chatgpt-auth"
+	}
+	return base
 }
 
 func existingReverseAuthNames(ctx context.Context, store *chatgptreverse.Store) (map[string]bool, error) {

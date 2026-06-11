@@ -32,8 +32,8 @@ describe('VIRTUAL_TRY_ON_POSTER_TEMPLATE', () => {
     }
   })
 
-  it('is the first available workflow template', () => {
-    expect(WORKFLOW_TEMPLATES[0].id).toBe(VIRTUAL_TRY_ON_POSTER_TEMPLATE.id)
+  it('is still available in the workflow template library', () => {
+    expect(WORKFLOW_TEMPLATES.some((item) => item.id === VIRTUAL_TRY_ON_POSTER_TEMPLATE.id)).toBe(true)
   })
 })
 
@@ -58,6 +58,50 @@ describe('ECOMMERCE_DETAIL_TEMPLATE', () => {
     for (const n of g.nodes) {
       if (n.data.kind === 'generate') expect(n.data.prompt.trim().length).toBeGreaterThan(10)
     }
+  })
+})
+
+describe('Ozon listing asset pack template', () => {
+  it('is available with an embedded sample product image', () => {
+    const template = WORKFLOW_TEMPLATES.find((item) => item.id === 'ozon-listing-asset-pack')
+    expect(template?.name).toContain('Ozon')
+    expect(template?.platform).toBe('Ozon')
+
+    const g = template?.build()
+    expect(g).toBeTruthy()
+    const sample = g?.nodes.find((node) => node.data.kind === 'input' && node.data.label === '示例商品图')
+    expect(sample?.data.kind).toBe('input')
+    if (sample?.data.kind === 'input') {
+      expect(sample.data.maxImages).toBe(1)
+      expect(sample.data.images).toHaveLength(1)
+      expect(sample.data.images[0].dataUrl).toMatch(/^data:image\/png;base64,/)
+    }
+  })
+
+  it('builds a valid Ozon-first ecommerce image workflow', () => {
+    const template = WORKFLOW_TEMPLATES.find((item) => item.id === 'ozon-listing-asset-pack')
+    const g = template?.build()
+    expect(g).toBeTruthy()
+    if (!g) return
+
+    expect(g.nodes.filter((node) => node.data.kind === 'input').length).toBe(2)
+    expect(g.nodes.filter((node) => node.data.kind === 'text').length).toBe(1)
+    expect(g.nodes.filter((node) => node.data.kind === 'generate').length).toBe(5)
+    expect(g.edges.length).toBe(20)
+    expect(topologicalOrder(g.nodes, g.edges).ok).toBe(true)
+    expect(validateGraph(g.nodes, g.edges)).toEqual([])
+
+    const generateLabels = g.nodes.filter((node) => node.data.kind === 'generate').map((node) => node.data.label)
+    expect(generateLabels).toEqual(['Ozon 主图 3:4', 'Ozon Fresh 方图', 'Ozon 场景附图', 'Ozon 细节附图', 'Ozon 信息图'])
+    const promptText = g.nodes
+      .filter((node) => node.data.kind === 'generate' || node.data.kind === 'text')
+      .map((node) => node.data.kind === 'generate' ? node.data.prompt : node.data.kind === 'text' ? node.data.text : '')
+      .join('\n')
+    expect(promptText).toContain('Ozon')
+    expect(promptText).toContain('3:4')
+    expect(promptText).toContain('1:1')
+    expect(promptText).toContain('无水印')
+    expect(promptText).toContain('不要出现价格、折扣、联系方式、社交账号或外部链接')
   })
 })
 

@@ -107,7 +107,7 @@ describe('callAgentResponsesApi', () => {
     expect(headers['X-PicPilot-Upstream-Mode']).toBe('reverse')
   })
 
-  it('does not override the server upstream mode by default', async () => {
+  it('uses the API upstream mode by default', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{
         type: 'message',
@@ -127,7 +127,7 @@ describe('callAgentResponsesApi', () => {
 
     const [, init] = fetchMock.mock.calls[0]
     const headers = (init as RequestInit).headers as Record<string, string>
-    expect(headers['X-PicPilot-Upstream-Mode']).toBeUndefined()
+    expect(headers['X-PicPilot-Upstream-Mode']).toBe('api')
   })
 
   it('injects Ozon platform instructions when provided', async () => {

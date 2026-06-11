@@ -14,17 +14,18 @@ import (
 
 // Payload is the normalized, effective team settings exposed to clients.
 type Payload struct {
-	DefaultMaxBatchImages int    `json:"defaultMaxBatchImages"`
-	GalleryAutoRetryCount int    `json:"galleryAutoRetryCount"`
-	MaxConcurrent         int    `json:"maxConcurrent"`
-	MaxQueue              int    `json:"maxQueue"`
-	ProxyUserSoftLimit    int    `json:"proxyUserSoftLimit"`
-	StreamFallbackEnabled bool   `json:"streamFallbackEnabled"`
-	RequestTimeoutSeconds int    `json:"requestTimeoutSeconds"`
-	OutboundProxyType     string `json:"outboundProxyType"`
-	OutboundProxyURL      string `json:"outboundProxyUrl"`
-	CLIProxyAPIURL        string `json:"cliproxyApiUrl"`
-	CLIProxyKeyConfigured bool   `json:"cliproxyManagementKeyConfigured"`
+	DefaultMaxBatchImages     int    `json:"defaultMaxBatchImages"`
+	GalleryAutoRetryCount     int    `json:"galleryAutoRetryCount"`
+	MaxConcurrent             int    `json:"maxConcurrent"`
+	MaxQueue                  int    `json:"maxQueue"`
+	ProxyUserSoftLimit        int    `json:"proxyUserSoftLimit"`
+	ReverseAccountConcurrency int    `json:"reverseAccountConcurrency"`
+	StreamFallbackEnabled     bool   `json:"streamFallbackEnabled"`
+	RequestTimeoutSeconds     int    `json:"requestTimeoutSeconds"`
+	OutboundProxyType         string `json:"outboundProxyType"`
+	OutboundProxyURL          string `json:"outboundProxyUrl"`
+	CLIProxyAPIURL            string `json:"cliproxyApiUrl"`
+	CLIProxyKeyConfigured     bool   `json:"cliproxyManagementKeyConfigured"`
 }
 
 type CLIProxyConfig struct {
@@ -86,17 +87,18 @@ func (p *Provider) Payload() Payload {
 	}
 	cliproxy := p.CLIProxyConfig()
 	return Payload{
-		DefaultMaxBatchImages: config.NormalizeBatchImageLimit(s["defaultMaxBatchImages"], p.cfg.DefaultMaxBatchImages),
-		GalleryAutoRetryCount: config.NormalizeGalleryAutoRetryCount(s["galleryAutoRetryCount"], p.cfg.DefaultGalleryAutoRetryCount),
-		MaxConcurrent:         config.NormalizeConcurrencyLimit(s["maxConcurrent"], p.cfg.MaxConcurrent),
-		MaxQueue:              config.NormalizeQueueLimit(s["maxQueue"], p.cfg.ProxyQueueMax),
-		ProxyUserSoftLimit:    config.NormalizeProxyUserSoftLimit(s["proxyUserSoftLimit"], p.cfg.ProxyUserSoftLimit),
-		StreamFallbackEnabled: config.NormalizeBooleanSetting(s["streamFallbackEnabled"], p.cfg.DefaultStreamFallbackEnabled),
-		RequestTimeoutSeconds: config.NormalizeRequestTimeoutSeconds(s["requestTimeoutSeconds"], p.cfg.DefaultRequestTimeoutSeconds),
-		OutboundProxyType:     config.NormalizeOutboundProxyType(s["outboundProxyType"], p.cfg.OutboundProxyType),
-		OutboundProxyURL:      outboundProxyURL,
-		CLIProxyAPIURL:        cliproxy.APIURL,
-		CLIProxyKeyConfigured: cliproxy.ManagementKey != "",
+		DefaultMaxBatchImages:     config.NormalizeBatchImageLimit(s["defaultMaxBatchImages"], p.cfg.DefaultMaxBatchImages),
+		GalleryAutoRetryCount:     config.NormalizeGalleryAutoRetryCount(s["galleryAutoRetryCount"], p.cfg.DefaultGalleryAutoRetryCount),
+		MaxConcurrent:             config.NormalizeConcurrencyLimit(s["maxConcurrent"], p.cfg.MaxConcurrent),
+		MaxQueue:                  config.NormalizeQueueLimit(s["maxQueue"], p.cfg.ProxyQueueMax),
+		ProxyUserSoftLimit:        config.NormalizeProxyUserSoftLimit(s["proxyUserSoftLimit"], p.cfg.ProxyUserSoftLimit),
+		ReverseAccountConcurrency: config.NormalizeReverseAccountConcurrency(s["reverseAccountConcurrency"], p.cfg.ReverseAccountConcurrency),
+		StreamFallbackEnabled:     config.NormalizeBooleanSetting(s["streamFallbackEnabled"], p.cfg.DefaultStreamFallbackEnabled),
+		RequestTimeoutSeconds:     config.NormalizeRequestTimeoutSeconds(s["requestTimeoutSeconds"], p.cfg.DefaultRequestTimeoutSeconds),
+		OutboundProxyType:         config.NormalizeOutboundProxyType(s["outboundProxyType"], p.cfg.OutboundProxyType),
+		OutboundProxyURL:          outboundProxyURL,
+		CLIProxyAPIURL:            cliproxy.APIURL,
+		CLIProxyKeyConfigured:     cliproxy.ManagementKey != "",
 	}
 }
 

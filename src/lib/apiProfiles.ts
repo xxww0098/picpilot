@@ -306,7 +306,7 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     model: DEFAULT_IMAGES_MODEL,
     timeout: DEFAULT_API_TIMEOUT,
     apiMode: 'images',
-    upstreamMode: 'server',
+    upstreamMode: 'api',
     codexCli: false,
     streamImages: true,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -453,7 +453,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     model: typeof record.model === 'string' && record.model.trim() ? record.model : DEFAULT_IMAGES_MODEL,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : DEFAULT_API_TIMEOUT,
     apiMode: record.apiMode === 'responses' ? 'responses' : 'images',
-    upstreamMode: normalizeUpstreamMode(record.upstreamMode),
+    upstreamMode: normalizeUpstreamMode(record.upstreamMode, 'api'),
     codexCli: Boolean(record.codexCli),
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
@@ -617,7 +617,7 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.model === DEFAULT_IMAGES_MODEL &&
     profile.timeout === DEFAULT_API_TIMEOUT &&
     profile.apiMode === 'images' &&
-    profile.upstreamMode === 'server' &&
+    profile.upstreamMode === 'api' &&
     profile.codexCli === false &&
     profile.streamImages === true &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES

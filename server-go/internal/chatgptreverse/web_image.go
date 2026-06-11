@@ -108,8 +108,18 @@ func (s *Service) collectOneWebImage(ctx context.Context, imageBody map[string]a
 	if len(accounts) == 0 {
 		return nil, errors.New("内置 reverse 未配置 ChatGPT access_token。")
 	}
+	accountConcurrency := s.reverseAccountConcurrency()
 	var last error
-	for _, acc := range s.rotate(accounts) {
+	tried := map[string]bool{}
+	for {
+		acc, key, release, err := s.acquireAccountSlot(ctx, accounts, tried, accountConcurrency)
+		if err != nil {
+			if errors.Is(err, errNoUntriedAccountSlots) {
+				break
+			}
+			return nil, err
+		}
+		tried[key] = true
 		active := acc
 		if refreshed, ok := s.refreshIfNeeded(ctx, active, false); ok {
 			active = refreshed
@@ -117,6 +127,7 @@ func (s *Service) collectOneWebImage(ctx context.Context, imageBody map[string]a
 		item, err := s.collectOneWebImageWithAccount(ctx, active, imageBody)
 		if err == nil {
 			s.markAccountSuccess(ctx, active.Name)
+			release()
 			return item, nil
 		}
 		last = err
@@ -126,16 +137,19 @@ func (s *Service) collectOneWebImage(ctx context.Context, imageBody map[string]a
 				item, err = s.collectOneWebImageWithAccount(ctx, refreshed, imageBody)
 				if err == nil {
 					s.markAccountSuccess(ctx, refreshed.Name)
+					release()
 					return item, nil
 				}
 				last = err
 				if errors.As(err, &statusErr) && statusErr.Status == http.StatusUnauthorized {
 					s.markAccountExpired(ctx, active.Name)
 				}
+				release()
 				continue
 			}
 			s.markAccountExpired(ctx, active.Name)
 		}
+		release()
 	}
 	if last != nil {
 		return nil, last
@@ -145,17 +159,18 @@ func (s *Service) collectOneWebImage(ctx context.Context, imageBody map[string]a
 
 func (s *Service) collectOneWebImageWithAccount(ctx context.Context, acc account, imageBody map[string]any) (map[string]any, error) {
 	prompt := webImagePrompt(imageBody)
+	model := webImageModelSlug(stringValue(imageBody["model"], defaultImageModel), acc.DefaultModelSlug)
 	session := newWebSession(acc.AccessToken)
 	requirements, err := s.getChatRequirements(ctx, session)
 	if err != nil {
 		return nil, err
 	}
 	s.logger.Info("chatgpt web image requirements ready", "scope", "reverse", "email", acc.Email, "proof", requirements.ProofToken != "", "turnstile", requirements.TurnstileToken != "", "so", requirements.SOToken != "")
-	conduit, err := s.prepareImageConversation(ctx, session, requirements, prompt, stringValue(imageBody["model"], defaultImageModel))
+	conduit, err := s.prepareImageConversation(ctx, session, requirements, prompt, model)
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.startImageConversation(ctx, session, requirements, conduit, prompt, stringValue(imageBody["model"], defaultImageModel))
+	state, err := s.startImageConversation(ctx, session, requirements, conduit, prompt, model)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +196,14 @@ func (s *Service) collectOneWebImageWithAccount(ctx context.Context, acc account
 	if err != nil {
 		s.logger.Warn("chatgpt web image download failed", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "err", truncateLogValue(err.Error(), 240))
 		return nil, err
+	}
+	imageBytes, resized, err := resizeWebImageToRequestedSize(imageBytes, imageBody)
+	if err != nil {
+		s.logger.Warn("chatgpt web image resize failed", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "size", stringValue(imageBody["size"], ""), "err", truncateLogValue(err.Error(), 240))
+		return nil, err
+	}
+	if resized {
+		s.logger.Info("chatgpt web image resized to requested size", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "size", stringValue(imageBody["size"], ""))
 	}
 	row := map[string]any{"b64_json": base64.StdEncoding.EncodeToString(imageBytes)}
 	if prompt := stringValue(imageBody["prompt"], ""); prompt != "" {
@@ -240,7 +263,7 @@ func (s *Service) prepareImageConversation(ctx context.Context, session webSessi
 		"action":                "next",
 		"fork_from_shared_post": false,
 		"parent_message_id":     randomID(),
-		"model":                 webImageModelSlug(model),
+		"model":                 model,
 		"client_prepare_state":  "success",
 		"timezone_offset_min":   -480,
 		"timezone":              "Asia/Shanghai",
@@ -296,7 +319,7 @@ func (s *Service) startImageConversation(ctx context.Context, session webSession
 			},
 		}},
 		"parent_message_id":        randomID(),
-		"model":                    webImageModelSlug(model),
+		"model":                    model,
 		"client_prepare_state":     "sent",
 		"timezone_offset_min":      -480,
 		"timezone":                 "Asia/Shanghai",
@@ -617,10 +640,13 @@ func webImagePrompt(body map[string]any) string {
 	return prompt + "\n\n" + strings.Join(hints, "")
 }
 
-func webImageModelSlug(model string) string {
+func webImageModelSlug(model, defaultModelSlug string) string {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "", "gpt-image-2":
-		return "gpt-5-3"
+		if slug := strings.TrimSpace(defaultModelSlug); slug != "" {
+			return slug
+		}
+		return "gpt-5-5"
 	case "codex-gpt-image-2":
 		return "codex-gpt-image-2"
 	default:

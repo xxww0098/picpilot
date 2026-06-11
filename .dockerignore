@@ -9,7 +9,10 @@ Dockerfile
 
 # Local-only runtime data and editor state
 data
+.agents
 .claude
+skills-lock.json
+tmp
 .vscode
 .idea
 .DS_Store

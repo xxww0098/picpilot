@@ -41,16 +41,19 @@ type Service struct {
 	logger   *slog.Logger
 	client   *http.Client
 
-	mu   sync.Mutex
-	next int
+	mu          sync.Mutex
+	next        int
+	accountBusy map[string]int
+	accountWait chan struct{}
 }
 
 type account struct {
-	Name         string
-	AccessToken  string
-	RefreshToken string
-	Email        string
-	Raw          map[string]any
+	Name             string
+	AccessToken      string
+	RefreshToken     string
+	Email            string
+	DefaultModelSlug string
+	Raw              map[string]any
 }
 
 type imageItem struct {
@@ -72,11 +75,13 @@ func New(cfg *config.Config, store *Store, logger *slog.Logger, sp ...*settings.
 	base.IdleConnTimeout = 90 * time.Second
 	base.TLSHandshakeTimeout = 20 * time.Second
 	return &Service{
-		cfg:      cfg,
-		store:    store,
-		settings: settingsProvider,
-		logger:   logger,
-		client:   &http.Client{Transport: base},
+		cfg:         cfg,
+		store:       store,
+		settings:    settingsProvider,
+		logger:      logger,
+		client:      &http.Client{Transport: base},
+		accountBusy: map[string]int{},
+		accountWait: make(chan struct{}),
 	}
 }
 
@@ -217,9 +222,13 @@ func (s *Service) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) collectImages(ctx context.Context, imageBody map[string]any, inputImages []string) (map[string]any, error) {
-	if len(inputImages) == 0 {
+	if len(inputImages) == 0 && !isCodexImageModel(imageBody["model"]) {
 		return s.collectWebImages(ctx, imageBody)
 	}
+	return s.collectCodexImages(ctx, imageBody, inputImages)
+}
+
+func (s *Service) collectCodexImages(ctx context.Context, imageBody map[string]any, inputImages []string) (map[string]any, error) {
 	n := positiveInt(imageBody["n"], 1)
 	if n < 1 {
 		n = 1
@@ -251,6 +260,10 @@ func (s *Service) collectImages(ctx context.Context, imageBody map[string]any, i
 		"background":         imageBody["background"],
 		"output_compression": imageBody["output_compression"],
 	}, nil
+}
+
+func isCodexImageModel(value any) bool {
+	return strings.EqualFold(strings.TrimSpace(stringValue(value, "")), "codex-gpt-image-2")
 }
 
 func (s *Service) collectCodexResponse(ctx context.Context, body map[string]any) (map[string]any, error) {
@@ -287,21 +300,31 @@ func (s *Service) postCodex(ctx context.Context, payload []byte) (*http.Response
 	if len(accounts) == 0 {
 		return nil, errors.New("内置 reverse 未配置 ChatGPT access_token。")
 	}
-	ordered := s.rotate(accounts)
+	accountConcurrency := s.reverseAccountConcurrency()
 	var last error
-	for _, acc := range ordered {
+	tried := map[string]bool{}
+	for {
+		acc, key, release, err := s.acquireAccountSlot(ctx, accounts, tried, accountConcurrency)
+		if err != nil {
+			if errors.Is(err, errNoUntriedAccountSlots) {
+				break
+			}
+			return nil, err
+		}
+		tried[key] = true
 		active := acc
 		if refreshed, ok := s.refreshIfNeeded(ctx, active, false); ok {
 			active = refreshed
 		}
 		resp, err := s.postCodexWithToken(ctx, active.AccessToken, payload)
 		if err != nil {
+			release()
 			last = err
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			s.markAccountSuccess(ctx, active.Name)
-			return resp, nil
+			return responseWithAccountSlotRelease(resp, release), nil
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			_ = resp.Body.Close()
@@ -309,12 +332,13 @@ func (s *Service) postCodex(ctx context.Context, payload []byte) (*http.Response
 				resp, err = s.postCodexWithToken(ctx, refreshed.AccessToken, payload)
 				if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 					s.markAccountSuccess(ctx, refreshed.Name)
-					return resp, nil
+					return responseWithAccountSlotRelease(resp, release), nil
 				}
 				if resp != nil {
 					_ = resp.Body.Close()
 				}
 			}
+			release()
 			s.markAccountExpired(ctx, active.Name)
 			last = errors.New("ChatGPT access_token 已失效。")
 			continue
@@ -322,10 +346,21 @@ func (s *Service) postCodex(ctx context.Context, payload []byte) (*http.Response
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
+			release()
 			last = fmt.Errorf("上游暂不可用：HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
 			continue
 		}
-		return nil, upstreamHTTPError(resp)
+		// A Cloudflare challenge 403 is transient and correlated with this account's
+		// session/egress; rotate to the next account instead of failing the request.
+		if resp.StatusCode == http.StatusForbidden && isCloudflareChallengeResponse(resp) {
+			_ = resp.Body.Close()
+			release()
+			last = fmt.Errorf("上游被 Cloudflare 拦截（HTTP 403），已尝试其他账号。")
+			continue
+		}
+		err = upstreamHTTPError(resp)
+		release()
+		return nil, err
 	}
 	if last != nil {
 		return nil, last
@@ -451,6 +486,129 @@ func (s *Service) rotate(accounts []account) []account {
 	return out
 }
 
+var errNoUntriedAccountSlots = errors.New("no untried account slots")
+
+func (s *Service) reverseAccountConcurrency() int {
+	if s == nil {
+		return 1
+	}
+	if s.settings != nil {
+		return config.NormalizeReverseAccountConcurrency(s.settings.Payload().ReverseAccountConcurrency, 1)
+	}
+	if s.cfg != nil {
+		return config.NormalizeReverseAccountConcurrency(s.cfg.ReverseAccountConcurrency, 1)
+	}
+	return 1
+}
+
+func (s *Service) acquireAccountSlot(ctx context.Context, accounts []account, tried map[string]bool, limit int) (account, string, func(), error) {
+	limit = config.NormalizeReverseAccountConcurrency(limit, 1)
+	for {
+		s.mu.Lock()
+		if s.accountBusy == nil {
+			s.accountBusy = map[string]int{}
+		}
+		if s.accountWait == nil {
+			s.accountWait = make(chan struct{})
+		}
+		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
+			return account{}, "", nil, err
+		}
+		start := s.next
+		untried := 0
+		for i := 0; i < len(accounts); i++ {
+			idx := (start + i) % len(accounts)
+			acc := accounts[idx]
+			key := accountSlotKey(acc)
+			if key == "" || tried[key] {
+				continue
+			}
+			untried++
+			if s.accountBusy[key] >= limit {
+				continue
+			}
+			s.accountBusy[key]++
+			s.next = idx + 1
+			s.mu.Unlock()
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					s.releaseAccountSlot(key)
+				})
+			}
+			return acc, key, release, nil
+		}
+		if untried == 0 {
+			s.mu.Unlock()
+			return account{}, "", nil, errNoUntriedAccountSlots
+		}
+		wait := s.accountWait
+		s.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return account{}, "", nil, ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
+func (s *Service) releaseAccountSlot(key string) {
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.accountBusy != nil {
+		if count := s.accountBusy[key]; count <= 1 {
+			delete(s.accountBusy, key)
+		} else {
+			s.accountBusy[key] = count - 1
+		}
+	}
+	wait := s.accountWait
+	s.accountWait = make(chan struct{})
+	s.mu.Unlock()
+	if wait != nil {
+		close(wait)
+	}
+}
+
+func accountSlotKey(acc account) string {
+	if acc.Name != "" {
+		return "name:" + acc.Name
+	}
+	if acc.AccessToken != "" {
+		return "token:" + acc.AccessToken
+	}
+	return ""
+}
+
+func responseWithAccountSlotRelease(resp *http.Response, release func()) *http.Response {
+	if resp == nil {
+		release()
+		return nil
+	}
+	if resp.Body == nil {
+		release()
+		return resp
+	}
+	resp.Body = &accountSlotReadCloser{ReadCloser: resp.Body, release: release}
+	return resp
+}
+
+type accountSlotReadCloser struct {
+	io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func (r *accountSlotReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(r.release)
+	return err
+}
+
 func (s *Service) loadAccounts(ctx context.Context) ([]account, error) {
 	if s == nil || s.store == nil {
 		return []account{}, nil
@@ -481,11 +639,12 @@ func (s *Service) loadAccounts(ctx context.Context) ([]account, error) {
 		}
 		seen[token] = true
 		out = append(out, account{
-			Name:         record.Name,
-			AccessToken:  token,
-			RefreshToken: stringValue(raw["refresh_token"], ""),
-			Email:        stringValue(raw["email"], ""),
-			Raw:          raw,
+			Name:             record.Name,
+			AccessToken:      token,
+			RefreshToken:     stringValue(raw["refresh_token"], ""),
+			Email:            stringValue(raw["email"], ""),
+			DefaultModelSlug: record.DefaultModelSlug,
+			Raw:              raw,
 		})
 	}
 	return out, nil

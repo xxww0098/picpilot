@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 
 export default tseslint.config(
   // 忽略目录
-  { ignores: ['dist/**', 'node_modules/**', 'server/node_modules/**', 'src/sw.ts'] },
+  { ignores: ['dist/**', 'node_modules/**', 'src/sw.ts'] },
 
   // 前端：TypeScript + React Hooks
   {
@@ -33,23 +33,6 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-function-type': 'off',
       '@typescript-eslint/no-wrapper-object-types': 'off',
       '@typescript-eslint/no-empty-object-type': 'off',
-    },
-  },
-
-  // 后端（Bun + Hono）：仅 TypeScript 规则
-  {
-    files: ['server/**/*.ts'],
-    extends: [...tseslint.configs.recommended],
-    rules: {
-      '@typescript-eslint/no-explicit-any': 'warn',
-      '@typescript-eslint/no-unused-vars': ['error', {
-        varsIgnorePattern: '^_',
-        argsIgnorePattern: '^_',
-        caughtErrorsIgnorePattern: '^_',
-      }],
-      '@typescript-eslint/no-non-null-assertion': 'warn',
-      '@typescript-eslint/no-empty-object-type': 'off',
-      '@typescript-eslint/no-unsafe-function-type': 'off',
     },
   },
 )

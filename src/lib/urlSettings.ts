@@ -105,7 +105,7 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
       id: createUrlProfileId(new Set(settings.profiles.map((item) => item.id))),
       name: 'URL 参数配置',
       apiMode: profileApiMode,
-      upstreamMode: upstreamMode ?? 'server',
+      upstreamMode: upstreamMode ?? 'api',
       model: profileApiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL,
     })
     if (modelParam !== null && modelParam.trim()) profile.model = modelParam.trim()

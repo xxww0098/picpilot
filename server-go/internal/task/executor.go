@@ -264,7 +264,7 @@ func (e *Executor) doUpstream(ctx context.Context, t *Task) (status Status, resu
 		if cooldownDelay > 0 {
 			e.cooldowns.Set(model, cooldownDelay)
 		}
-		if status == StatusSucceeded || !isRetryableErr(errType) || attempt >= maxAttempts {
+		if status == StatusSucceeded || !isRetryableErr(errType, errMsg) || attempt >= maxAttempts {
 			return status, result, errType, errMsg
 		}
 		e.logger.Warn("upstream attempt failed; retrying", "scope", "task", "id", t.ID,
@@ -299,10 +299,35 @@ func cooldownFromErr(errType, errMsg string) (time.Duration, string) {
 }
 
 // isRetryableErr reports whether a failed attempt is worth retrying. Transient
-// classes only: network errors, upstream 429 (rate/quota), and upstream 5xx.
-// Client 4xx (bad request / auth / content policy) and cancellation are not retried.
-func isRetryableErr(errType string) bool {
-	return errType == "network" || errType == "upstream_429" || strings.HasPrefix(errType, "upstream_5")
+// classes only: network errors, upstream 429 (rate/quota), upstream 5xx, and
+// Cloudflare managed-challenge 403 bodies. Other client 4xx errors are not
+// retried because they usually mean auth, bad request, or content policy.
+func isRetryableErr(errType string, errMsg ...string) bool {
+	if errType == "network" || errType == "upstream_429" || strings.HasPrefix(errType, "upstream_5") {
+		return true
+	}
+	if errType == "upstream_403" && len(errMsg) > 0 {
+		return isCloudflareManagedChallenge(errMsg[0])
+	}
+	return false
+}
+
+func isCloudflareManagedChallenge(body string) bool {
+	lower := strings.ToLower(body)
+	for _, m := range []string{
+		"cf_chl",
+		"challenge-error-text",
+		"cdn-cgi/challenge-platform",
+		"just a moment",
+		"enable javascript and cookies to continue",
+		"attention required",
+		"you have been blocked",
+	} {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // attemptUpstream performs a single upstream request.

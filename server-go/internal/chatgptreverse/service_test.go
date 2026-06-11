@@ -1,7 +1,11 @@
 package chatgptreverse
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -150,7 +154,7 @@ func TestDoJSONImagesGenerationsUsesWebConversation(t *testing.T) {
 	if capturedAuth != "Bearer test-token" {
 		t.Fatalf("auth=%q", capturedAuth)
 	}
-	if capturedPrepare["model"] != "gpt-5-3" {
+	if capturedPrepare["model"] != "gpt-5-5" {
 		t.Fatalf("prepare model=%v", capturedPrepare["model"])
 	}
 	if capturedConversation["client_prepare_state"] != "sent" {
@@ -232,8 +236,170 @@ func TestDoJSONImagesGenerationsWaitsForDownloadURLReadiness(t *testing.T) {
 	}
 }
 
+func TestDoJSONImagesGenerationsResizesWebImageToRequestedSize(t *testing.T) {
+	fileID := "file_00000000abcdefabcdefabcdefabcdef"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case chatRequirementsPath:
+			writeJSON(w, http.StatusOK, map[string]any{
+				"token":       "requirements-token",
+				"proofofwork": map[string]any{"required": false},
+				"turnstile":   map[string]any{"required": false},
+			})
+		case conversationPreparePath:
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "conduit_token": "conduit-token"})
+		case conversationPath:
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"conversation_id":"conv_1","message":{"author":{"role":"tool"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://`+fileID+`"}]}}}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		case filesPathPrefix + fileID + "/download":
+			writeJSON(w, http.StatusOK, map[string]any{"download_url": upstreamURL(r) + "/image.png"})
+		case "/image.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(testPNG(t, 64, 64))
+		default:
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	store := testStore(t)
+	saveTestAuth(t, store, "test.json", `{"access_token":"test-token"}`)
+	svc := New(&config.Config{ChatGPTReverseBaseURL: upstream.URL}, store, testLogger())
+
+	status, _, body := svc.DoJSON(t.Context(), "images/generations", `{"model":"gpt-image-2","prompt":"cat","size":"160x96","output_format":"png"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	data, _ := result["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("data=%v", result["data"])
+	}
+	first, _ := data[0].(map[string]any)
+	encoded := first["b64_json"].(string)
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode b64: %v", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("decode image: %v", err)
+	}
+	if img.Bounds().Dx() != 160 || img.Bounds().Dy() != 96 {
+		t.Fatalf("image dims=%dx%d want 160x96", img.Bounds().Dx(), img.Bounds().Dy())
+	}
+}
+
+func TestDoJSONImagesGenerationsCodexModelUsesStructuredSize(t *testing.T) {
+	var captured map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != codexResponsesPath {
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode codex body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"aW1n","revised_prompt":"cat"}]}}`+"\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	store := testStore(t)
+	saveTestAuth(t, store, "test.json", `{"access_token":"test-token"}`)
+	svc := New(&config.Config{ChatGPTReverseBaseURL: upstream.URL}, store, testLogger())
+
+	status, _, body := svc.DoJSON(t.Context(), "images/generations", `{"model":"codex-gpt-image-2","prompt":"cat","size":"160x96","quality":"high"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	tools, _ := captured["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools=%v", captured["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	if tool["size"] != "160x96" || tool["quality"] != "high" || tool["action"] != "generate" {
+		t.Fatalf("tool=%v", tool)
+	}
+	if !strings.Contains(body, `"b64_json":"aW1n"`) {
+		t.Fatalf("body=%s", body)
+	}
+}
+
+func TestDoJSONImagesGenerationsUsesStoredDefaultModelSlug(t *testing.T) {
+	var capturedPrepare map[string]any
+	var capturedConversation map[string]any
+	fileID := "file_00000000abcdefabcdefabcdefabcdef"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case chatRequirementsPath:
+			writeJSON(w, http.StatusOK, map[string]any{
+				"token":       "requirements-token",
+				"proofofwork": map[string]any{"required": false},
+				"turnstile":   map[string]any{"required": false},
+			})
+		case conversationPreparePath:
+			if err := json.NewDecoder(r.Body).Decode(&capturedPrepare); err != nil {
+				t.Fatalf("decode prepare: %v", err)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "conduit_token": "conduit-token"})
+		case conversationPath:
+			if err := json.NewDecoder(r.Body).Decode(&capturedConversation); err != nil {
+				t.Fatalf("decode conversation: %v", err)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"conversation_id":"conv_1","message":{"author":{"role":"tool"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://`+fileID+`"}]}}}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		case filesPathPrefix + fileID + "/download":
+			writeJSON(w, http.StatusOK, map[string]any{"download_url": upstreamURL(r) + "/image.png"})
+		case "/image.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("img"))
+		default:
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	store := testStore(t)
+	saveTestAuth(t, store, "test.json", `{"access_token":"test-token"}`)
+	if err := store.UpdateAuthAccountMetadata(t.Context(), "test.json", AuthAccountMetadata{
+		Status:           AuthCheckStatusOK,
+		DefaultModelSlug: "gpt-5-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(&config.Config{ChatGPTReverseBaseURL: upstream.URL}, store, testLogger())
+
+	status, _, body := svc.DoJSON(t.Context(), "images/generations", `{"model":"gpt-image-2","prompt":"cat"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if capturedPrepare["model"] != "gpt-5-5" {
+		t.Fatalf("prepare model=%v", capturedPrepare["model"])
+	}
+	if capturedConversation["model"] != "gpt-5-5" {
+		t.Fatalf("conversation model=%v", capturedConversation["model"])
+	}
+}
+
 func upstreamURL(r *http.Request) string {
 	return "http://" + r.Host
+}
+
+func testPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func TestNormalizeResponsesBodyAddsImageToolDefaults(t *testing.T) {
@@ -542,6 +708,48 @@ func TestPostCodexDisablesExpiredTokenAndContinues(t *testing.T) {
 	bad := byName["bad.json"]
 	if !bad.Disabled || bad.Status != AuthCheckStatusExpired || bad.FailCount == 0 {
 		t.Fatalf("bad token should be disabled and marked expired: %+v", bad)
+	}
+}
+
+func TestPostCodexRotatesAccountOnCloudflareChallenge403(t *testing.T) {
+	store := testStore(t)
+	now := time.Now().UnixMilli()
+	if err := store.SaveAuthAccount(t.Context(), StoredAuthAccount{Name: "good.json", RawJSON: `{"access_token":"good-token"}`, Size: 29, CreatedAt: now - 1000, UpdatedAt: now - 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAuthAccount(t.Context(), StoredAuthAccount{Name: "blocked.json", RawJSON: `{"access_token":"blocked-token"}`, Size: 32, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	attempts := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		attempts = append(attempts, auth)
+		if auth == "Bearer blocked-token" {
+			// Cloudflare interstitial: a 403 that is NOT a genuine permission denial.
+			w.Header().Set("Cf-Mitigated", "challenge")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `<html><title>Just a moment...</title></html>`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer upstream.Close()
+	svc := New(&config.Config{ChatGPTReverseBaseURL: upstream.URL}, store, testLogger())
+
+	resp, err := svc.postCodex(t.Context(), []byte(`{"stream":true}`))
+	if err != nil {
+		t.Fatalf("postCodex should have rotated past the Cloudflare 403, got err=%v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 after rotating off the blocked account, got %d", resp.StatusCode)
+	}
+	if attempts[len(attempts)-1] != "Bearer good-token" {
+		t.Fatalf("final attempt should land on the healthy account, attempts=%v", attempts)
+	}
+	if strings.Join(attempts, ",") != "Bearer blocked-token,Bearer good-token" {
+		t.Fatalf("want blocked account tried then rotated to good, attempts=%v", attempts)
 	}
 }
 

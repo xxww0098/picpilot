@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_IMAGES_MODEL,
+  DEFAULT_SETTINGS,
   DEFAULT_XAI_IMAGES_MODEL,
   createDefaultOpenAIProfile,
   explicitUpstreamModeHeader,
@@ -50,7 +52,7 @@ describe('apiProfiles upstream mode', () => {
     expect(normalizeUpstreamMode('auto')).toBe('server')
     expect(normalizeUpstreamMode('chatgpt2api')).toBe('reverse')
     expect(normalizeUpstreamMode('unknown', 'reverse')).toBe('reverse')
-    expect(createDefaultOpenAIProfile().upstreamMode).toBe('server')
+    expect(createDefaultOpenAIProfile().upstreamMode).toBe('api')
     expect(explicitUpstreamModeHeader('server')).toBeUndefined()
     expect(explicitUpstreamModeHeader('api')).toBe('api')
     expect(explicitUpstreamModeHeader('reverse')).toBe('reverse')
@@ -72,6 +74,18 @@ describe('apiProfiles upstream mode', () => {
     })
 
     expect(settings.profiles[0].upstreamMode).toBe('reverse')
+  })
+
+  it('defaults GPT Image 2 settings to the API upstream channel', () => {
+    const settings = normalizeSettings({})
+    const profile = settings.profiles[0]
+
+    expect(settings.model).toBe(DEFAULT_IMAGES_MODEL)
+    expect(settings.apiMode).toBe('images')
+    expect(profile.model).toBe(DEFAULT_IMAGES_MODEL)
+    expect(profile.apiMode).toBe('images')
+    expect(profile.upstreamMode).toBe('api')
+    expect(DEFAULT_SETTINGS.profiles[0].upstreamMode).toBe('api')
   })
 
   it('resets upstream mode for non-OpenAI built-in providers', () => {

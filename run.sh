@@ -18,15 +18,15 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-ensure_server_deps() {
-  if [ ! -d server/node_modules ]; then
-    echo ">>> 首次启动鉴权服务，正在安装服务端依赖..."
-    npm install --prefix server
+ensure_go() {
+  if ! command -v go >/dev/null 2>&1; then
+    echo "错误: 未找到 Go，后端为 Go 实现（server-go/），请先安装 Go。" >&2
+    exit 1
   fi
 }
 
 start_dev() {
-  ensure_server_deps
+  ensure_go
 
   local auth_port="${AUTH_PORT:-3001}"
   local auth_url="http://localhost:${auth_port}"
@@ -36,12 +36,12 @@ start_dev() {
   echo ">>> 默认本地管理员: ${ADMIN_USERS:-admin:admin}"
 
   (
-    cd server
+    cd server-go
     AUTH_PORT="$auth_port" \
       JWT_SECRET="${JWT_SECRET:-local-dev-jwt-secret-change-before-deploy}" \
       ADMIN_USERS="${ADMIN_USERS:-admin:admin}" \
-      LOG_PRETTY="${LOG_PRETTY:-1}" \
-      npm start
+      DATA_DIR="${DATA_DIR:-$PWD/../data}" \
+      go run .
   ) &
 
   local auth_pid=$!
@@ -59,6 +59,7 @@ case "$COMMAND" in
     ;;
   start|local)
     echo ">>> 启动 picpilot 本地完整模式..."
+    ensure_go
     npm run start:local -- "$@"
     ;;
   build)
@@ -87,7 +88,7 @@ Usage: ./run.sh [command] [args...]
 
 Commands:
   dev        Start Vite development server
-  start      Build and start the local Hono app (default)
+  start      Build and start the local Go app (default)
   local      Alias for start
   build      Build production assets
   preview    Preview production build

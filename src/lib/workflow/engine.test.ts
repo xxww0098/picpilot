@@ -64,13 +64,13 @@ describe('runWorkflow', () => {
     expect(res.nodeOutputs['out']).toEqual([img('g:out:1:生成主图')])
   })
 
-  it('prefers prompt-port text over inline prompt', async () => {
-    const nodes = [textNode('t', '来自文本节点'), genNode('g', '内联(应被覆盖)')]
+  it('combines prompt-port text with inline prompt', async () => {
+    const nodes = [textNode('t', '平台统一约束'), genNode('g', '单张用途提示')]
     const edges = [edge('t', 'g', HANDLE.GEN_PROMPT)]
     const gen = vi.fn(echoGenerate)
     const res = await runWorkflow(nodes, edges, gen)
     expect(res.status).toBe('done')
-    expect(gen.mock.calls[0][0].prompt).toBe('来自文本节点')
+    expect(gen.mock.calls[0][0].prompt).toBe('平台统一约束\n\n单张用途提示')
   })
 
   it('concatenates and dedupes images from multiple input nodes (fan-in)', async () => {

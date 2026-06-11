@@ -1,13 +1,132 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { DEFAULT_SETTINGS } from './apiProfiles'
+import { preflightImageUpstream } from './upstreamPreflight'
+import { fetchQueueStats } from './queueApi'
 import { callImageApi } from './api'
 
+vi.mock('./upstreamPreflight', () => ({
+  preflightImageUpstream: vi.fn(async () => {}),
+}))
+
+vi.mock('./queueApi', () => ({
+  fetchQueueStats: vi.fn(async () => ({
+    inflight: 0,
+    queued: 0,
+    maxConcurrent: 10,
+    maxQueue: 10,
+    proxyUserSoftLimit: 0,
+    myInflight: 0,
+    myQueued: 0,
+    myNextPosition: null,
+  })),
+}))
+
+const clearQueueStats = {
+  inflight: 0,
+  queued: 0,
+  maxConcurrent: 10,
+  maxQueue: 10,
+  proxyUserSoftLimit: 0,
+  myInflight: 0,
+  myQueued: 0,
+  myNextPosition: null,
+}
+
 describe('callImageApi', () => {
+  beforeEach(() => {
+    vi.mocked(preflightImageUpstream).mockReset()
+    vi.mocked(preflightImageUpstream).mockResolvedValue(undefined)
+    vi.mocked(fetchQueueStats).mockReset()
+    vi.mocked(fetchQueueStats).mockResolvedValue(clearQueueStats)
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllEnvs()
     vi.useRealTimers()
+  })
+
+  it('preflights the API upstream before sending the image request', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const controller = new AbortController()
+    const settings = { ...DEFAULT_SETTINGS, apiKey: 'test-key' }
+
+    await callImageApi({
+      settings,
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      signal: controller.signal,
+    })
+
+    expect(preflightImageUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({ activeProfileId: settings.activeProfileId }),
+      expect.objectContaining({ provider: 'openai', upstreamMode: 'api', model: 'gpt-image-2' }),
+      controller.signal,
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api-proxy/images/generations',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(vi.mocked(preflightImageUpstream).mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0])
+  })
+
+  it('serializes independent image requests when the backend already has queued work', async () => {
+    vi.mocked(fetchQueueStats).mockResolvedValue({
+      ...clearQueueStats,
+      inflight: 3,
+      queued: 2,
+    })
+    let activeFetches = 0
+    let peakFetches = 0
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      activeFetches++
+      peakFetches = Math.max(peakFetches, activeFetches)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      activeFetches--
+      return new Response(JSON.stringify({
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    const request = () => callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    await Promise.all([request(), request()])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(peakFetches).toBe(1)
+  })
+
+  it('fails before sending the image request when upstream preflight detects Cloudflare', async () => {
+    vi.mocked(preflightImageUpstream).mockRejectedValueOnce(new Error('上游 API 被 Cloudflare 拦截，请稍后重试。'))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).rejects.toThrow('Cloudflare')
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it.each([false, true])(
@@ -518,7 +637,7 @@ describe('callImageApi', () => {
     )
     const [, init] = fetchMock.mock.calls[0]
     const headers = (init as RequestInit).headers as Record<string, string>
-    expect(headers['X-PicPilot-Upstream-Mode']).toBeUndefined()
+    expect(headers['X-PicPilot-Upstream-Mode']).toBe('api')
   })
 
   it('sends the selected upstream mode through the team API proxy', async () => {

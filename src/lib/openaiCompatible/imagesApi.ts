@@ -6,6 +6,7 @@ import {
   mergeActualParams,
 } from '../imageApiShared'
 import { settleWithConcurrency } from '../runWithConcurrency'
+import { scheduleImageApiRequest } from '../imageRequestScheduler'
 import { collectConcurrentFailures } from './shared'
 import { callGptImagesApiSingle } from './gptImageApi'
 import { callGrokImagesApiSingle } from './grokImageApi'
@@ -18,7 +19,10 @@ export async function callImagesApi(opts: CallApiOptions, profile: ApiProfile, c
     return callImagesApiConcurrent(opts, profile, n, customProvider)
   }
 
-  return callImagesApiSingleDispatch(opts, profile, customProvider)
+  return scheduleImageApiRequest(
+    () => callImagesApiSingleDispatch(opts, profile, customProvider),
+    { signal: opts.signal },
+  )
 }
 
 function callImagesApiSingleDispatch(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
@@ -40,12 +44,15 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
   const results = await settleWithConcurrency(
     Array.from({ length: n }),
     getImageApiFanoutConcurrency({ maxConcurrent: opts.fanoutConcurrency }),
-    (_, requestIndex) => callImagesApiSingleDispatch({
-      ...singleOpts,
-      onPartialImage: opts.onPartialImage
-        ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
-        : undefined,
-    }, profile, customProvider),
+    (_, requestIndex) => scheduleImageApiRequest(
+      () => callImagesApiSingleDispatch({
+        ...singleOpts,
+        onPartialImage: opts.onPartialImage
+          ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
+          : undefined,
+      }, profile, customProvider),
+      { signal: opts.signal },
+    ),
   )
 
   const successfulResults = results

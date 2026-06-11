@@ -112,6 +112,10 @@ function uniqueIds(ids: string[]) {
   return Array.from(new Set(ids.filter(Boolean)))
 }
 
+export function resolveAgentTaskPrompt(taskPrompt?: string | null, roundPrompt?: string | null, messagePrompt?: string | null) {
+  return (taskPrompt?.trim() || roundPrompt?.trim() || messagePrompt?.trim() || '')
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -1036,12 +1040,17 @@ async function executeAgentRound(
       if (existingTask) {
         taskIdByToolCallId.set(toolCallId, existingTask.id)
         attachTaskToAgentRound(existingTask.id)
+        const resolvedExistingPrompt = resolveAgentTaskPrompt(existingTask.prompt, latestRound.prompt, userMessage.content)
+        if (resolvedExistingPrompt && resolvedExistingPrompt !== existingTask.prompt) {
+          updateTaskInStore(existingTask.id, { prompt: resolvedExistingPrompt })
+        }
         return existingTask.id
       }
 
+      const resolvedTaskPrompt = resolveAgentTaskPrompt(taskPrompt, latestRound.prompt, userMessage.content)
       const task: TaskRecord = {
         id: genId(),
-        prompt: taskPrompt,
+        prompt: resolvedTaskPrompt,
         params: { ...params, n: 1 },
         apiProvider: agentImageProvider,
         apiProfileId: activeProfile.id,

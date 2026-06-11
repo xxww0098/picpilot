@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   bulkDeleteAdminReverseAuthAccounts,
   deleteAdminReverseAuthAccount,
@@ -39,6 +39,7 @@ export default function ReverseAuth() {
   const [checkJob, setCheckJob] = useState<AdminReverseAuthCheckJob | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<AccountStatusFilter>('all')
+  const [selectedNames, setSelectedNames] = useState<Set<string>>(() => new Set())
   const checkByName = useMemo(() => new Map(checkResults.map((result) => [result.name, result])), [checkResults])
   const accountRows = useMemo(() => (
     data?.accounts.map((account) => ({
@@ -70,6 +71,43 @@ export default function ReverseAuth() {
   const quotaLimitedNames = accountRows
     .filter(({ check }) => check.status === 'quota_or_rate_limited')
     .map(({ account }) => account.name)
+  const selectedDeleteNames = useMemo(
+    () => accountRows.map(({ account }) => account.name).filter((name) => selectedNames.has(name)),
+    [accountRows, selectedNames],
+  )
+  const filteredSelectedCount = filteredRows.filter(({ account }) => selectedNames.has(account.name)).length
+  const allFilteredSelected = filteredRows.length > 0 && filteredSelectedCount === filteredRows.length
+
+  useEffect(() => {
+    if (!data) return
+    const existingNames = new Set(data.accounts.map((account) => account.name))
+    setSelectedNames((current) => {
+      const next = new Set([...current].filter((name) => existingNames.has(name)))
+      return next.size === current.size ? current : next
+    })
+  }, [data])
+
+  function toggleAccountSelected(name: string) {
+    setSelectedNames((current) => {
+      const next = new Set(current)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  function toggleFilteredSelection() {
+    const visibleNames = filteredRows.map(({ account }) => account.name)
+    setSelectedNames((current) => {
+      const next = new Set(current)
+      if (allFilteredSelected) {
+        for (const name of visibleNames) next.delete(name)
+      } else {
+        for (const name of visibleNames) next.add(name)
+      }
+      return next
+    })
+  }
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -238,6 +276,38 @@ export default function ReverseAuth() {
     })
   }
 
+  function confirmBulkDeleteSelected() {
+    if (selectedDeleteNames.length === 0) {
+      showAppToast('请先选择要删除的逆向账号。', 'info')
+      return
+    }
+    openDestructiveConfirm({
+      title: '删除已选逆向账号',
+      message: `将删除 ${selectedDeleteNames.length} 个已选逆向账号。删除后这些 ChatGPT 账号不会再参与内置 reverse 路由。`,
+      confirmText: '删除已选',
+      onConfirm: async () => {
+        setBulkDeleting(true)
+        try {
+          const result = await bulkDeleteAdminReverseAuthAccounts(selectedDeleteNames)
+          const removedNames = new Set([...result.deleted, ...result.missing])
+          setSelectedNames((current) => {
+            const next = new Set(current)
+            for (const name of removedNames) next.delete(name)
+            return next
+          })
+          setCheckResults((items) => items.filter((item) => !removedNames.has(item.name)))
+          const missingText = result.missing.length ? `，${result.missing.length} 个已不存在` : ''
+          showAppToast(`已删除 ${result.deleted.length} 个逆向账号${missingText}。`, 'success')
+          await reload()
+        } catch (err) {
+          showAppToast(getUserFacingErrorMessage(err, '批量删除 reverse 账号失败'), 'error')
+        } finally {
+          setBulkDeleting(false)
+        }
+      },
+    })
+  }
+
   return (
     <QueryState loading={loading} error={error}>
       {data && (
@@ -261,7 +331,7 @@ export default function ReverseAuth() {
                 type="button"
                 disabled={!data.configured || checking}
                 onClick={() => void handleCheckAccounts()}
-                title="读取 ChatGPT Web image_gen 剩余额度，识别登录态失效和无额度账号。"
+                title="读取 ChatGPT Web image_gen 剩余额度和 reset_after 恢复时间；额度周期以上游返回为准。"
                 className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {checking ? progressButtonText(checkJob) : '检查额度'}
@@ -321,6 +391,9 @@ export default function ReverseAuth() {
               导入内容会写入服务器 SQLite 数据库，不会保存为服务器文件。JSON 中必须包含 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">access_token</code>；
               建议同时保留 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">refresh_token</code>，便于服务端自动续期。也可以直接粘贴 access_token 导入为临时账号，但无法自动续期。列表不会展示原始 JSON；只有点击编辑或导出时才会返回到当前管理员浏览器。
             </p>
+            <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+              额度周期以上游返回为准：reverse 检查只读取 ChatGPT Web 的 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">image_gen</code> 剩余次数和 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">reset_after</code> 恢复时间，不是 PicPilot 固定的日/周/月额度。
+            </p>
           </section>
 
           <ReverseAuthImportPanel
@@ -365,6 +438,14 @@ export default function ReverseAuth() {
                 >
                   刷新筛选结果
                 </button>
+                <button
+                  type="button"
+                  disabled={selectedDeleteNames.length === 0 || bulkDeleting}
+                  onClick={confirmBulkDeleteSelected}
+                  className="h-8 rounded border border-rose-500/30 px-2.5 text-xs font-medium text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
+                >
+                  {bulkDeleting ? '删除中...' : `删除已选 (${selectedDeleteNames.length})`}
+                </button>
               </div>
             </div>
 
@@ -377,6 +458,16 @@ export default function ReverseAuth() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                      <th className="w-10 py-2 pr-3">
+                        <input
+                          type="checkbox"
+                          aria-label="选择当前筛选结果"
+                          checked={allFilteredSelected}
+                          disabled={filteredRows.length === 0 || bulkDeleting}
+                          onChange={toggleFilteredSelection}
+                          className="h-4 w-4 rounded border-[hsl(var(--border))] accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
+                        />
+                      </th>
                       <th className="py-2 pr-3">名称</th>
                       <th className="py-2 pr-3">账号</th>
                       <th className="py-2 pr-3">续期</th>
@@ -390,6 +481,16 @@ export default function ReverseAuth() {
                   <tbody>
                     {filteredRows.map(({ account, check }) => (
                       <tr key={account.name} className="border-b border-[hsl(var(--border))] last:border-0">
+                        <td className="py-2 pr-3">
+                          <input
+                            type="checkbox"
+                            aria-label={`选择 ${account.name}`}
+                            checked={selectedNames.has(account.name)}
+                            disabled={bulkDeleting || deletingName === account.name}
+                            onChange={() => toggleAccountSelected(account.name)}
+                            className="h-4 w-4 rounded border-[hsl(var(--border))] accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
+                          />
+                        </td>
                         <td className="py-2 pr-3 font-medium text-[hsl(var(--foreground))]">{account.name}</td>
                         <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">
                           <div>{account.email || '未标注'}</div>

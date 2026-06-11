@@ -5,6 +5,42 @@
 
 面向在本仓库中改代码的 AI Agent 的约定与速查。
 
+## 常用命令
+
+依赖安装：`npm ci`。Node 20、Go 1.26。
+
+| 任务 | 命令 |
+|------|------|
+| 前端开发服务器 | `npm run dev`（Vite，纯前端） |
+| 本地全栈 | `npm run start:local`（装依赖 + 构建前端 + `go run` 启动 Go server，需本机装 Go）；`npm run mock:api` 起假出图 API |
+| 类型检查 | `npm run typecheck`（前端 + node 配置 + SW） |
+| Lint | `npm run lint` / `npm run lint:fix`（覆盖 src） |
+| 全部测试 | `npm test`（vitest run，src/ 的 `*.test.ts`） |
+| 单个测试文件 | `npx vitest run src/lib/imageModels.test.ts`；按用例名加 `-t '名称'` |
+| Go 后端测试 | `cd server-go && go test ./...`；单个：`go test ./internal/task/ -run TestExecutor` |
+| 生产构建 | `npm run build`（= typecheck + vite build + 编译 service worker） |
+
+- 测试默认跑 node 环境；需要 DOM 的测试文件首行加 `// @vitest-environment jsdom`（参照 `src/components/workflow/WorkflowCanvas.test.tsx`）。
+- CI（`.github/workflows/ci.yml`）= `typecheck + lint + npm test + go test ./...`，提交前对齐这四项。
+
+## 架构速览
+
+电商团队自托管的 AI 出图工作台：React 19 PWA 前端 + 自托管后端（认证 / 团队管理 / 出图代理）。生成历史与图片全存浏览器 IndexedDB（`src/lib/db.ts`），服务端 SQLite 只存用户、邀请码、事件遥测、公开画廊与异步任务。
+
+**后端只有 Go 一套**：
+
+- `server-go/` —— 唯一后端（chi + modernc.org/sqlite，无 CGO；compose 的 `auth` 服务由它构建，v0.1.17 起替换 TS 版，旧 `server/` TS 后端已删除）。internal 包速查：`auth`（JWT / 注册登录）、`proxy`（`/api-proxy/*` 转发）、`queue`（FIFO 并发队列）、`task`（异步任务执行器，带重试）、`chatgptreverse`（逆向 ChatGPT 账号池，`UPSTREAM_MODE=reverse` 的内置实现）、`upstream`（上游模式选择）、`settings`（运行时团队配置，管理端改了即生效）、`admin` / `gallery` / `telemetry` / `db`。
+
+**出图调用链**：`src/lib/api.ts` → `src/lib/openaiCompatibleImageApi.ts` 按 API 模式分发（`src/lib/openaiCompatible/` 下 Images、Responses 流式、自定义服务商等实现）→ 同源 `fetch('/api-proxy/v1/…')` 带 JWT（上游地址与 key 永不进前端）→ 后端并发队列 → 按 `UPSTREAM_MODE` 选上游：`api`（CLIProxyAPI 等 OpenAI 兼容端点，服务端注入 key）或 `reverse`（内置账号池直连 chatgpt.com）。
+
+**前端**：zustand 单 store（`src/store.ts`，persist 到 IndexedDB）。`App.tsx` 四个工作区：画廊（默认出图）、Agent 多轮对话、工作流画布、视频。关键模块：
+
+- `src/lib/agentOrchestrator.ts` —— Agent 模式编排：Responses API 对话 + 工具调用（批量出图、web 搜索），产出图自动同步进画廊；平台素材槽位（Ozon / Shopify 等）定义在 `src/lib/platforms/`。
+- `src/lib/workflow/engine.ts` —— 纯逻辑数据流引擎（无 React 依赖），`templates.ts` 平台模板、`runtime.ts` 桥接 store 与出图 API；画布组件 `src/components/workflow/WorkflowCanvas.tsx`（@xyflow/react）。
+- `src/lib/imageModels.ts` / `chatModels.ts` —— 模型注册表；`src/lib/paramCompatibility.ts` —— 按服务商归一化参数并做批量 clamp；`src/lib/apiProfiles.ts` —— API 配置档案（`normalize*` 是恢复策略而非拒绝，勿改写成 reject 式校验）。
+
+**部署**：生产在 VPS `/opt/picpilot`（Caddy + frontend + auth + cliproxy），发布 / 回滚用 `deploy-vps` skill；实盘 compose 的脱敏备份在 `deploy/vps/compose.yml`，改实盘后须同步回该文件。
+
 ## 用户对话框（必读）
 
 **禁止**使用浏览器原生 `window.alert`、`window.confirm`、`window.prompt`。统一走 `src/lib/dialog.ts`，由全局 `ConfirmDialog`、`PromptDialog`、`Toast` 渲染。
@@ -52,12 +88,12 @@ showAppToast('邀请链接已复制', 'success')
 
 | 组件 | 位置 | 查看方式 |
 |------|------|---------|
-| picpilot 后端（`server/index.ts`，pino） | 输出到 stdout，无文件 | `docker logs picpilot-auth-1`（加 `-f`/`--tail 200`/`--since 1h`） |
+| picpilot 后端（`server-go/`，slog JSON） | 输出到 stdout，无文件 | `docker logs picpilot-auth-1`（加 `-f`/`--tail 200`/`--since 1h`） |
 | picpilot 前端（静态资源 / nginx） | stdout | `docker logs picpilot-frontend-1` |
 | CLIProxyAPI（上游出图代理） | `/opt/picpilot/data/cliproxy/logs/` | `main.log` 为主日志（含每个请求路由账号与耗时）；`error-*.log` 为单请求错误快照（请求头 + 上游响应） |
 | Caddy（反代/TLS） | stdout | `docker logs picpilot-caddy-1` |
 
-排查"出图慢"时看 `cliproxy` 的 `main.log`：每个 `/v1/images/edits` 完成行带耗时（如 `200 | 5m40s |`）和请求 id，可用 id 反查路由的 OAuth 账号 / API key 与是否回退。后端代理（`/api-proxy/*`）只设**一个全局并发上限** `MAX_CONCURRENT_PROXY_REQUESTS`，超出的请求进入 **FIFO 排队等待**（实现见 `server/concurrencyQueue.ts`，`acquire`/`release` 为抽象边界）；队列长度/等待超时由 `PROXY_QUEUE_MAX` / `PROXY_QUEUE_MAX_WAIT_MS` 控制，超限返回 429。已无单用户并发上限。
+排查"出图慢"时看 `cliproxy` 的 `main.log`：每个 `/v1/images/edits` 完成行带耗时（如 `200 | 5m40s |`）和请求 id，可用 id 反查路由的 OAuth 账号 / API key 与是否回退。后端代理（`/api-proxy/*`）只设**一个全局并发上限** `MAX_CONCURRENT_PROXY_REQUESTS`，超出的请求进入 **FIFO 排队等待**（实现见 `server-go/internal/queue`，`acquire`/`release` 为抽象边界）；队列长度/等待超时由 `PROXY_QUEUE_MAX` / `PROXY_QUEUE_MAX_WAIT_MS` 控制，超限返回 429。另有单用户软上限，见下方「公平性」。
 
 **排队状态可见性**：`GET /api/queue/stats`（JWT 校验，无 DB）暴露 `{ inflight, queued, maxConcurrent, maxQueue }`，前端 `QueueBanner`（仅画廊视图、有 running 任务时）每 5s 轮询并提示「当前 N 个请求排队中（预计 ~M 分钟）」，降低排队焦虑。任务卡片有「取消」按钮：中止底层 fetch，服务端收到 abort 返回 499 并释放并发槽位。
 
@@ -65,7 +101,7 @@ showAppToast('邀请链接已复制', 'success')
 
 **按账号数缩放（降低失败率）**：并发上限大致取「Plus 账号数 - 1」（每账号约 1 个在途、留 1 个余量），队列上限取并发的 ~2 倍。例：**11 个 Plus 账号 → `MAX_CONCURRENT_PROXY_REQUESTS=10`、`PROXY_QUEUE_MAX=20`**。提高并发能消除大部分「队满 429」，并把请求摊到更多账号（每账号约 1 并发，远低于 3+ 掉成功率的阈值）。server-go 新增 `UPSTREAM_MAX_RETRIES`（默认 2，范围 0-5）：**异步任务路径**对 5xx/429/网络错误做指数退避重试,服务端完成、客户端无感——压测在 30% 上游失败率下异步成功率由 70% 提升到 100%。同步代理路径(画廊当前走的)不做服务端重试(流式不便),其瞬时失败由前端 `galleryAutoRetryCount`(默认 1,可调高)兜底。
 
-**公平性（已知行为）**：全局队列是严格 FIFO、不区分用户。某用户（尤其 Responses/codexCli/streaming 等 fan-out 模式下一次 n=N 提交会被拆成 N 个请求）可能一次性占满 inflight + 队列，使他人排队到 `PROXY_QUEUE_MAX_WAIT_MS` 超时而 429。小团队可接受；若出现饿死，再考虑给 `acquire` 加 `userKey` 做单用户软上限（勿上 round-robin 公平队列）。
+**公平性**：全局队列 FIFO，叠加单用户软上限 `PROXY_USER_SOFT_LIMIT`（生产 compose 默认 3，0 关闭；实现见 `server-go/internal/queue`）：某用户在途请求达到上限时，其排队请求会让位给其他用户先执行（跳位、不拒绝），缓解 fan-out 模式（Responses/codexCli/streaming 一次 n=N 提交拆成 N 个请求）占满 inflight + 队列、让他人等到 `PROXY_QUEUE_MAX_WAIT_MS` 超时 429 的问题。
 
 **批量上限**：`users.max_batch_images` 列仍在但已休眠——批量上限统一取**团队默认**（`defaultMaxBatchImages`，管理端 `团队设置` 配置），无 per-user 覆盖。真正在所有模式下一致生效的是**客户端 clamp**（`src/lib/paramCompatibility.ts`）；服务端 `estimateRequestedImageCount` 的 429 只是「尽力而为」兜底，且只覆盖 `/images/generations` 的 JSON 请求（edits / Responses / fan-out 会绕过）。
 

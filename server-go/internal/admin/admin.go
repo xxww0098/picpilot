@@ -83,6 +83,8 @@ func (m *Module) Register(r chi.Router) {
 		pr.Post("/api/admin/reverse-auth/check", m.checkReverseAuth)
 		pr.Post("/api/admin/reverse-auth/check-jobs", m.startReverseAuthCheckJob)
 		pr.Get("/api/admin/reverse-auth/check-jobs/{id}", m.getReverseAuthCheckJob)
+		pr.Get("/api/admin/reverse-auth/sources", m.listReverseAuthImportSources)
+		pr.Put("/api/admin/reverse-auth/sources", m.saveReverseAuthImportSources)
 		pr.Post("/api/admin/reverse-auth/accounts", m.uploadReverseAuthAccount)
 		pr.Post("/api/admin/reverse-auth/accounts/access-token", m.importReverseAuthAccessToken)
 		pr.Get("/api/admin/reverse-auth/accounts/export", m.exportReverseAuthAccounts)
@@ -163,6 +165,7 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 		{"maxConcurrent", "团队并发必须是 1 到 100 之间的数字。", config.ParseConcurrencyPatchValue},
 		{"maxQueue", "排队上限必须是 0 到 1000 之间的数字。", config.ParseQueuePatchValue},
 		{"proxyUserSoftLimit", "单用户软上限必须是 0 到 100 之间的数字。", config.ParseProxyUserSoftLimitPatchValue},
+		{"reverseAccountConcurrency", "逆向单账号并发必须是 1 到 5 之间的数字。", config.ParseReverseAccountConcurrencyPatchValue},
 		{"galleryAutoRetryCount", "失败自动重试次数必须是 0 到 5 之间的数字。", config.ParseGalleryAutoRetryCountPatchValue},
 		{"requestTimeoutSeconds", "请求超时必须是 30 到 3600 秒之间的数字。", config.ParseRequestTimeoutSecondsPatchValue},
 	}
@@ -246,7 +249,9 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 	eff := m.settings.Payload()
 	m.q.SetLimits(&eff.MaxConcurrent, &eff.MaxQueue, &eff.ProxyUserSoftLimit)
 	m.logger.Info("team service limits updated", "scope", "admin", "updatedBy", m.actor(r),
-		"maxConcurrent", eff.MaxConcurrent, "maxQueue", eff.MaxQueue, "proxyUserSoftLimit", eff.ProxyUserSoftLimit)
+		"maxConcurrent", eff.MaxConcurrent, "maxQueue", eff.MaxQueue,
+		"proxyUserSoftLimit", eff.ProxyUserSoftLimit,
+		"reverseAccountConcurrency", eff.ReverseAccountConcurrency)
 	httpx.JSON(w, http.StatusOK, eff)
 }
 

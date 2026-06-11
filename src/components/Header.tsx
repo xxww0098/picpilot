@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useStore, getGalleryDisplayedImageIds } from '../store'
-import { DEFAULT_IMAGES_MODEL, getActiveApiProfile, normalizeSettings, switchApiProfileProvider } from '../lib/apiProfiles'
+import { DEFAULT_IMAGES_MODEL, DEFAULT_XAI_IMAGES_MODEL, getActiveApiProfile, normalizeSettings, switchApiProfileProvider } from '../lib/apiProfiles'
 import { CHAT_MODELS } from '../lib/chatModels'
 import ModelPicker from './ModelPicker'
 import { useVersionCheck } from '../hooks/useVersionCheck'
@@ -14,7 +14,7 @@ import { useNotificationUnread } from '../hooks/useNotificationUnread'
 import { openConfirmDialog, showAppToast } from '../lib/dialog'
 import { getUserFacingErrorMessage } from '../lib/userFacingText'
 import { downloadImagesAsZip, formatExportFileTime } from '../lib/downloadImages'
-import type { AppMode, UpstreamMode } from '../types'
+import type { AppMode } from '../types'
 import { useIsMobile } from '../hooks/useIsMobile'
 import UserMenu from './UserMenu'
 
@@ -23,7 +23,7 @@ const GalleryView = lazy(() => import('./GalleryView'))
 const AdminPanel = lazy(() => import('./admin/AdminPanel'))
 const NotificationsPanel = lazy(() => import('./NotificationsPanel'))
 
-type HeaderImageUpstreamMode = Extract<UpstreamMode, 'api' | 'reverse'>
+export type HeaderImageModelSelection = 'gpt-api' | 'gpt-reverse' | 'grok'
 
 export default function Header() {
   const appMode = useStore((s) => s.appMode)
@@ -46,11 +46,11 @@ export default function Header() {
   const historyButtonRef = useRef<HTMLButtonElement>(null)
   const createConversation = useStore((s) => s.createAgentConversation)
 
-  // 图像模型切换开关：仅画廊模式 + 内置 OpenAI 兼容 + Images 接口时出现
+  // 图像模型切换开关：仅画廊模式 + 内置 OpenAI/xAI + Images 接口时出现
   // （Agent 走对话模型、自定义服务商/Responses 在设置里管理模型，故不显示）。
   // 切换写入活动配置的 model 字段（setSettings 的 legacy 覆盖路径，等价于设置里的模型输入框）。
   const activeProfile = useMemo(() => getActiveApiProfile(settings), [settings])
-  // 画廊模式：图像模型开关（仅内置 OpenAI Images 配置时）。
+  // 画廊模式：图像模型开关（仅内置 OpenAI/xAI Images 配置时）。
   const showImagePicker = appMode === 'gallery'
     && (activeProfile.provider === 'openai' || activeProfile.provider === 'xAI')
     && activeProfile.apiMode === 'images'
@@ -59,29 +59,38 @@ export default function Header() {
   // 顶栏模型开关占一行/一段，移动端占位高度需相应调整。
   const showAnyPicker = showImagePicker || showChatPicker
   const mobileAgentHeaderHidden = isMobile && appMode === 'agent' && !agentMobileHeaderVisible
-  const imageModelActive = activeProfile.provider === 'openai'
-    && activeProfile.apiMode === 'images'
-    && activeProfile.model === DEFAULT_IMAGES_MODEL
-  const imageUpstreamMode: HeaderImageUpstreamMode = activeProfile.provider === 'openai' && activeProfile.upstreamMode === 'reverse'
-    ? 'reverse'
-    : 'api'
-  const applyGptImageProfile = useCallback((upstreamMode?: HeaderImageUpstreamMode) => {
+  const imageModelSelection: HeaderImageModelSelection = activeProfile.provider === 'xAI'
+    ? 'grok'
+    : activeProfile.provider === 'openai' && activeProfile.upstreamMode === 'reverse'
+      ? 'gpt-reverse'
+      : 'gpt-api'
+  const applyImageModelSelection = useCallback((selection: HeaderImageModelSelection) => {
     const normalized = normalizeSettings(settings)
     const currentProfile = normalized.profiles.find((profile) => profile.id === normalized.activeProfileId) ?? activeProfile
-    const switchedProfile = currentProfile.provider === 'openai'
+    const provider = selection === 'grok' ? 'xAI' : 'openai'
+    const switchedProfile = currentProfile.provider === provider
       ? currentProfile
-      : switchApiProfileProvider(currentProfile, 'openai')
-    const nextUpstreamMode: HeaderImageUpstreamMode = upstreamMode ?? (switchedProfile.upstreamMode === 'reverse' ? 'reverse' : 'api')
-    const nextProfile = {
-      ...switchedProfile,
-      provider: 'openai' as const,
-      model: DEFAULT_IMAGES_MODEL,
-      apiMode: 'images' as const,
-      upstreamMode: nextUpstreamMode,
-    }
+      : switchApiProfileProvider(currentProfile, provider)
+    const nextProfile = selection === 'grok'
+      ? {
+          ...switchedProfile,
+          provider: 'xAI' as const,
+          model: switchedProfile.model || DEFAULT_XAI_IMAGES_MODEL,
+          apiMode: 'images' as const,
+          upstreamMode: 'api' as const,
+          codexCli: false,
+          streamImages: false,
+        }
+      : {
+          ...switchedProfile,
+          provider: 'openai' as const,
+          model: DEFAULT_IMAGES_MODEL,
+          apiMode: 'images' as const,
+          upstreamMode: selection === 'gpt-reverse' ? 'reverse' as const : 'api' as const,
+        }
     setSettings({
       ...normalized,
-      model: DEFAULT_IMAGES_MODEL,
+      model: nextProfile.model,
       apiMode: 'images',
       activeProfileId: currentProfile.id,
       profiles: normalized.profiles.map((profile) => profile.id === currentProfile.id ? nextProfile : profile),
@@ -257,10 +266,8 @@ export default function Header() {
           {showImagePicker && (
             <div className="hidden sm:flex items-center mr-2">
               <HeaderImageModelControl
-                active={imageModelActive}
-                mode={imageUpstreamMode}
-                onSelectModel={() => applyGptImageProfile()}
-                onChangeMode={(mode) => applyGptImageProfile(mode)}
+                selection={imageModelSelection}
+                onSelect={applyImageModelSelection}
               />
             </div>
           )}
@@ -358,10 +365,8 @@ export default function Header() {
             <MobileViewSelect mode={appMode} onChange={setAppMode} />
             {showImagePicker && (
               <HeaderImageModelControl
-                active={imageModelActive}
-                mode={imageUpstreamMode}
-                onSelectModel={() => applyGptImageProfile()}
-                onChangeMode={(mode) => applyGptImageProfile(mode)}
+                selection={imageModelSelection}
+                onSelect={applyImageModelSelection}
                 className="min-w-0 flex-1"
               />
             )}
@@ -498,64 +503,47 @@ function MobileModelSelect({
   )
 }
 
-const HEADER_IMAGE_UPSTREAM_MODES: Array<{ value: HeaderImageUpstreamMode; label: string; title: string }> = [
-  { value: 'api', label: 'API', title: '使用服务端 API_PROXY_URL 通道' },
-  { value: 'reverse', label: '逆向', title: '使用 ChatGPT reverse 通道' },
+const HEADER_IMAGE_MODEL_OPTIONS: Array<{ value: HeaderImageModelSelection; label: string; title: string }> = [
+  { value: 'gpt-api', label: 'GPT API', title: '使用 OpenAI 图像 API' },
+  { value: 'gpt-reverse', label: 'GPT 逆向', title: '使用 ChatGPT reverse 通道' },
+  { value: 'grok', label: 'Grok', title: '使用 xAI Grok 图像模型' },
 ]
 
-function HeaderImageModelControl({
-  active,
-  mode,
-  onSelectModel,
-  onChangeMode,
+export function HeaderImageModelControl({
+  selection,
+  onSelect,
   className,
 }: {
-  active: boolean
-  mode: HeaderImageUpstreamMode
-  onSelectModel: () => void
-  onChangeMode: (mode: HeaderImageUpstreamMode) => void
+  selection: HeaderImageModelSelection
+  onSelect: (selection: HeaderImageModelSelection) => void
   className?: string
 }) {
   return (
     <div
-      role="group"
-      aria-label="GPT Image 2 模型与上游通道"
+      role="radiogroup"
+      aria-label="图像生成模型"
       className={`inline-flex h-[2.375rem] max-w-full items-stretch gap-1 rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] ${className ?? ''}`}
     >
-      <button
-        type="button"
-        aria-pressed={active}
-        title="GPT Image 2"
-        onClick={onSelectModel}
-        className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 sm:min-w-[6.75rem] sm:text-sm ${
-          active
-            ? 'bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white'
-            : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
-        }`}
-      >
-        GPT Image 2
-      </button>
-      <div className="grid w-11 shrink-0 grid-rows-2 gap-0.5" role="group" aria-label="GPT Image 2 上游通道">
-        {HEADER_IMAGE_UPSTREAM_MODES.map((item) => {
-          const selected = item.value === mode
-          return (
-            <button
-              key={item.value}
-              type="button"
-              title={item.title}
-              aria-pressed={selected}
-              onClick={() => onChangeMode(item.value)}
-              className={`rounded-md px-1 text-[10px] font-semibold leading-none transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
-                selected
-                  ? 'bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white'
-                  : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
-              }`}
-            >
-              {item.label}
-            </button>
-          )
-        })}
-      </div>
+      {HEADER_IMAGE_MODEL_OPTIONS.map((item) => {
+        const selected = item.value === selection
+        return (
+          <button
+            key={item.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            title={item.title}
+            onClick={() => onSelect(item.value)}
+            className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-2.5 text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 sm:min-w-[4.75rem] sm:text-sm ${
+              selected
+                ? 'bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white'
+                : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
+            }`}
+          >
+            {item.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -56,6 +56,7 @@ type Config struct {
 	ChatGPTReverseAuthDir        string
 	ChatGPTReverseAccessTokens   string
 	ChatGPTReverseBaseURL        string
+	ReverseAccountConcurrency    int
 	OutboundProxyType            string
 	OutboundProxyURL             string
 	MaxConcurrent                int
@@ -149,6 +150,7 @@ func Load(logger *slog.Logger) *Config {
 		ChatGPTReverseAuthDir:        strings.TrimSpace(os.Getenv("CHATGPT_REVERSE_AUTH_DIR")),
 		ChatGPTReverseAccessTokens:   strings.TrimSpace(os.Getenv("CHATGPT_REVERSE_ACCESS_TOKENS")),
 		ChatGPTReverseBaseURL:        env("CHATGPT_REVERSE_BASE_URL", "https://chatgpt.com"),
+		ReverseAccountConcurrency:    NormalizeReverseAccountConcurrency(os.Getenv("CHATGPT_REVERSE_ACCOUNT_CONCURRENCY"), 1),
 		OutboundProxyType:            NormalizeOutboundProxyType(os.Getenv("OUTBOUND_PROXY_TYPE"), OutboundProxyModeEnv),
 		OutboundProxyURL:             NormalizeOutboundProxyURL(os.Getenv("OUTBOUND_PROXY_URL")),
 		MaxConcurrent:                max(1, envInt("MAX_CONCURRENT_PROXY_REQUESTS", 5)),

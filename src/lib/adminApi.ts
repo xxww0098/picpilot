@@ -36,6 +36,7 @@ export interface AdminTeamSettings {
   maxConcurrent: number
   maxQueue: number
   proxyUserSoftLimit: number
+  reverseAccountConcurrency: number
   streamFallbackEnabled: boolean
   requestTimeoutSeconds: number
   outboundProxyType: AdminOutboundProxyType
@@ -181,6 +182,17 @@ export interface AdminReverseAuthCLIProxyAccount {
   type?: string
 }
 
+export type AdminReverseAuthImportSourceType = 'cpa' | 'sub2api'
+
+export interface AdminReverseAuthImportSource {
+  id: string
+  type: AdminReverseAuthImportSourceType
+  name: string
+  baseUrl: string
+  managementKeyConfigured?: boolean
+  managementKey?: string
+}
+
 export interface AdminReverseAuthImportSkipped {
   name: string
   reason: string
@@ -251,6 +263,7 @@ export function patchAdminTeamSettings(body: {
   maxConcurrent?: number
   maxQueue?: number
   proxyUserSoftLimit?: number
+  reverseAccountConcurrency?: number
   streamFallbackEnabled?: boolean
   requestTimeoutSeconds?: number
   outboundProxyType?: AdminOutboundProxyType
@@ -326,11 +339,23 @@ export function startAdminReverseAuthCheckJob(names?: string[]) {
           body: JSON.stringify({ names: selectedNames }),
         }
       : {}),
-  }, '启动 reverse 账号检查失败')
+  }, '启动 reverse 账号检查失败').then(normalizeAdminReverseAuthCheckJobResponse)
 }
 
 export function fetchAdminReverseAuthCheckJob(id: string) {
   return authJson<AdminReverseAuthCheckJobResponse>(`/api/admin/reverse-auth/check-jobs/${encodeURIComponent(id)}`, undefined, '加载 reverse 账号检查进度失败')
+    .then(normalizeAdminReverseAuthCheckJobResponse)
+}
+
+function normalizeAdminReverseAuthCheckJobResponse(response: AdminReverseAuthCheckJobResponse): AdminReverseAuthCheckJobResponse {
+  const { job } = response
+  return {
+    ...response,
+    job: {
+      ...job,
+      results: Array.isArray(job.results) ? job.results : [],
+    },
+  }
 }
 
 export function uploadAdminReverseAuthAccount(file: File) {
@@ -350,19 +375,34 @@ export function importAdminReverseAuthAccessToken(body: { accessToken: string; e
   }, '导入 access_token 失败')
 }
 
-export function fetchAdminReverseAuthCLIProxyAccounts() {
-  return authJson<{ accounts: AdminReverseAuthCLIProxyAccount[] }>('/api/admin/reverse-auth/cliproxy/accounts', undefined, '读取 CLIProxyAPI 账号失败')
+export function fetchAdminReverseAuthImportSources() {
+  return authJson<{ sources: AdminReverseAuthImportSource[] }>('/api/admin/reverse-auth/sources', undefined, '读取导入来源失败')
 }
 
-export function importAdminReverseAuthCLIProxyAccounts(names: string[]) {
+export function saveAdminReverseAuthImportSources(sources: AdminReverseAuthImportSource[]) {
+  return authJson<{ sources: AdminReverseAuthImportSource[] }>('/api/admin/reverse-auth/sources', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sources }),
+  }, '保存导入来源失败')
+}
+
+export function fetchAdminReverseAuthCLIProxyAccounts(sourceId?: string) {
+  const query = sourceId?.trim() ? `?sourceId=${encodeURIComponent(sourceId.trim())}` : ''
+  return authJson<{ accounts: AdminReverseAuthCLIProxyAccount[] }>(`/api/admin/reverse-auth/cliproxy/accounts${query}`, undefined, '读取 CLIProxyAPI 账号失败')
+}
+
+export function importAdminReverseAuthCLIProxyAccounts(names: string[], sourceId?: string) {
+  const normalizedSourceId = sourceId?.trim()
   return authJson<AdminReverseAuthImportResponse>('/api/admin/reverse-auth/cliproxy/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ names }),
+    body: JSON.stringify(normalizedSourceId ? { sourceId: normalizedSourceId, names } : { names }),
   }, '导入 CLIProxyAPI 账号失败')
 }
 
 export function importAdminReverseAuthSub2APIAccounts(body: {
+  sourceId?: string
   baseUrl: string
   adminToken?: string
   apiKey?: string

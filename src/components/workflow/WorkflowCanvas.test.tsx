@@ -51,14 +51,25 @@ describe('WorkflowCanvas (jsdom smoke)', () => {
     expect(screen.getByText('海报成片')).toBeTruthy()
   })
 
-  it('loads the e-commerce template from the template menu and renders all 7 nodes', () => {
+  it('loads the independent-site detail template from the template menu and renders all 7 nodes', () => {
     const { container } = render(<WorkflowCanvas />)
     fireEvent.click(screen.getByText('模板'))
-    fireEvent.click(screen.getByText('电商详情页一键复刻'))
+    fireEvent.click(screen.getByText('独立站详情页复刻'))
     expect(container.querySelectorAll('.react-flow__node').length).toBe(7)
     expect(screen.getByText('产品图')).toBeTruthy()
     expect(screen.getByText('主图 Banner')).toBeTruthy()
     expect(screen.getByText('详情页素材')).toBeTruthy()
+  })
+
+  it('loads the Ozon platform template with an embedded image case', () => {
+    const { container } = render(<WorkflowCanvas />)
+    fireEvent.click(screen.getByText('模板'))
+    fireEvent.click(screen.getByText('Ozon 上架图组'))
+    expect(container.querySelectorAll('.react-flow__node').length).toBe(9)
+    expect(screen.getByText('示例商品图')).toBeTruthy()
+    expect(screen.getByText('Ozon 主图 3:4')).toBeTruthy()
+    expect(screen.getByText('Ozon 上架图组')).toBeTruthy()
+    expect(container.querySelector('img[src^="data:image/png;base64,"]')).toBeTruthy()
   })
 
   it('opens a node context menu and deletes that node', () => {

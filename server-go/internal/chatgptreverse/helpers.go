@@ -129,6 +129,44 @@ func upstreamHTTPError(resp *http.Response) error {
 	return &httpStatusError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 }
 
+// isCloudflareChallengeResponse reports whether a 403 is a Cloudflare interstitial/managed
+// challenge rather than a genuine upstream permission denial. These blocks are transient and
+// correlated with the egress IP and the account's session cookies, so rotating to another
+// account usually clears them. CF's `cf-mitigated: challenge` header is the unambiguous
+// signal; the body markers cover cases where chatgpt.com serves the raw challenge HTML.
+// The response body is buffered and rewound so a non-CF 403 can still be reported verbatim.
+func isCloudflareChallengeResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Cf-Mitigated")), "challenge") {
+		return true
+	}
+	if resp.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	for _, m := range []string{
+		"cf_chl",
+		"challenge-error-text",
+		"cdn-cgi/challenge-platform",
+		"just a moment",
+		"enable javascript and cookies to continue",
+		"attention required",
+		"you have been blocked",
+	} {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
 func streamSSE(w http.ResponseWriter, r io.Reader) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

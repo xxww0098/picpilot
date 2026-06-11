@@ -84,6 +84,9 @@ func NormalizeQueueLimit(v any, fallback int) int       { return normalizeClampe
 func NormalizeProxyUserSoftLimit(v any, fallback int) int {
 	return normalizeClamped(v, 0, 100, fallback)
 }
+func NormalizeReverseAccountConcurrency(v any, fallback int) int {
+	return normalizeClamped(v, 1, 5, clampInt(fallback, 1, 5))
+}
 func NormalizeGalleryAutoRetryCount(v any, fallback int) int {
 	return normalizeClamped(v, 0, 5, fallback)
 }
@@ -244,10 +247,13 @@ func parsePatchClamped(v any, lo, hi float64) (int, bool) {
 	return 0, false
 }
 
-func ParseBatchImageLimitPatchValue(v any) (int, bool)       { return parsePatchClamped(v, 1, 100) }
-func ParseConcurrencyPatchValue(v any) (int, bool)           { return parsePatchClamped(v, 1, 100) }
-func ParseQueuePatchValue(v any) (int, bool)                 { return parsePatchClamped(v, 0, 1000) }
-func ParseProxyUserSoftLimitPatchValue(v any) (int, bool)    { return parsePatchClamped(v, 0, 100) }
+func ParseBatchImageLimitPatchValue(v any) (int, bool)    { return parsePatchClamped(v, 1, 100) }
+func ParseConcurrencyPatchValue(v any) (int, bool)        { return parsePatchClamped(v, 1, 100) }
+func ParseQueuePatchValue(v any) (int, bool)              { return parsePatchClamped(v, 0, 1000) }
+func ParseProxyUserSoftLimitPatchValue(v any) (int, bool) { return parsePatchClamped(v, 0, 100) }
+func ParseReverseAccountConcurrencyPatchValue(v any) (int, bool) {
+	return parsePatchClamped(v, 1, 5)
+}
 func ParseGalleryAutoRetryCountPatchValue(v any) (int, bool) { return parsePatchClamped(v, 0, 5) }
 func ParseRequestTimeoutSecondsPatchValue(v any) (int, bool) { return parsePatchClamped(v, 30, 3600) }
 

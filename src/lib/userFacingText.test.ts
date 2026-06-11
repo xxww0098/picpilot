@@ -34,4 +34,18 @@ describe('userFacingText', () => {
     const message = '服务繁忙，当前 5 个请求在处理中，请几秒后重试。'
     expect(getUserFacingErrorMessage(message)).toBe(message)
   })
+
+  it('maps Cloudflare challenge pages to a clear gateway message even when they embed 401/403', () => {
+    const cfHtml =
+      '<html><head><title>Just a moment...</title></head><body>error 401 <script>window._cf_chl_opt={}</script> cdn-cgi/challenge-platform</body></html>'
+    // Agent path: no apiUpstream flag, body contains "401" — must NOT become an auth-key error.
+    const out = getUserFacingErrorMessage(cfHtml)
+    expect(out).toContain('Cloudflare')
+    expect(out).not.toContain('API_PROXY_API_KEY')
+  })
+
+  it('maps Cloudflare block pages from the upstream proxy path too', () => {
+    const blocked = 'Attention Required! | Cloudflare — Sorry, you have been blocked'
+    expect(getUserFacingErrorMessage(blocked, '操作失败', { apiUpstream: true })).toContain('Cloudflare')
+  })
 })

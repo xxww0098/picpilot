@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,7 @@ const (
 	webAccountCheckRoutePath = "/backend-api/accounts/check/v4-2023-04-27"
 
 	defaultQuotaLimitedRefreshInterval = 5 * time.Minute
+	defaultAuthCheckConcurrency        = 4
 )
 
 type AuthCheckResult struct {
@@ -121,15 +123,64 @@ func (s *Service) CheckAuthAccountsByNameWithProgress(ctx context.Context, names
 }
 
 func (s *Service) checkStoredAuthRecordsWithProgress(ctx context.Context, records []StoredAuthAccount, onResult func(AuthCheckResult)) []AuthCheckResult {
-	results := make([]AuthCheckResult, 0, len(records))
-	for _, record := range records {
-		result := s.checkAndPersistStoredAuthAccount(ctx, record)
-		results = append(results, result)
+	results := make([]AuthCheckResult, len(records))
+	if len(records) == 0 {
+		return results
+	}
+
+	type job struct {
+		index  int
+		record StoredAuthAccount
+	}
+	type indexedResult struct {
+		index  int
+		result AuthCheckResult
+	}
+
+	jobs := make(chan job)
+	completed := make(chan indexedResult, len(records))
+	workerCount := authCheckWorkerCount(len(records))
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range jobs {
+				completed <- indexedResult{
+					index:  item.index,
+					result: s.checkAndPersistStoredAuthAccount(ctx, item.record),
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for index, record := range records {
+			jobs <- job{index: index, record: record}
+		}
+		close(jobs)
+		wg.Wait()
+		close(completed)
+	}()
+
+	for item := range completed {
+		results[item.index] = item.result
 		if onResult != nil {
-			onResult(result)
+			onResult(item.result)
 		}
 	}
+
 	return results
+}
+
+func authCheckWorkerCount(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if total < defaultAuthCheckConcurrency {
+		return total
+	}
+	return defaultAuthCheckConcurrency
 }
 
 func (s *Service) CheckDueQuotaLimitedAccounts(ctx context.Context, now time.Time, onResult func(AuthCheckResult)) ([]AuthCheckResult, error) {
@@ -143,18 +194,14 @@ func (s *Service) CheckDueQuotaLimitedAccounts(ctx context.Context, now time.Tim
 	if err != nil {
 		return nil, err
 	}
-	results := []AuthCheckResult{}
+	due := []StoredAuthAccount{}
 	for _, record := range records {
 		if !quotaLimitedRestoreDue(record, now) {
 			continue
 		}
-		result := s.checkAndPersistStoredAuthAccount(ctx, record)
-		results = append(results, result)
-		if onResult != nil {
-			onResult(result)
-		}
+		due = append(due, record)
 	}
-	return results, nil
+	return s.checkStoredAuthRecordsWithProgress(ctx, due, onResult), nil
 }
 
 func (s *Service) StartQuotaLimitedRefreshLoop(ctx context.Context, interval time.Duration) {
@@ -244,11 +291,12 @@ func (s *Service) checkStoredAuthAccount(ctx context.Context, record StoredAuthA
 		}
 	}
 	acc := account{
-		AccessToken:  stringValue(raw["access_token"], ""),
-		RefreshToken: stringValue(raw["refresh_token"], ""),
-		Email:        result.Email,
-		Name:         record.Name,
-		Raw:          raw,
+		AccessToken:      stringValue(raw["access_token"], ""),
+		RefreshToken:     stringValue(raw["refresh_token"], ""),
+		Email:            result.Email,
+		Name:             record.Name,
+		DefaultModelSlug: record.DefaultModelSlug,
+		Raw:              raw,
 	}
 	if record.Disabled && passwordLoginAvailable(raw) {
 		if relogged, ok := s.passwordRelogin(ctx, acc); ok {
@@ -368,6 +416,10 @@ func (s *Service) fetchWebJSON(ctx context.Context, method, path string, session
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusForbidden && isCloudflareChallengeResponse(resp) {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<10))
+			return nil, &httpStatusError{Status: resp.StatusCode, Body: "cloudflare challenge: " + strings.TrimSpace(string(body))}
+		}
 		return nil, upstreamHTTPError(resp)
 	}
 	var payload map[string]any
@@ -443,6 +495,9 @@ func classifyAuthCheckFailure(status int, body string) (string, string) {
 	lower := strings.ToLower(body)
 	if status == http.StatusUnauthorized {
 		return AuthCheckStatusExpired, "登录态失效或 access_token 已过期。"
+	}
+	if status == http.StatusForbidden && strings.Contains(lower, "cloudflare challenge") {
+		return AuthCheckStatusError, "ChatGPT Web 被 Cloudflare 拦截，暂时无法读取额度，请稍后重试或更换出站代理。"
 	}
 	if status == http.StatusTooManyRequests || strings.Contains(lower, "quota") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit") || strings.Contains(lower, "too many") || strings.Contains(lower, "usage limit") || strings.Contains(lower, "limit reached") {
 		return AuthCheckStatusQuotaOrRateLimited, "上游返回限流或额度类错误，疑似无额度。"

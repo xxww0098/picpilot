@@ -21,8 +21,14 @@ data/
 *.local
 
 # Editor / IDE / agent settings
+.agents/
 .claude/*
 !.claude/skills/
+.claude/skills/impeccable/
+skills-lock.json
 .vscode/
 .idea/
 .DS_Store
+
+# Temporary outputs
+tmp/

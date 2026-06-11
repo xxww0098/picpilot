@@ -154,12 +154,17 @@ function gatherImages(
 }
 
 function gatherPrompt(nodeId: string, edges: EngineEdge[], nodeOutput: Map<string, WorkflowImage[] | string>): string | undefined {
+  const parts: string[] = []
   for (const e of getIncomingEdges(nodeId, edges)) {
     if ((e.targetHandle ?? '') !== HANDLE.GEN_PROMPT) continue
     const v = nodeOutput.get(e.source)
-    if (typeof v === 'string' && v.trim()) return v
+    if (typeof v === 'string' && v.trim()) parts.push(v.trim())
   }
-  return undefined
+  return parts.length ? parts.join('\n\n') : undefined
+}
+
+function combinePrompt(upstreamPrompt: string | undefined, inlinePrompt: string): string {
+  return [upstreamPrompt?.trim(), inlinePrompt.trim()].filter(Boolean).join('\n\n')
 }
 
 // ---- 执行 ------------------------------------------------------------------
@@ -240,7 +245,7 @@ export async function runWorkflow(
       return
     }
     const images = gatherImages(id, edges, nodeOutput, { promptHandle: HANDLE.GEN_PROMPT })
-    const prompt = gatherPrompt(id, edges, nodeOutput) ?? data.prompt
+    const prompt = combinePrompt(gatherPrompt(id, edges, nodeOutput), data.prompt)
     if (!prompt.trim() && images.length === 0) {
       failed.add(id)
       nodeStatus[id] = 'error'

@@ -62,20 +62,23 @@ docker compose -f compose.yml up -d auth
 
 ## 并发控制
 
-只设**一个全局并发上限**，超出的请求进入 **FIFO 队列排队等待**（不再有单用户并发上限）；前一个请求完成、腾出槽位后按先来先到顺序放行。这样高峰期表现为「多等一会儿」而非直接失败。
+以**一个全局并发队列**为主，超出的请求进入 **FIFO 队列排队等待**；前一个请求完成、腾出槽位后按顺序放行。另有单用户软上限用于公平调度，内置 reverse 还叠加单账号并发保护。
 
 | 层级 | 参数 | 默认值 | 作用 |
 |------|------|--------|------|
 | 全局并发 | `MAX_CONCURRENT_PROXY_REQUESTS` | 5 | 同时最多 5 个生图请求进入上游 |
 | 排队上限 | `PROXY_QUEUE_MAX` | 10 | 最多 10 个请求排队，超出立即 429 |
 | 排队超时 | `PROXY_QUEUE_MAX_WAIT_MS` | 240000 | 排队等待超过 240s 返回 429 |
+| 单用户软上限 | `PROXY_USER_SOFT_LIMIT` | 3 | 某个用户已占用过多在途请求时，优先放行后方其他用户 |
+| reverse 单账号并发 | `CHATGPT_REVERSE_ACCOUNT_CONCURRENCY` | 1 | 内置 reverse 每个 ChatGPT 账号最多同时跑多少请求 |
 | 单次批量 | `DEFAULT_MAX_BATCH_IMAGES` | 10 | 一次请求最多 10 张图（前端 UI 上限同为 10） |
 
 - 全局并发应根据 CLIProxyAPI 的上游凭证数量和账号类型调整。Plus 账号跑长图像任务时按「约 1 个账号承载 1 个长请求」估算；当前 6 个 Plus 账号允许 PicPilot 使用 5 个并发，保留 1 个上游余量。
+- 内置 reverse 的单 IP 账号池建议保持 `CHATGPT_REVERSE_ACCOUNT_CONCURRENCY=1`；只有确认同账号多路请求稳定时再从管理端调到 `2-5`。
 - 单个批量任务不会固定拆分并发数：前端发起任务前读取 `/api/queue/stats`，按当前 `maxConcurrent - inflight` 动态决定 fan-out；已有排队时降为 1，避免单个批量任务继续扩大排队。
-- **排队超时必须小于 Bun 的 socket 空闲超时（255s）**，否则连接会在静默排队期被断开；代码已将其钳制在 240s 内。
+- 排队超时在服务端被钳制在 240s 内（`server-go` 的 `clampInt`），避免请求在静默排队期挂太久。
 - 客户端 API Profile 的超时（`timeout`）应设得**大于「排队超时 + 单次生成耗时」**，否则请求会在客户端侧先超时。出图慢时单次可达数分钟，建议 profile 超时设到 5–10 分钟。
-- 队列为单进程内存态，适用于当前单 `auth` 容器部署；若横向扩多副本需改用共享协调层（如 Redis），详见代码 `server/concurrencyQueue.ts` 的抽象边界。
+- 队列为单进程内存态，适用于当前单 `auth` 容器部署；若横向扩多副本需改用共享协调层（如 Redis），详见代码 `server-go/internal/queue` 的抽象边界。
 
 ## compose.yml
 

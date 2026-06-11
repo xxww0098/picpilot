@@ -17,6 +17,7 @@ import {
   pickActualParams,
 } from '../imageApiShared'
 import { settleWithConcurrency } from '../runWithConcurrency'
+import { scheduleImageApiRequest } from '../imageRequestScheduler'
 import {
   collectConcurrentFailures,
   createRequestHeaders,
@@ -230,18 +231,24 @@ async function parseResponsesApiStreamResponse(
 export async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const n = opts.params.n > 0 ? opts.params.n : 1
   if (n === 1) {
-    return callResponsesImageApiSingle(opts, profile)
+    return scheduleImageApiRequest(
+      () => callResponsesImageApiSingle(opts, profile),
+      { signal: opts.signal },
+    )
   }
 
   const results = await settleWithConcurrency(
     Array.from({ length: n }),
     getImageApiFanoutConcurrency({ maxConcurrent: opts.fanoutConcurrency }),
-    (_, requestIndex) => callResponsesImageApiSingle({
-      ...opts,
-      onPartialImage: opts.onPartialImage
-        ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
-        : undefined,
-    }, profile),
+    (_, requestIndex) => scheduleImageApiRequest(
+      () => callResponsesImageApiSingle({
+        ...opts,
+        onPartialImage: opts.onPartialImage
+          ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
+          : undefined,
+      }, profile),
+      { signal: opts.signal },
+    ),
   )
   
   const successfulResults = results

@@ -58,6 +58,7 @@ func setupWithReverseChecker(t *testing.T, checker reverseAuthChecker) *env {
 		MaxConcurrent:                5,
 		ProxyQueueMax:                10,
 		ProxyUserSoftLimit:           3,
+		ReverseAccountConcurrency:    1,
 		DefaultGalleryAutoRetryCount: 1,
 		DefaultStreamFallbackEnabled: true,
 		DefaultRequestTimeoutSeconds: 900,
@@ -170,6 +171,36 @@ func TestTeamSettingsRuntime(t *testing.T) {
 	// invalid value rejected
 	if rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"maxConcurrent":999}`); rec.Code != 400 {
 		t.Fatalf("out-of-range should be 400, got %d", rec.Code)
+	}
+}
+
+func TestTeamSettingsReverseAccountConcurrencyRuntime(t *testing.T) {
+	e := setup(t)
+	rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"reverseAccountConcurrency":2}`)
+	if rec.Code != 200 {
+		t.Fatalf("patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ReverseAccountConcurrency int `json:"reverseAccountConcurrency"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
+	if body.ReverseAccountConcurrency != 2 {
+		t.Fatalf("reverse account concurrency not returned: %+v body=%s", body, rec.Body.String())
+	}
+	rec = e.req("GET", "/api/admin/team-settings", e.adminTok, "")
+	if rec.Code != 200 {
+		t.Fatalf("get status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode persisted settings: %v", err)
+	}
+	if body.ReverseAccountConcurrency != 2 {
+		t.Fatalf("reverse account concurrency not persisted: %+v body=%s", body, rec.Body.String())
+	}
+	if rec := e.req("PATCH", "/api/admin/team-settings", e.adminTok, `{"reverseAccountConcurrency":0}`); rec.Code != 400 {
+		t.Fatalf("out-of-range should be 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

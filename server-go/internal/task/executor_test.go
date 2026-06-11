@@ -142,6 +142,32 @@ func TestUpstreamHonorsModelCooldownBeforeRetry(t *testing.T) {
 	}
 }
 
+func TestUpstreamRetriesCloudflareManagedChallenge403(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":{"message":"<html><span id=\"challenge-error-text\">Enable JavaScript and cookies to continue</span><script>window._cf_chl_opt={cType:'managed'}</script></html>","type":"permission_error","code":"insufficient_quota"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"url":"http://img/ok.png"}]}`)
+	}))
+	defer srv.Close()
+	exec := newExecutorFor(t, srv.URL, 1)
+
+	status, result, errType, errMsg := exec.doUpstream(context.Background(), &Task{ID: "cf", UserID: "u1", Endpoint: "responses", RequestJSON: `{"model":"gpt-5.5","input":"x"}`})
+	if status != StatusSucceeded {
+		t.Fatalf("want succeeded after Cloudflare challenge retry, got %s/%s msg=%s", status, errType, errMsg)
+	}
+	if !strings.Contains(result, "ok.png") {
+		t.Fatalf("result not returned after retry: %s", result)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("want 2 upstream attempts, got %d", hits.Load())
+	}
+}
+
 func TestUpstreamDoesNotRetryClientError(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

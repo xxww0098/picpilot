@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -97,6 +99,8 @@ type retryTransport struct {
 }
 
 const maxRetryBodyBytes = 8 << 20 // 8 MiB
+const preflightTimeout = 12 * time.Second
+const preflightRecentCFWindow = 10 * time.Minute
 
 func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var replay []byte
@@ -146,7 +150,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			retryable = false // client aborted / deadline: don't retry
 		case err != nil:
 			retryable = true // transport error (dial/reset/etc.)
-		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		case isRetryableProxyResponse(resp):
 			retryable = true
 		}
 		if !replayable || !retryable || attempt > rt.maxRetries {
@@ -197,6 +201,109 @@ func inspectCooldown(resp *http.Response) (time.Duration, string) {
 	return delay, info.Model
 }
 
+func isRetryableProxyResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return true
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		return false
+	}
+	// Direct-passthrough CF challenges (internal reverse / no JSON wrapping) keep
+	// Cloudflare's own response headers, which are the most reliable signal.
+	if hasCloudflareChallengeHeader(resp.Header) {
+		return true
+	}
+	if resp.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	return isCloudflareManagedChallenge(string(body))
+}
+
+// hasCloudflareChallenge looks for Cloudflare's `cf-mitigated` marker header, which CF
+// sets to "challenge" on interstitial/managed-challenge responses. cliproxy wraps upstream
+// errors into JSON and drops these headers, so this only fires on direct passthrough, but
+// when present it is unambiguous.
+func hasCloudflareChallengeHeader(h http.Header) bool {
+	if h == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(h.Get("Cf-Mitigated")), "challenge")
+}
+
+// isCloudflareManagedChallenge recognizes a Cloudflare challenge/block page, whether served
+// raw or wrapped (cliproxy embeds the upstream HTML inside a JSON error message). These are
+// transient, IP/account-correlated blocks: a retry round-robins cliproxy onto another
+// credential and usually clears. OpenAI's own 403s (content policy, quota) lack these
+// markers and are left to fail fast.
+func isCloudflareManagedChallenge(body string) bool {
+	lower := strings.ToLower(body)
+	markers := []string{
+		"cf_chl",                     // _cf_chl_opt challenge script
+		"challenge-error-text",       // challenge page error element
+		"cdn-cgi/challenge-platform", // challenge platform asset path
+		"just a moment",              // interstitial page title
+		"enable javascript and cookies to continue",
+		"attention required",    // CF block page heading
+		"you have been blocked", // CF block page body
+	}
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCloudflareChallengeArtifact(text string) bool {
+	lower := strings.ToLower(text)
+	return isCloudflareManagedChallenge(lower) ||
+		(strings.Contains(lower, "cf-mitigated") && strings.Contains(lower, "challenge"))
+}
+
+func recentCloudflareChallengeLog(logDir string, window time.Duration) (string, bool) {
+	if strings.TrimSpace(logDir) == "" {
+		return "", false
+	}
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return "", false
+	}
+	cutoff := time.Now().Add(-window)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "error-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().Before(cutoff) {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(logDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		if isCloudflareChallengeArtifact(string(body)) {
+			return entry.Name(), true
+		}
+	}
+	return "", false
+}
+
+func truncateText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func statusOf(resp *http.Response) int {
 	if resp == nil {
 		return 0
@@ -219,6 +326,12 @@ func (p *Proxy) Register(r chi.Router) {
 	r.Group(func(pr chi.Router) {
 		pr.Use(p.auth.Middleware("Authorization"))
 		pr.Get("/api/queue/stats", p.handleQueueStats)
+	})
+
+	r.Group(func(pr chi.Router) {
+		pr.Use(p.auth.Middleware("Authorization"))
+		pr.Use(p.auth.RequireUser)
+		pr.Get("/api/upstream/preflight", p.handleUpstreamPreflight)
 	})
 
 	r.Group(func(pr chi.Router) {
@@ -255,6 +368,53 @@ func (p *Proxy) handleQueueStats(w http.ResponseWriter, r *http.Request) {
 		"myQueued":           st.MyQueued,
 		"myNextPosition":     st.MyNextPosition,
 	})
+}
+
+func (p *Proxy) handleUpstreamPreflight(w http.ResponseWriter, r *http.Request) {
+	activeUpstream := upstream.FromConfigForMode(p.cfg, r.URL.Query().Get("mode"))
+	if activeUpstream.Mode != config.UpstreamModeAPI {
+		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "mode": activeUpstream.Mode, "skipped": true})
+		return
+	}
+	if name, ok := recentCloudflareChallengeLog(p.cfg.CLIProxyLogDir, preflightRecentCFWindow); ok {
+		httpx.Error(w, http.StatusServiceUnavailable, "发现上游最近出现 Cloudflare 拦截，已暂停本次出图。请稍后重试或检查 CLIProxy 账号状态。日志："+name)
+		return
+	}
+	target, err := activeUpstream.ResolveProxy("/api-proxy/v1/models", "")
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if target == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "上游 API 地址未配置，请联系管理员。")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), preflightTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	req.Header = buildUpstreamHeaders(r.Header, activeUpstream.APIKey)
+	resp, err := (&http.Client{Transport: p.transport}).Do(req)
+	if err != nil {
+		httpx.Error(w, http.StatusBadGateway, "上游 API 预检失败："+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true, "mode": activeUpstream.Mode, "status": resp.StatusCode})
+		return
+	}
+	if hasCloudflareChallengeHeader(resp.Header) || isCloudflareChallengeArtifact(string(body)) {
+		httpx.Error(w, http.StatusServiceUnavailable, "上游 API 被 Cloudflare 拦截，已暂停本次出图。请稍后重试或检查 CLIProxy 账号状态。")
+		return
+	}
+	httpx.Error(w, http.StatusServiceUnavailable, "上游 API 预检失败：HTTP "+strconv.Itoa(resp.StatusCode)+" "+truncateText(string(body), 300))
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {

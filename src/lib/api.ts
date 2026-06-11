@@ -5,6 +5,7 @@ import { getDataUrlDecodedByteSize } from './imageApiShared'
 import { logger, serializeError } from './logger'
 import { classifyError, reportEvent } from './telemetry'
 import { applyTeamRuntimeSettings } from './runtimeTeamSettings'
+import { preflightImageUpstream } from './upstreamPreflight'
 
 export type { CallApiOptions, CallApiResult } from './imageApiShared'
 
@@ -47,6 +48,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
   })
 
   try {
+    await preflightImageUpstream(effectiveSettings, profile, opts.signal)
     const result = await callOpenAICompatibleImageApi(effectiveOpts, profile, getCustomProviderDefinition(effectiveSettings, profile.provider))
     const elapsedMs = Date.now() - startedAt
     logger.info('api', '图像 API 调用成功', {

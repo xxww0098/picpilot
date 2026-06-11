@@ -11,6 +11,7 @@ export interface ImageModelOption {
 
 export const IMAGE_MODELS: ImageModelOption[] = [
   { id: 'gpt-image-2', label: 'GPT Image 2', provider: 'OpenAI' },
+  { id: 'codex-gpt-image-2', label: 'Codex GPT Image 2', provider: 'OpenAI' },
   { id: 'grok-imagine-image', label: 'Grok Imagine', provider: 'xAI' },
   { id: 'grok-imagine-image-quality', label: 'Grok Quality', provider: 'xAI' },
 ]

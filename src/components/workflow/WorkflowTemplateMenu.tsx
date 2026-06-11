@@ -11,8 +11,8 @@ function getTemplateStats(template: WorkflowTemplate) {
 }
 
 function getTemplateLabel(template: WorkflowTemplate) {
+  if (template.platform !== '通用') return template.platform
   if (template.id.includes('try-on')) return '服装海报'
-  if (template.id.includes('detail')) return '详情页素材'
   if (template.id.includes('video')) return '视频分镜'
   return '工作流模板'
 }

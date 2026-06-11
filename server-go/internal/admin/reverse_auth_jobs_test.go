@@ -16,6 +16,12 @@ type selectiveReverseAuthChecker struct {
 	names   []string
 }
 
+type nilReverseAuthChecker struct{}
+
+func (nilReverseAuthChecker) CheckAuthAccounts(context.Context) ([]chatgptreverse.AuthCheckResult, error) {
+	return nil, nil
+}
+
 func (c *selectiveReverseAuthChecker) CheckAuthAccounts(ctx context.Context) ([]chatgptreverse.AuthCheckResult, error) {
 	return c.CheckAuthAccountsWithProgress(ctx, func(chatgptreverse.AuthCheckResult) {})
 }
@@ -117,6 +123,52 @@ func TestReverseAuthCheckJobRejectsInvalidSelectedAccountName(t *testing.T) {
 	rec := e.req("POST", "/api/admin/reverse-auth/check-jobs", e.adminTok, `{"names":["bad:name.json"]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid selected name should be 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReverseAuthCheckJobReturnsEmptyResultsArray(t *testing.T) {
+	e := setupWithReverseChecker(t, nilReverseAuthChecker{})
+	rec := e.req("POST", "/api/admin/reverse-auth/check-jobs", e.adminTok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start empty job status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var started struct {
+		Job struct {
+			ID string `json:"id"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start empty job: %v", err)
+	}
+	if started.Job.ID == "" {
+		t.Fatalf("empty job missing id: %s", rec.Body.String())
+	}
+
+	deadline := time.Now().Add(time.Second)
+	var final struct {
+		Job struct {
+			Status  string          `json:"status"`
+			Results json.RawMessage `json:"results"`
+		} `json:"job"`
+	}
+	for time.Now().Before(deadline) {
+		rec = e.req("GET", "/api/admin/reverse-auth/check-jobs/"+started.Job.ID, e.adminTok, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("poll empty job status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &final); err != nil {
+			t.Fatalf("decode empty poll: %v", err)
+		}
+		if final.Job.Status != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if final.Job.Status != "succeeded" {
+		t.Fatalf("empty job did not finish: %+v body=%s", final.Job, rec.Body.String())
+	}
+	if string(final.Job.Results) != "[]" {
+		t.Fatalf("empty job results should be [], got %s body=%s", string(final.Job.Results), rec.Body.String())
 	}
 }
 

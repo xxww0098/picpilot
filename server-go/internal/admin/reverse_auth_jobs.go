@@ -90,8 +90,11 @@ func (m *reverseAuthCheckJobManager) finish(id string, results []chatgptreverse.
 		job.Error = err.Error()
 		return
 	}
+	if results == nil {
+		results = []chatgptreverse.AuthCheckResult{}
+	}
 	job.Status = reverseAuthJobSucceeded
-	job.Results = append([]chatgptreverse.AuthCheckResult(nil), results...)
+	job.Results = append([]chatgptreverse.AuthCheckResult{}, results...)
 	job.Completed = len(results)
 	if job.Total < job.Completed {
 		job.Total = job.Completed
@@ -109,6 +112,7 @@ func (m *reverseAuthCheckJobManager) get(id string) (map[string]any, bool) {
 }
 
 func reverseAuthCheckJobView(job *reverseAuthCheckJob) map[string]any {
+	results := append([]chatgptreverse.AuthCheckResult{}, job.Results...)
 	view := map[string]any{
 		"id":        job.ID,
 		"status":    job.Status,
@@ -116,7 +120,7 @@ func reverseAuthCheckJobView(job *reverseAuthCheckJob) map[string]any {
 		"completed": job.Completed,
 		"startedAt": job.StartedAt,
 		"updatedAt": job.UpdatedAt,
-		"results":   append([]chatgptreverse.AuthCheckResult(nil), job.Results...),
+		"results":   results,
 	}
 	if job.FinishedAt > 0 {
 		view["finishedAt"] = job.FinishedAt

@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_TOKEN_KEY } from './auth'
 import {
   downloadAdminReverseAuthAccounts,
+  fetchAdminReverseAuthImportSources,
   fetchAdminReverseAuthAccount,
   fetchAdminReverseAuthCheckJob,
   fetchAdminReverseAuthCLIProxyAccounts,
+  saveAdminReverseAuthImportSources,
   importAdminReverseAuthCLIProxyAccounts,
   importAdminReverseAuthAccessToken,
   importAdminReverseAuthSub2APIAccounts,
@@ -37,6 +39,7 @@ describe('adminApi team settings', () => {
       maxConcurrent: 5,
       maxQueue: 10,
       proxyUserSoftLimit: 3,
+      reverseAccountConcurrency: 1,
       streamFallbackEnabled: true,
       requestTimeoutSeconds: 900,
       outboundProxyType: 'socks5h',
@@ -66,6 +69,7 @@ describe('adminApi team settings', () => {
       maxConcurrent: 5,
       maxQueue: 10,
       proxyUserSoftLimit: 3,
+      reverseAccountConcurrency: 1,
       streamFallbackEnabled: true,
       requestTimeoutSeconds: 900,
       outboundProxyType: 'env',
@@ -87,6 +91,33 @@ describe('adminApi team settings', () => {
       cliproxyApiUrl: 'http://cliproxy:8317',
       cliproxyManagementKey: 'mgmt-secret',
     })
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
+  })
+
+  it('sends reverse account concurrency in the team-settings patch body', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      defaultMaxBatchImages: 10,
+      galleryAutoRetryCount: 1,
+      maxConcurrent: 5,
+      maxQueue: 10,
+      proxyUserSoftLimit: 3,
+      reverseAccountConcurrency: 2,
+      streamFallbackEnabled: true,
+      requestTimeoutSeconds: 900,
+      outboundProxyType: 'env',
+      outboundProxyUrl: '',
+      cliproxyApiUrl: '',
+      cliproxyManagementKeyConfigured: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const result = await patchAdminTeamSettings({ reverseAccountConcurrency: 2 })
+
+    expect(result.reverseAccountConcurrency).toBe(2)
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/team-settings', expect.any(Object))
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ reverseAccountConcurrency: 2 })
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
   })
 
@@ -128,6 +159,40 @@ describe('adminApi team settings', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/reverse-auth/check-jobs')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('POST')
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/reverse-auth/check-jobs/rac-1')
+  })
+
+  it('normalizes null reverse auth check job results to empty arrays', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        job: {
+          id: 'rac-empty',
+          status: 'running',
+          total: 0,
+          completed: 0,
+          startedAt: 1800000000000,
+          updatedAt: 1800000000000,
+          results: null,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        job: {
+          id: 'rac-empty',
+          status: 'succeeded',
+          total: 0,
+          completed: 0,
+          startedAt: 1800000000000,
+          updatedAt: 1800000001000,
+          finishedAt: 1800000001000,
+          results: null,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const started = await startAdminReverseAuthCheckJob()
+    const final = await fetchAdminReverseAuthCheckJob(started.job.id)
+
+    expect(started.job.results).toEqual([])
+    expect(final.job.results).toEqual([])
   })
 
   it('starts reverse auth check jobs for selected account names', async () => {
@@ -258,6 +323,85 @@ describe('adminApi team settings', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
   })
 
+  it('saves reverse auth import sources without expecting returned secrets', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        sources: [
+          {
+            id: 'cpa-main',
+            type: 'cpa',
+            name: 'Main CPA',
+            baseUrl: 'https://cpa.example.com',
+            managementKeyConfigured: true,
+          },
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        sources: [
+          {
+            id: 'cpa-main',
+            type: 'cpa',
+            name: 'Main CPA',
+            baseUrl: 'https://cpa.example.com',
+            managementKeyConfigured: true,
+          },
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const saved = await saveAdminReverseAuthImportSources([
+      {
+        id: 'cpa-main',
+        type: 'cpa',
+        name: 'Main CPA',
+        baseUrl: 'https://cpa.example.com',
+        managementKey: 'cpa-secret',
+      },
+    ])
+    const listed = await fetchAdminReverseAuthImportSources()
+
+    expect(saved.sources[0].managementKeyConfigured).toBe(true)
+    expect(listed.sources[0].managementKeyConfigured).toBe(true)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/reverse-auth/sources')
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual({
+      sources: [{
+        id: 'cpa-main',
+        type: 'cpa',
+        name: 'Main CPA',
+        baseUrl: 'https://cpa.example.com',
+        managementKey: 'cpa-secret',
+      }],
+    })
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-token')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/reverse-auth/sources')
+  })
+
+  it('passes a source id when listing and importing CPA accounts', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        accounts: [{ name: 'openai-plus.json', provider: 'openai', type: 'oauth' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        imported: [],
+        skipped: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await fetchAdminReverseAuthCLIProxyAccounts('cpa-main')
+    await importAdminReverseAuthCLIProxyAccounts(['openai-plus.json'], 'cpa-main')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/reverse-auth/cliproxy/accounts?sourceId=cpa-main')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/reverse-auth/cliproxy/import')
+    const init = fetchMock.mock.calls[1][1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({
+      sourceId: 'cpa-main',
+      names: ['openai-plus.json'],
+    })
+  })
+
   it('imports reverse auth accounts from a sub2api server with filters', async () => {
     localStorage.setItem(AUTH_TOKEN_KEY, 'test-token')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
@@ -277,6 +421,7 @@ describe('adminApi team settings', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
     const result = await importAdminReverseAuthSub2APIAccounts({
+      sourceId: 'sub-main',
       baseUrl: 'https://sub2api.example.com',
       adminToken: 'sub-secret',
       search: 'plus',
@@ -289,6 +434,7 @@ describe('adminApi team settings', () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({
+      sourceId: 'sub-main',
       baseUrl: 'https://sub2api.example.com',
       adminToken: 'sub-secret',
       search: 'plus',

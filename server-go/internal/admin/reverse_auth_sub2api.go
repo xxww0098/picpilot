@@ -36,6 +36,7 @@ func (m *Module) importSub2APIReverseAuthAccounts(w http.ResponseWriter, r *http
 		return
 	}
 	var body struct {
+		SourceID   string `json:"sourceId"`
 		BaseURL    string `json:"baseUrl"`
 		AdminToken string `json:"adminToken"`
 		APIKey     string `json:"apiKey"`
@@ -46,6 +47,16 @@ func (m *Module) importSub2APIReverseAuthAccounts(w http.ResponseWriter, r *http
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "请求 JSON 无法解析。")
 		return
+	}
+	if sourceID := strings.TrimSpace(body.SourceID); sourceID != "" {
+		source, err := m.reverseAuthImportSourceByID(sourceID, "sub2api")
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body.BaseURL = source.BaseURL
+		body.AdminToken = source.ManagementKey
+		body.APIKey = ""
 	}
 	dataURL, err := sub2APIAccountsDataURL(body.BaseURL, body.Search, body.Status)
 	if err != nil {
@@ -181,10 +192,7 @@ func (m *Module) saveSub2APIAccounts(ctx context.Context, accounts []sub2APIData
 			skipped = append(skipped, cliproxyImportSkipped{Name: displayName, Reason: err.Error()})
 			continue
 		}
-		localName, err := uniqueReverseAuthName(ctx, m.reverseStore, displayName)
-		if err != nil {
-			return nil, nil, errors.New("读取逆向账号数据库失败。")
-		}
+		localName := reverseAuthImportTargetName(displayName)
 		now := time.Now().UnixMilli()
 		if err := m.reverseStore.SaveAuthAccount(ctx, chatgptreverse.StoredAuthAccount{
 			Name:      localName,
