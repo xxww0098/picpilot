@@ -1,4 +1,4 @@
-import JSZip from 'jszip'
+import { zipSync, type Zippable } from 'fflate'
 import { ensureImageCached } from '../store'
 import { logger, serializeError } from './logger'
 
@@ -51,7 +51,7 @@ export async function downloadImagesAsZip(
   fileNameBase = 'images',
   onProgress?: (done: number, total: number) => void,
 ): Promise<DownloadImagesResult> {
-  const zip = new JSZip()
+  const zipFiles: Zippable = {}
   let successCount = 0
   let failCount = 0
   let done = 0
@@ -62,7 +62,7 @@ export async function downloadImagesAsZip(
       try {
         const blob = await getImageBlob(imageIds[i])
         const order = String(i + 1).padStart(pad, '0')
-        zip.file(`${order}.${getBlobExtension(blob)}`, blob)
+        zipFiles[`${order}.${getBlobExtension(blob)}`] = new Uint8Array(await blob.arrayBuffer())
         successCount++
       } catch (err) {
         logger.error('ui', 'ZIP 批量下载图片失败', { imageId: imageIds[i], error: serializeError(err) })
@@ -78,7 +78,9 @@ export async function downloadImagesAsZip(
   )
 
   if (successCount === 0) return { successCount, failCount }
-  const archive = await zip.generateAsync({ type: 'blob' })
+  // 图片本身已压缩，level 0 仅打包不再压缩
+  const zipped = zipSync(zipFiles, { level: 0 })
+  const archive = new Blob([zipped.buffer as ArrayBuffer], { type: 'application/zip' })
   triggerDownload(archive, `${fileNameBase}.zip`)
   return { successCount, failCount }
 }
