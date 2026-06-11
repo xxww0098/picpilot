@@ -7,6 +7,7 @@ import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { getImageModelLabel, isKnownImageModel } from '../lib/imageModels'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskFailedImageSource, getTaskImageSource, getUpstreamModeLabel, hasMixedTaskImageSources } from '../lib/taskSource'
+import { getTaskStreamPreviewSummary } from '../lib/streamPreviews'
 import { CodeIcon, RefreshIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 import { getVideo } from '../lib/db'
@@ -83,6 +84,7 @@ function TaskCard({
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const streamPreviewSlots = useStore((s) => s.streamPreviewSlots[task.id])
   const regeneratingImageIndex = useStore((s) => s.regeneratingImageSlots[task.id] ?? null)
   const regeneratingImageLabel = useStore((s) => s.regeneratingImageSlotLabels[task.id] ?? null)
   const queueStats = useStore((s) => s.queueStats)
@@ -97,6 +99,15 @@ function TaskCard({
   const pendingSwipeOffsetRef = useRef(0)
   const swipeFrameRef = useRef<number | null>(null)
   const isVideoTask = task.mediaType === 'video'
+  const streamPreviewSummary = getTaskStreamPreviewSummary({
+    taskOutputCount: task.status === 'running' || task.status === 'error' ? task.params.n : 0,
+    streamPreviewSrc,
+    streamPreviewSlots,
+  })
+  const activeStreamPreviewSrc = streamPreviewSummary.primarySrc
+  const streamPreviewProgressText = streamPreviewSummary.total > 1
+    ? `${streamPreviewSummary.received}/${streamPreviewSummary.total} 预览`
+    : '预览'
 
   const updateSwipeDirection = (nextDirection: -1 | 0 | 1) => {
     if (swipeDirectionRef.current === nextDirection) return
@@ -243,7 +254,7 @@ function TaskCard({
 
   useEffect(() => {
     setStreamPreviewLoaded(false)
-  }, [streamPreviewSrc, task.id])
+  }, [activeStreamPreviewSrc, task.id])
 
   // 定时更新运行中任务的计时
   useEffect(() => {
@@ -344,7 +355,7 @@ function TaskCard({
           : null
   // 全局队列有人等待、且本卡尚无预览时，提示"系统繁忙正在排队"。
   // 若后端能识别当前用户的等待请求，优先显示用户在 FIFO 队列中的位置。
-  const queueWaitingText = task.status === 'running' && !streamPreviewSrc && queueStats && queueStats.queued > 0
+  const queueWaitingText = task.status === 'running' && !activeStreamPreviewSrc && queueStats && queueStats.queued > 0
     ? queueStats.myNextPosition != null
       ? `服务繁忙，你排第 ${queueStats.myNextPosition} 位${queueStats.myQueued > 1 ? `，你的 ${queueStats.myQueued} 个请求在等` : ''}…`
       : `服务繁忙，前方约 ${queueStats.queued} 个请求排队中…`
@@ -390,6 +401,7 @@ function TaskCard({
   const isMixedSource = hasMixedTaskImageSources(task)
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
   const isRegeneratingImage = regeneratingImageIndex !== null
+  const showFailedStreamPreview = task.status === 'error' && !isCustomReconnecting && Boolean(activeStreamPreviewSrc)
 
   return (
     <div className="relative rounded-xl">
@@ -468,10 +480,10 @@ function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
-          {task.status === 'running' && streamPreviewSrc && (
+          {(task.status === 'running' || showFailedStreamPreview) && activeStreamPreviewSrc && (
             <>
               <img
-                src={streamPreviewSrc}
+                src={activeStreamPreviewSrc}
                 className={`h-full w-full object-cover ${streamPreviewLoaded ? '' : 'hidden'}`}
                 alt=""
                 onLoad={() => setStreamPreviewLoaded(true)}
@@ -479,12 +491,17 @@ function TaskCard({
               />
               {streamPreviewLoaded && (
                 <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
-                  预览
+                  {showFailedStreamPreview ? '失败前预览' : streamPreviewProgressText}
+                </span>
+              )}
+              {showFailedStreamPreview && streamPreviewLoaded && (
+                <span className="absolute bottom-1.5 right-1.5 rounded bg-red-500/90 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  最终失败
                 </span>
               )}
             </>
           )}
-          {task.status === 'running' && (!streamPreviewSrc || !streamPreviewLoaded) && (
+          {task.status === 'running' && (!activeStreamPreviewSrc || !streamPreviewLoaded) && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -513,6 +530,30 @@ function TaskCard({
               )}
             </div>
           )}
+          {showFailedStreamPreview && !streamPreviewLoaded && (
+            <div className="flex flex-col items-center gap-2">
+              <svg
+                className="w-7 h-7 text-blue-400 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              <span className="text-xs text-gray-400 dark:text-gray-500">载入预览...</span>
+            </div>
+          )}
           {task.status === 'error' && isCustomReconnecting && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
@@ -533,7 +574,7 @@ function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'error' && !isCustomReconnecting && (
+          {task.status === 'error' && !isCustomReconnecting && !showFailedStreamPreview && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}

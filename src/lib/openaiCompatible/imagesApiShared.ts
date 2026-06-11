@@ -133,6 +133,28 @@ function eventToImageResponseItems(event: Record<string, unknown>): ImageRespons
     .filter((item) => Boolean(item.b64_json || item.url))
 }
 
+function getPartialImageBase64(event: Record<string, unknown>): string | undefined {
+  return getStringValue(event, 'partial_image_b64') ?? getStringValue(event, 'b64_json')
+}
+
+function isPartialImageEvent(event: Record<string, unknown>, type: string | undefined): boolean {
+  if (type === 'image_generation.partial_image' || type === 'image_edit.partial_image') return true
+  return Boolean(getStringValue(event, 'partial_image_b64') || getNumberValue(event, 'partial_image_index') != null)
+}
+
+function emitPartialImageEvent(
+  event: Record<string, unknown>,
+  mime: string,
+  onPartialImage?: CallApiOptions['onPartialImage'],
+) {
+  const b64 = getPartialImageBase64(event)
+  if (!b64) return
+  onPartialImage?.({
+    image: normalizeBase64Image(b64, mime),
+    partialImageIndex: getNumberValue(event, 'partial_image_index'),
+  })
+}
+
 export async function parseImagesApiStreamResponse(
   response: Response,
   mime: string,
@@ -145,13 +167,7 @@ export async function parseImagesApiStreamResponse(
     const type = getStringValue(event, 'type')
     const object = getStringValue(event, 'object')
     if (type === 'image_generation.partial_image' || type === 'image_edit.partial_image') {
-      const b64 = getStringValue(event, 'b64_json') ?? getStringValue(event, 'partial_image_b64')
-      if (b64) {
-        onPartialImage?.({
-          image: normalizeBase64Image(b64, mime),
-          partialImageIndex: getNumberValue(event, 'partial_image_index'),
-        })
-      }
+      emitPartialImageEvent(event, mime, onPartialImage)
       return
     }
 
@@ -167,6 +183,11 @@ export async function parseImagesApiStreamResponse(
         return
       }
       completedItems.push(...eventToImageResponseItems(event))
+      return
+    }
+
+    if (isPartialImageEvent(event, type)) {
+      emitPartialImageEvent(event, mime, onPartialImage)
     }
   })
 

@@ -176,6 +176,28 @@ function getResponsesStreamPayload(event: Record<string, unknown>): ResponsesApi
   return null
 }
 
+function getPartialImageBase64(event: Record<string, unknown>): string | undefined {
+  return getStringValue(event, 'partial_image_b64') ?? getStringValue(event, 'b64_json')
+}
+
+function isPartialImageEvent(event: Record<string, unknown>, type: string | undefined): boolean {
+  if (type === 'response.image_generation_call.partial_image') return true
+  return Boolean(getStringValue(event, 'partial_image_b64') || getNumberValue(event, 'partial_image_index') != null)
+}
+
+function emitPartialImageEvent(
+  event: Record<string, unknown>,
+  mime: string,
+  onPartialImage?: CallApiOptions['onPartialImage'],
+) {
+  const b64 = getPartialImageBase64(event)
+  if (!b64) return
+  onPartialImage?.({
+    image: normalizeBase64Image(b64, mime),
+    partialImageIndex: getNumberValue(event, 'partial_image_index'),
+  })
+}
+
 async function parseResponsesApiStreamResponse(
   response: Response,
   mime: string,
@@ -187,18 +209,17 @@ async function parseResponsesApiStreamResponse(
   await readJsonServerSentEvents(response, (event) => {
     const type = getStringValue(event, 'type')
     if (type === 'response.image_generation_call.partial_image') {
-      const b64 = getStringValue(event, 'partial_image_b64') ?? getStringValue(event, 'b64_json')
-      if (b64) {
-        onPartialImage?.({
-          image: normalizeBase64Image(b64, mime),
-          partialImageIndex: getNumberValue(event, 'partial_image_index'),
-        })
-      }
+      emitPartialImageEvent(event, mime, onPartialImage)
       return
     }
 
     const payload = getResponsesStreamPayload(event)
-    if (!payload) return
+    if (!payload) {
+      if (isPartialImageEvent(event, type)) {
+        emitPartialImageEvent(event, mime, onPartialImage)
+      }
+      return
+    }
 
     if (type === 'response.output_item.done' && Array.isArray(payload.output)) {
       outputItems.push(...payload.output)

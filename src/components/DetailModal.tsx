@@ -13,6 +13,7 @@ import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getProviderDisplayName, getUserFacingErrorMessage } from '../lib/userFacingText'
 import { getImageModelLabel } from '../lib/imageModels'
 import { getTaskFailedImageSource, getTaskImageSource, getUpstreamModeLabel } from '../lib/taskSource'
+import { getTaskStreamPreviewItems } from '../lib/streamPreviews'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, RefreshIcon, TrashIcon } from './icons'
 import PublishGalleryButton from './PublishGalleryButton'
 import ModalShell from './ModalShell'
@@ -72,24 +73,11 @@ export default function DetailModal() {
     [tasks, detailTaskId],
   )
   const isVideoTask = task?.mediaType === 'video'
-  const streamPreviewItems = useMemo(() => {
-    const slotEntries = streamPreviewSlots
-      ? Object.entries(streamPreviewSlots)
-          .filter(([, src]) => Boolean(src))
-          .sort(([a], [b]) => Number(a) - Number(b))
-      : []
-    const count = Math.max(
-      task?.status === 'running' ? task.params.n : 0,
-      slotEntries.length ? Math.max(...slotEntries.map(([key]) => Number(key) + 1)) : 0,
-      streamPreviewSrc ? 1 : 0,
-    )
-    const byIndex = new Map(slotEntries.map(([key, src]) => [Number(key), src]))
-
-    return Array.from({ length: count }, (_, index) => ({
-      key: String(index),
-      src: byIndex.get(index) ?? (index === 0 ? streamPreviewSrc : ''),
-    }))
-  }, [task?.params.n, task?.status, streamPreviewSlots, streamPreviewSrc])
+  const streamPreviewItems = useMemo(() => getTaskStreamPreviewItems({
+    taskOutputCount: task?.status === 'running' || task?.status === 'error' ? task.params.n : 0,
+    streamPreviewSrc,
+    streamPreviewSlots,
+  }), [task?.params.n, task?.status, streamPreviewSlots, streamPreviewSrc])
   const activeStreamPreviewSrc = streamPreviewItems[imageIndex]?.src || ''
 
   useEffect(() => {

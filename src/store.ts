@@ -2387,7 +2387,6 @@ async function executeTask(taskId: string) {
     })
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
     if (latestTask.status !== 'running') return
-    useStore.getState().setTaskStreamPreview(taskId)
     const latestCustomTaskInfo = customTaskInfo ?? (latestTask.customTaskId ? { taskId: latestTask.customTaskId } : null)
     if (latestCustomTaskInfo && isRecoverableConnectionError(err)) {
       updateTaskInStore(taskId, {

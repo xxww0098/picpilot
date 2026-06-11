@@ -22,6 +22,7 @@ import { useInputBarFileUpload } from './inputBar/useInputBarFileUpload'
 import { useInputBarPromptEditor } from './inputBar/useInputBarPromptEditor'
 import { useAuth } from '../contexts/AuthProvider'
 import Select from './Select'
+import { HelpCircleIcon } from './icons'
 
 
 
@@ -74,6 +75,65 @@ const AGENT_PROMPT_TEMPLATES = [
     text: '把商品拆成 3 个详情页卖点图：每个卖点给出画面目标、构图建议和生成提示词，并按顺序生成适合连续展示的图片。',
   },
 ] as const
+
+const MASK_PROMPT_EXAMPLES = [
+  {
+    label: '替换物体',
+    text: '把遮罩区域替换成白色陶瓷杯，保持未遮罩区域不变。',
+  },
+  {
+    label: '移除瑕疵',
+    text: '移除遮罩区域里的文字和污点，补成同材质背景，保持光线一致。',
+  },
+  {
+    label: '调整颜色',
+    text: '只把遮罩区域改成哑光黑，商品结构、边缘和未遮罩区域不变。',
+  },
+] as const
+
+function MaskPromptGuide({
+  prompt,
+  setPrompt,
+  showToast,
+}: {
+  prompt: string
+  setPrompt: (prompt: string) => void
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void
+}) {
+  const applyExample = (text: string) => {
+    const current = prompt.trim()
+    setPrompt(current ? `${current}\n\n${text}` : text)
+    showToast('已填入遮罩提示词示例', 'success')
+  }
+
+  return (
+    <div className="mb-2 border-t border-blue-100/80 pt-2 text-xs text-gray-600 dark:border-blue-500/15 dark:text-gray-300">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 gap-2">
+          <HelpCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
+          <div className="min-w-0 leading-5">
+            <p className="font-medium text-gray-700 dark:text-gray-200">遮罩只限制要改的区域</p>
+            <p className="text-gray-500 dark:text-gray-400">
+              提示词只写遮罩内要发生的变化，并明确“保持未遮罩区域不变”。
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5 sm:justify-end">
+          {MASK_PROMPT_EXAMPLES.map((example) => (
+            <button
+              key={example.label}
+              type="button"
+              onClick={() => applyExample(example.text)}
+              className="rounded-lg border border-blue-200/70 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 transition hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400/40 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/15"
+            >
+              填入{example.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
@@ -765,6 +825,13 @@ export default function InputBar() {
             ) : (
               renderImageThumbs()
             )
+          )}
+          {maskDraft && (
+            <MaskPromptGuide
+              prompt={prompt}
+              setPrompt={setPrompt}
+              showToast={showToast}
+            />
           )}
 
           {/* 输入框 */}

@@ -862,8 +862,8 @@ export default function MaskEditorModal() {
             {showMaskInfo && (
               <div className="absolute left-0 top-full mt-2 w-64 rounded-xl border border-gray-200/80 bg-white px-3 py-2 text-xs leading-5 text-gray-600 shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300">
                 <div className="absolute -top-1.5 left-16 h-3 w-3 rotate-45 border-l border-t border-gray-200/80 bg-white dark:border-white/[0.08] dark:bg-gray-900" />
-                <p>根据官方文档说明，此功能仅基于提示词，无法完全控制模型编辑区域。</p>
-                <p className="mt-2">建议附加类似“只编辑遮罩区域”的提示词以提升模型指令遵循程度。</p>
+                <p>涂抹的区域是主要编辑范围，模型仍会参考整张图。</p>
+                <p className="mt-2">保存后在提示词中写遮罩内变化，例如“把遮罩区域替换成白色陶瓷杯，保持未遮罩区域不变”。</p>
               </div>
             )}
           </div>

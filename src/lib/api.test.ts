@@ -405,6 +405,42 @@ describe('callImageApi', () => {
     })
   })
 
+  it('parses Images API partial image events that omit the standard event type', async () => {
+    const streamBody = [
+      'data: {"partial_image_index":0,"partial_image_b64":"cGFydGlhbA=="}',
+      '',
+      'data: {"type":"image_generation.completed","b64_json":"ZmluYWw=","size":"1024x1024","quality":"high","output_format":"png"}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const partialImages: string[] = []
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
+    })
+
+    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(result.images).toEqual(['data:image/png;base64,ZmluYWw='])
+  })
+
   it('splits Images API streaming into concurrent single-image requests when n is greater than 1', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       const streamBody = [
@@ -507,6 +543,46 @@ describe('callImageApi', () => {
       actualParamsList: [{ size: '1024x1024' }],
       revisedPrompts: ['rewritten'],
     })
+  })
+
+  it('parses Responses API partial image events that omit the standard event type', async () => {
+    const streamBody = [
+      'data: {"partial_image_index":0,"partial_image_b64":"cGFydGlhbA=="}',
+      '',
+      'data: {"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"ZmluYWw=","size":"1024x1024"}]}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const partialImages: string[] = []
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        apiMode: 'responses',
+        streamImages: true,
+        streamPartialImages: 1,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          apiMode: 'responses',
+          streamImages: true,
+          streamPartialImages: 1,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
+    })
+
+    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(result.images).toEqual(['data:image/png;base64,ZmluYWw='])
   })
 
   it('parses Responses API image result objects in gallery mode', async () => {
