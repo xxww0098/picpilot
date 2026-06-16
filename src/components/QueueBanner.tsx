@@ -1,6 +1,6 @@
 import { useStore } from '../store'
 import { useQueueStats } from '../hooks/useQueueStats'
-import { computeQueueEtaMinutes, getRecentAvgTaskMs } from '../lib/queueApi'
+import { computeQueueEtaMinutes, getRecentAvgTaskMs } from '../lib/server/queueApi'
 
 /**
  * 队列深度提示：在画廊视图顶部挂载一次，作为全局排队状态的唯一轮询者。

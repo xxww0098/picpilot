@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from './types'
-import { createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-vi.mock('./lib/db', async () => (await import('./storeTestSetup')).createDbMock())
-vi.mock('./lib/api', async () => (await import('./storeTestSetup')).createApiMock())
-vi.mock('./lib/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
-import { clearImages, putImage } from './lib/db'
-import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
+import { createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/shared/apiProfiles'
+vi.mock('./lib/shared/db', async () => (await import('./storeTestSetup')).createDbMock())
+vi.mock('./lib/image/api', async () => (await import('./storeTestSetup')).createApiMock())
+vi.mock('./lib/agent/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
+import { clearImages, putImage } from './lib/shared/db'
+import { callAgentResponsesApi, callBatchImageSingle } from './lib/agent/agentApi'
 import { regenerateAgentAssistantMessage, removeTask, submitAgentMessage, useStore } from './store'
 import { agentConversation, imageA, imageB, task } from './storeTestSetup'
 

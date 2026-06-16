@@ -1,6 +1,6 @@
 import type { AppSettings } from '../../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS } from '../../types'
-import { normalizeAgentMaxToolRounds } from '../../lib/apiProfiles'
+import { normalizeAgentMaxToolRounds } from '../../lib/shared/apiProfiles'
 
 // 「Agent」设置页（由 SettingsModal 抽出，结构等价；状态仍由父组件持有并透传）。
 export default function SettingsAgentSection({

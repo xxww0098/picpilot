@@ -5,8 +5,8 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { AuthProvider } from './contexts/AuthProvider'
 import 'streamdown/styles.css'
 import './index.css'
-import { installMobileViewportGuards } from './lib/viewport'
-import { logger, serializeError } from './lib/logger'
+import { installMobileViewportGuards } from './lib/ui/viewport'
+import { logger, serializeError } from './lib/shared/logger'
 
 installMobileViewportGuards()
 

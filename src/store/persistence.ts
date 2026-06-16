@@ -1,11 +1,11 @@
 import type { AgentConversation } from '../types'
-import { normalizeSettings } from '../lib/apiProfiles'
+import { normalizeSettings } from '../lib/shared/apiProfiles'
 import {
   getPersistableAgentConversation,
   getPersistableAgentConversations,
   normalizeAgentConversations,
-} from '../lib/agentPersistence'
-import { replaceAgentConversations } from '../lib/db'
+} from '../lib/agent/agentPersistence'
+import { replaceAgentConversations } from '../lib/shared/db'
 import type { AppState } from './appState'
 import {
   cleanStaleAgentInputDrafts,

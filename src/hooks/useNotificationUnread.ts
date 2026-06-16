@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchUnreadCount } from '../lib/notificationApi'
+import { fetchUnreadCount } from '../lib/server/notificationApi'
 
 const POLL_INTERVAL_MS = 60_000
 

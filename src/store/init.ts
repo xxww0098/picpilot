@@ -5,10 +5,10 @@ import {
   getAllImageIds,
   getAllTasks,
   getImage,
-} from '../lib/db'
-import { mergeAgentConversationsForStorage, normalizeAgentConversations } from '../lib/agentPersistence'
-import { getPersistableTask, putTask } from '../lib/taskPersistence'
-import { remapImageMentionsForOrder } from '../lib/promptImageMentions'
+} from '../lib/shared/db'
+import { mergeAgentConversationsForStorage, normalizeAgentConversations } from '../lib/agent/agentPersistence'
+import { getPersistableTask, putTask } from '../lib/agent/taskPersistence'
+import { remapImageMentionsForOrder } from '../lib/ui/promptImageMentions'
 import { cacheImage, scheduleThumbnailBackfill } from './imageCache'
 import type { AgentInputDraft } from './appState'
 import {

@@ -1,6 +1,6 @@
 import type { ApiProfile, CustomProviderDefinition } from '../../types'
-import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from '../canvasImage'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../devProxy'
+import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from '../imaging/canvasImage'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../config/devProxy'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -10,7 +10,7 @@ import {
   getApiErrorMessage,
   loggedFetch,
   MIME_MAP,
-} from '../imageApiShared'
+} from '../image/imageApiShared'
 import {
   createOpenAICompatiblePaths,
   createRequestHeaders,

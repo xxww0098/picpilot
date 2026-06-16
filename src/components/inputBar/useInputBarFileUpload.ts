@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react'
 import { addImageFromFile, useStore } from '../../store'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { API_MAX_IMAGES } from './constants'
 
 export function useInputBarFileUpload() {

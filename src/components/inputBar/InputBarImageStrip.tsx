@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { getImageMentionLabel, insertImageMentionAtVisibleRange } from '../../lib/promptImageMentions'
-import { getSafeBoundingClientRect } from '../../lib/domRect'
+import { getImageMentionLabel, insertImageMentionAtVisibleRange } from '../../lib/ui/promptImageMentions'
+import { getSafeBoundingClientRect } from '../../lib/ui/domRect'
 import {
   getContentEditableCursor,
   getMentionTagHtml,
   setContentEditableCursor,
-} from '../../lib/contentEditableMentions'
+} from '../../lib/ui/contentEditableMentions'
 import type { InputImage, MaskDraft } from '../../types'
 import type { AppState } from '../../store'
 import ButtonTooltip from './ButtonTooltip'

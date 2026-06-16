@@ -14,10 +14,10 @@ import {
   type AdminReverseAuthCheckResult,
   type AdminReverseAuthCheckStatus,
   type AdminReverseAuthAccount,
-} from '../../lib/adminApi'
-import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
-import { formatBytes, formatRelative } from '../../lib/format'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+} from '../../lib/server/adminApi'
+import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/ui/dialog'
+import { formatBytes, formatRelative } from '../../lib/ui/format'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import QueryState from './QueryState'
 import ReverseAuthEditModal from './ReverseAuthEditModal'

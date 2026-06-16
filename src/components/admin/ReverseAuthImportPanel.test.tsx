@@ -6,9 +6,9 @@ import {
   fetchAdminReverseAuthCLIProxyAccounts,
   fetchAdminReverseAuthImportSources,
   saveAdminReverseAuthImportSources,
-} from '../../lib/adminApi'
+} from '../../lib/server/adminApi'
 
-vi.mock('../../lib/adminApi', () => ({
+vi.mock('../../lib/server/adminApi', () => ({
   fetchAdminReverseAuthImportSources: vi.fn(),
   saveAdminReverseAuthImportSources: vi.fn(),
   fetchAdminReverseAuthCLIProxyAccounts: vi.fn(),
@@ -16,11 +16,11 @@ vi.mock('../../lib/adminApi', () => ({
   importAdminReverseAuthSub2APIAccounts: vi.fn(),
 }))
 
-vi.mock('../../lib/dialog', () => ({
+vi.mock('../../lib/ui/dialog', () => ({
   showAppToast: vi.fn(),
 }))
 
-vi.mock('../../lib/userFacingText', () => ({
+vi.mock('../../lib/shared/userFacingText', () => ({
   getUserFacingErrorMessage: (_err: unknown, fallback: string) => fallback,
 }))
 

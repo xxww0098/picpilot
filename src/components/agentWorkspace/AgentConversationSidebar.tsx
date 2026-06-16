@@ -2,7 +2,7 @@ import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, MouseEvent as React
 import type { AgentConversation, AgentPlatformId } from '../../types'
 import { EditIcon, SidebarLeftIcon } from '../icons'
 import ConversationListItem from './ConversationListItem'
-import { groupConversationsByTime } from '../../lib/agentConversationGroups'
+import { groupConversationsByTime } from '../../lib/agent/agentConversationGroups'
 
 interface AgentConversationSidebarProps {
   sidebarCollapsed: boolean

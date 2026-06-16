@@ -3,7 +3,7 @@ import {
   clientPointToCanvasPoint,
   type Point,
   type ViewTransform,
-} from '../../lib/viewportTransform'
+} from '../../lib/ui/viewportTransform'
 
 export type Tool = 'brush' | 'eraser'
 

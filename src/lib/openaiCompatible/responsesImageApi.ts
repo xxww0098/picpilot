@@ -1,5 +1,5 @@
 import type { ApiProfile, ResponsesApiResponse, ResponsesOutputItem, TaskParams } from '../../types'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../devProxy'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../config/devProxy'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -15,9 +15,9 @@ import {
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
-} from '../imageApiShared'
-import { settleWithConcurrency } from '../runWithConcurrency'
-import { scheduleImageApiRequest } from '../imageRequestScheduler'
+} from '../image/imageApiShared'
+import { settleWithConcurrency } from '../shared/runWithConcurrency'
+import { scheduleImageApiRequest } from '../image/imageRequestScheduler'
 import {
   collectConcurrentFailures,
   createRequestHeaders,

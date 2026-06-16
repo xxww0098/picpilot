@@ -9,7 +9,7 @@ import type {
   MaskDraft,
   TaskRecord,
 } from '../types'
-import type { QueueStats } from '../lib/queueApi'
+import type { QueueStats } from '../lib/server/queueApi'
 
 export type ToastType = 'info' | 'success' | 'error'
 export type AgentInputDraft = {

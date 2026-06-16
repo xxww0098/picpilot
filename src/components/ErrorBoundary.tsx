@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { logger, serializeError } from '../lib/logger'
+import { logger, serializeError } from '../lib/shared/logger'
 
 // 「代码块加载失败」识别：常见于发布新版本后，旧页面 / 旧 PWA 仍引用已被替换、带哈希的 lazy chunk，
 // 该 chunk 在服务器上已不存在 → import() 404 拒绝。此时自动刷新即可拉取最新资源。

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { readBlobAsDataUrl } from '../lib/dataUrl'
+import { readBlobAsDataUrl } from '../lib/imaging/dataUrl'
 import { ensureImageCached, useStore } from '../store'
-import { canvasToBlob, loadImage } from '../lib/canvasImage'
-import { storeImage } from '../lib/db'
-import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { canvasToBlob, loadImage } from '../lib/imaging/canvasImage'
+import { storeImage } from '../lib/shared/db'
+import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/imaging/maskPreprocess'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import {
@@ -16,7 +16,7 @@ import {
   zoomAtPoint,
   type Point,
   type ViewTransform,
-} from '../lib/viewportTransform'
+} from '../lib/ui/viewportTransform'
 import {
   DEFAULT_VIEW_TRANSFORM,
   centroid,

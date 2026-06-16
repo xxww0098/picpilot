@@ -1,8 +1,8 @@
 // AgentWorkspace 的纯展示型消息部件（由 AgentWorkspace 抽出，行为等价）。
 import { useState, useEffect } from 'react'
 import { getCachedImage, ensureImageCached, useStore } from '../../store'
-import { createMaskPreviewDataUrl } from '../../lib/canvasImage'
-import type { AgentWebSearchStatus } from '../../lib/agentWebSearch'
+import { createMaskPreviewDataUrl } from '../../lib/imaging/canvasImage'
+import type { AgentWebSearchStatus } from '../../lib/agent/agentWebSearch'
 
 export function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string; imageIndex: number; maskImageId?: string | null }) {
   const [src, setSrc] = useState<string>(() => getCachedImage(imageId) || '')

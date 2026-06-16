@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useStore, addImageFromUrl, ensureImageCached } from '../store'
-import { logger, serializeError } from '../lib/logger'
-import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
-import { suppressGlobalClicks } from '../lib/clickSuppression'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { logger, serializeError } from '../lib/shared/logger'
+import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/ui/clipboard'
+import { downloadImageIds, formatExportFileTime } from '../lib/imaging/downloadImages'
+import { suppressGlobalClicks } from '../lib/ui/clickSuppression'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
 
 export default function ImageContextMenu() {

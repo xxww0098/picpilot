@@ -1,22 +1,22 @@
 import type { AppMode, TaskRecord } from '../types'
-import { getCachedAuthUser } from '../lib/auth'
-import { fetchQueueStats } from '../lib/queueApi'
-import { deleteImage, deleteVideo, storeImage } from '../lib/db'
-import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/api'
-import { logger, serializeError } from '../lib/logger'
-import { getImageApiFanoutConcurrency } from '../lib/imageApiShared'
-import { settleWithConcurrency } from '../lib/runWithConcurrency'
-import { getCustomQueuedImageResult } from '../lib/openaiCompatibleImageApi'
-import { getCustomProviderDefinition } from '../lib/apiProfiles'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { createOpenAITimeoutError, type TimeoutStreamingHintProfile } from '../lib/taskErrorHints'
+import { getCachedAuthUser } from '../lib/shared/auth'
+import { fetchQueueStats } from '../lib/server/queueApi'
+import { deleteImage, deleteVideo, storeImage } from '../lib/shared/db'
+import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/image/api'
+import { logger, serializeError } from '../lib/shared/logger'
+import { getImageApiFanoutConcurrency } from '../lib/image/imageApiShared'
+import { settleWithConcurrency } from '../lib/shared/runWithConcurrency'
+import { getCustomQueuedImageResult } from '../lib/image/openaiCompatibleImageApi'
+import { getCustomProviderDefinition } from '../lib/shared/apiProfiles'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
+import { createOpenAITimeoutError, type TimeoutStreamingHintProfile } from '../lib/task/taskErrorHints'
 import {
   firstActualParams,
   isRunningOpenAITask,
   mapActualParamsByImage,
   putTask,
   readImageSizeParamsList,
-} from '../lib/taskPersistence'
+} from '../lib/agent/taskPersistence'
 import { cacheImage, evictCachedImage } from './imageCache'
 import type { AgentInputDraft } from './appState'
 import { useStore } from './coreStore'

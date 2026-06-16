@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from './types'
-import { createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
-vi.mock('./lib/db', async () => (await import('./storeTestSetup')).createDbMock())
-vi.mock('./lib/api', async () => (await import('./storeTestSetup')).createApiMock())
-vi.mock('./lib/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
-import { clearImages, putImage } from './lib/db'
+import { createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './lib/shared/apiProfiles'
+import { getSelectedImageMentionLabel } from './lib/ui/promptImageMentions'
+vi.mock('./lib/shared/db', async () => (await import('./storeTestSetup')).createDbMock())
+vi.mock('./lib/image/api', async () => (await import('./storeTestSetup')).createApiMock())
+vi.mock('./lib/agent/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
+import { clearImages, putImage } from './lib/shared/db'
 import { cancelTask, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, reuseConfig, submitTask, useStore } from './store'
 import { imageA, imageB, task } from './storeTestSetup'
 

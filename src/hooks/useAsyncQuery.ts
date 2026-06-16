@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 
 export function useAsyncQuery<T>(queryFn: () => Promise<T>, deps: readonly unknown[], enabled = true) {
   const [data, setData] = useState<T | null>(null)

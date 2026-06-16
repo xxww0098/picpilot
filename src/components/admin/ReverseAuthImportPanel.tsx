@@ -10,10 +10,10 @@ import {
   type AdminReverseAuthImportSkipped,
   type AdminReverseAuthImportSource,
   type AdminReverseAuthImportSourceType,
-} from '../../lib/adminApi'
-import { showAppToast } from '../../lib/dialog'
-import { getCpaBaseUrlHint, getCpaManagementKeyHint } from '../../lib/reverseAuthImportHints'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+} from '../../lib/server/adminApi'
+import { showAppToast } from '../../lib/ui/dialog'
+import { getCpaBaseUrlHint, getCpaManagementKeyHint } from '../../lib/server/reverseAuthImportHints'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 
 interface ReverseAuthImportPanelProps {
   disabled: boolean

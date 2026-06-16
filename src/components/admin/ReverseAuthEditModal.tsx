@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AdminReverseAuthAccount } from '../../lib/adminApi'
+import type { AdminReverseAuthAccount } from '../../lib/server/adminApi'
 import ModalShell from '../ModalShell'
 
 interface ReverseAuthEditModalProps {

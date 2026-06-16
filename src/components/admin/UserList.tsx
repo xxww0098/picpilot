@@ -4,10 +4,10 @@ import {
   fetchAdminUsers,
   patchAdminUser,
   type AdminUserRow,
-} from '../../lib/adminApi'
-import { openConfirmDialog, openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
-import { formatRelative } from '../../lib/format'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+} from '../../lib/server/adminApi'
+import { openConfirmDialog, openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/ui/dialog'
+import { formatRelative } from '../../lib/ui/format'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
 import Avatar from '../Avatar'

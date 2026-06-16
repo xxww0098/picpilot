@@ -1,6 +1,6 @@
 import type { ApiProfile, AppMode, CustomProviderDefinition, CustomProviderPollMapping, CustomProviderResultMapping, CustomProviderSubmitMapping, TaskParams } from '../../types'
-import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from '../canvasImage'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../devProxy'
+import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from '../imaging/canvasImage'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../config/devProxy'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -15,7 +15,7 @@ import {
   loggedFetch,
   MIME_MAP,
   normalizeBase64Image,
-} from '../imageApiShared'
+} from '../image/imageApiShared'
 import {
   appendQuery,
   createRequestHeaders,

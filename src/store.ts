@@ -1,13 +1,13 @@
 import type { TaskRecord } from './types'
-import { putTask } from './lib/taskPersistence'
-import { bindAgentOrchestrator } from './lib/agentOrchestrator'
+import { putTask } from './lib/agent/taskPersistence'
+import { bindAgentOrchestrator } from './lib/agent/agentOrchestrator'
 import type { AppState } from './store/appState'
 import { genId, useStore } from './store/coreStore'
 import { createSettingsForApiProfile } from './store/taskProfiles'
 import { persistTaskStreamPartialImage, updateTaskInStore } from './store/taskRuntime'
 
-export { getErrorToastMessage } from './lib/errorToast'
-export { migratePersistedState } from './lib/agentPersistence'
+export { getErrorToastMessage } from './lib/ui/errorToast'
+export { migratePersistedState } from './lib/agent/agentPersistence'
 export {
   deleteAgentRoundFromConversation,
   getActiveAgentRounds,
@@ -19,7 +19,7 @@ export {
   scrubAgentOutputPayloadsForDeletedTasks,
   stopAgentResponse,
   submitAgentMessage,
-} from './lib/agentOrchestrator'
+} from './lib/agent/agentOrchestrator'
 export {
   ensureImageCached,
   ensureImageThumbnailCached,

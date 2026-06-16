@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
-import { normalizeDevProxyConfig } from './src/lib/devProxy'
+import { normalizeDevProxyConfig } from './src/lib/config/devProxy'
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
 

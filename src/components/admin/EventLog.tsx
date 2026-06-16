@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
-import { downloadAdminEventsCsv, fetchAdminEvents, type AdminEventRow } from '../../lib/adminApi'
-import { formatBytes, formatTimestamp } from '../../lib/format'
+import { downloadAdminEventsCsv, fetchAdminEvents, type AdminEventRow } from '../../lib/server/adminApi'
+import { formatBytes, formatTimestamp } from '../../lib/ui/format'
 import {
   getEventActionLabel,
   getApiModeLabel,
@@ -11,10 +11,10 @@ import {
   getParamValueLabel,
   getProviderDisplayName,
   getUserFacingErrorMessage,
-} from '../../lib/userFacingText'
+} from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
-import { showAppToast } from '../../lib/dialog'
-import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
+import { showAppToast } from '../../lib/ui/dialog'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/ui/clipboard'
 import ModalShell from '../ModalShell'
 
 const PAGE_SIZE = 50

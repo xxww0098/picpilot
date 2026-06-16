@@ -6,7 +6,7 @@ import {
   DEFAULT_XAI_IMAGES_MODEL,
   getApiProviderLabel,
   normalizeStreamPartialImages,
-} from '../../lib/apiProfiles'
+} from '../../lib/shared/apiProfiles'
 import type { AppState } from '../../store'
 import type { ApiProfile, AppSettings, CustomProviderDefinition } from '../../types'
 import Select from '../Select'

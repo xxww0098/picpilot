@@ -1,12 +1,12 @@
 import type { ApiProfile, CustomProviderDefinition } from '../../types'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../devProxy'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../config/devProxy'
 import {
   type CallApiOptions,
   type CallApiResult,
   createApiTimeoutError,
   getApiErrorMessage,
   loggedFetch,
-} from '../imageApiShared'
+} from '../image/imageApiShared'
 import {
   createOpenAICompatiblePaths,
   createRequestHeaders,

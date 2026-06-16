@@ -4,7 +4,7 @@ import {
   DEFAULT_IMAGES_MODEL,
   DEFAULT_SETTINGS,
   findEquivalentApiProfile,
-} from '../../lib/apiProfiles'
+} from '../../lib/shared/apiProfiles'
 import type { ApiProfile, AppSettings, CustomProviderDefinition } from '../../types'
 
 export function newId(prefix: string) {

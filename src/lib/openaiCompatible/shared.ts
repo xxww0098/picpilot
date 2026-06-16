@@ -1,7 +1,7 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type ImageApiResponse } from '../../types'
-import { getStoredAuthToken } from '../auth'
-import { explicitUpstreamModeHeader } from '../apiProfiles'
-import type { CallApiResult } from '../imageApiShared'
+import { getStoredAuthToken } from '../shared/auth'
+import { explicitUpstreamModeHeader } from '../shared/apiProfiles'
+import type { CallApiResult } from '../image/imageApiShared'
 
 export const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 

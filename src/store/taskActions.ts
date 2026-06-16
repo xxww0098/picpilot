@@ -1,12 +1,12 @@
 import type { InputImage, TaskParams, TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { getCachedAuthUser } from '../lib/auth'
+import { getCachedAuthUser } from '../lib/shared/auth'
 import {
   DEFAULT_SETTINGS,
   getActiveApiProfile,
   normalizeSettings,
   validateApiProfile,
-} from '../lib/apiProfiles'
+} from '../lib/shared/apiProfiles'
 import {
   clearAgentConversations as dbClearAgentConversations,
   clearImages,
@@ -15,15 +15,15 @@ import {
   deleteImage,
   deleteTask as dbDeleteTask,
   storeImage,
-} from '../lib/db'
-import { logger, serializeError } from '../lib/logger'
-import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
-import { normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { firstActualParams, readImageSizeParamsList } from '../lib/taskPersistence'
-import { fileToDataUrl, readBlobAsDataUrl } from '../lib/dataUrl'
-import { preprocessImageFile } from '../lib/imagePreprocess'
-import { scrubAgentOutputPayloadsForDeletedTasks } from '../lib/agentOrchestrator'
+} from '../lib/shared/db'
+import { logger, serializeError } from '../lib/shared/logger'
+import { replaceImageMentionsForApi } from '../lib/ui/promptImageMentions'
+import { normalizeParamsForSettings } from '../lib/params/paramCompatibility'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
+import { firstActualParams, readImageSizeParamsList } from '../lib/agent/taskPersistence'
+import { fileToDataUrl, readBlobAsDataUrl } from '../lib/imaging/dataUrl'
+import { preprocessImageFile } from '../lib/imaging/imagePreprocess'
+import { scrubAgentOutputPayloadsForDeletedTasks } from '../lib/agent/agentOrchestrator'
 import { cacheImage, clearImageCaches, ensureImageCached, evictCachedImage } from './imageCache'
 import { useStore } from './coreStore'
 import {

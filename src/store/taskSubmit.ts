@@ -1,5 +1,5 @@
 import type { MultiImageMode, TaskRecord } from '../types'
-import { getCachedAuthUser } from '../lib/auth'
+import { getCachedAuthUser } from '../lib/shared/auth'
 import {
   DEFAULT_VIDEO_DURATION_SECONDS,
   DEFAULT_VIDEO_MODEL,
@@ -7,14 +7,14 @@ import {
   normalizeSettings,
   normalizeVideoDurationSeconds,
   validateApiProfile,
-} from '../lib/apiProfiles'
-import { storeImage } from '../lib/db'
-import { validateMaskMatchesImage } from '../lib/canvasImage'
-import { orderInputImagesForMask } from '../lib/mask'
-import { getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { putTask } from '../lib/taskPersistence'
-import { applyTeamRuntimeSettings } from '../lib/runtimeTeamSettings'
+} from '../lib/shared/apiProfiles'
+import { storeImage } from '../lib/shared/db'
+import { validateMaskMatchesImage } from '../lib/imaging/canvasImage'
+import { orderInputImagesForMask } from '../lib/imaging/mask'
+import { getChangedParams, normalizeParamsForSettings } from '../lib/params/paramCompatibility'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
+import { putTask } from '../lib/agent/taskPersistence'
+import { applyTeamRuntimeSettings } from '../lib/config/runtimeTeamSettings'
 import { cacheImage } from './imageCache'
 import { genId, useStore } from './coreStore'
 import {

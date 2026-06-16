@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { collectAgentRoundOutputImageSlots } from '../../lib/agentImageReferences'
+import { collectAgentRoundOutputImageSlots } from '../../lib/agent/agentImageReferences'
 import {
   getContentEditableCursor,
   getContentEditablePlainText,
@@ -8,7 +8,7 @@ import {
   setContentEditableCursor,
   setContentEditableSelection,
   syncMentionTagSelection,
-} from '../../lib/contentEditableMentions'
+} from '../../lib/ui/contentEditableMentions'
 import {
   getAtImageQuery,
   getImageMentionLabel,
@@ -20,7 +20,7 @@ import {
   insertTextMentionAtVisibleRange,
   isCursorInSelectedImageMention,
   stripImageMentionMarkers,
-} from '../../lib/promptImageMentions'
+} from '../../lib/ui/promptImageMentions'
 import { getActiveAgentRounds } from '../../store'
 import type { AgentConversation, InputImage, TaskRecord } from '../../types'
 import { agentImageMentionMatches, type AtImageOption } from './atImageOptions'

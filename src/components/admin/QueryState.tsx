@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 
 interface QueryStateProps {
   loading: boolean

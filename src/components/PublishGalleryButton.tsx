@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { ensureImageCached } from '../store'
-import { publishGalleryImage } from '../lib/galleryApi'
-import { showAppToast } from '../lib/dialog'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { publishGalleryImage } from '../lib/server/galleryApi'
+import { showAppToast } from '../lib/ui/dialog'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import { useAuth } from '../contexts/AuthProvider'
 
 interface Props {

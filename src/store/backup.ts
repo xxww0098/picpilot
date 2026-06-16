@@ -8,17 +8,17 @@ import {
   putImage,
   putImageThumbnail,
   putVideo as dbPutVideo,
-} from '../lib/db'
+} from '../lib/shared/db'
 import {
   getPersistableAgentConversations,
   isEmptyAgentConversation,
   mergeImportedAgentConversations,
   normalizeAgentConversations,
-} from '../lib/agentPersistence'
-import { mergeImportedSettings } from '../lib/apiProfiles'
-import { bytesToDataUrl, dataUrlToBytes, formatExportFileTime } from '../lib/exportZip'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { putTask } from '../lib/taskPersistence'
+} from '../lib/agent/agentPersistence'
+import { mergeImportedSettings } from '../lib/shared/apiProfiles'
+import { bytesToDataUrl, dataUrlToBytes, formatExportFileTime } from '../lib/imaging/exportZip'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
+import { putTask } from '../lib/agent/taskPersistence'
 import { cacheImage, cacheThumbnail, scheduleThumbnailBackfill } from './imageCache'
 import { useStore } from './coreStore'
 import { replaceStoredAgentConversations } from './persistence'

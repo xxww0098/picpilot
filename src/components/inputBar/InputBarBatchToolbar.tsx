@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { removeMultipleTasks, retryTaskInPlace, updateTaskInStore, useStore } from '../../store'
-import { downloadImageIds, formatExportFileTime } from '../../lib/downloadImages'
-import { logger, serializeError } from '../../lib/logger'
+import { downloadImageIds, formatExportFileTime } from '../../lib/imaging/downloadImages'
+import { logger, serializeError } from '../../lib/shared/logger'
 
 export default function InputBarBatchToolbar() {
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)

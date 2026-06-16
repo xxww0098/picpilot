@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { onDismissTooltips } from '../lib/tooltipDismiss'
+import { onDismissTooltips } from '../lib/ui/tooltipDismiss'
 
 interface ViewportTooltipProps {
   visible: boolean

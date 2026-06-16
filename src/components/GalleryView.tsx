@@ -1,22 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthProvider";
-import { logger, serializeError } from "../lib/logger";
+import { logger, serializeError } from "../lib/shared/logger";
 import {
     deleteGalleryImage,
     fetchGalleryBlob,
     fetchGalleryPage,
     type PublicGalleryImage,
-} from "../lib/galleryApi";
-import { adminRevokeGalleryImage, adminSetGalleryFeatured } from "../lib/notificationApi";
-import { downloadGalleryImage } from "../lib/downloadGallery";
-import { formatTimestamp } from "../lib/format";
+} from "../lib/server/galleryApi";
+import { adminRevokeGalleryImage, adminSetGalleryFeatured } from "../lib/server/notificationApi";
+import { downloadGalleryImage } from "../lib/imaging/downloadGallery";
+import { formatTimestamp } from "../lib/ui/format";
 import {
     openDestructiveConfirm,
     openPromptDialog,
     showAppToast,
-} from "../lib/dialog";
-import { getUserFacingErrorMessage } from "../lib/userFacingText";
+} from "../lib/ui/dialog";
+import { getUserFacingErrorMessage } from "../lib/shared/userFacingText";
 import { useCloseOnEscape } from "../hooks/useCloseOnEscape";
 import PanelShell from "./PanelShell";
 import ModalShell from "./ModalShell";

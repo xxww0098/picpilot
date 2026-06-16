@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useStore } from '../store'
-import { DEFAULT_VIDEO_DURATION_SECONDS, normalizeVideoDurationSeconds } from '../lib/apiProfiles'
+import { DEFAULT_VIDEO_DURATION_SECONDS, normalizeVideoDurationSeconds } from '../lib/shared/apiProfiles'
 import QueueBanner from './QueueBanner'
 import SearchBar from './SearchBar'
 import TaskGrid from './TaskGrid'

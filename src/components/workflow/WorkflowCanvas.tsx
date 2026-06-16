@@ -20,7 +20,7 @@ import {
 import '@xyflow/react/dist/style.css'
 
 import { useStore } from '../../store'
-import { openConfirmDialog, openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/dialog'
+import { openConfirmDialog, openDestructiveConfirm, openPromptDialog, showAppToast } from '../../lib/ui/dialog'
 import { runWorkflow, validateGraph } from '../../lib/workflow/engine'
 import { makeGenerateFn, exportGraphToFile, parseGraphFile } from '../../lib/workflow/runtime'
 import {

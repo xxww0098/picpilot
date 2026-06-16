@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import type { Components, StreamdownTranslations } from 'streamdown'
-import { logger, serializeError } from '../lib/logger'
+import { logger, serializeError } from '../lib/shared/logger'
 
 type MarkdownRendererProps = {
   content: string

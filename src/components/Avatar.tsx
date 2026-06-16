@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchAvatarBlob } from '../lib/auth'
+import { fetchAvatarBlob } from '../lib/shared/auth'
 
 interface Props {
   userId: string

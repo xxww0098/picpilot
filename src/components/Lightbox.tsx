@@ -2,9 +2,9 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useStore, getCachedImage, ensureImageCached } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import { suppressGlobalClicks } from '../lib/clickSuppression'
-import { clamp } from '../lib/clamp'
+import { createMaskPreviewDataUrl } from '../lib/imaging/canvasImage'
+import { suppressGlobalClicks } from '../lib/ui/clickSuppression'
+import { clamp } from '../lib/params/clamp'
 
 const MIN_SCALE = 1
 const MAX_SCALE = 10

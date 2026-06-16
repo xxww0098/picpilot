@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { register } from '../lib/auth'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { register } from '../lib/shared/auth'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import AuthShell, {
   AuthDivider,
   AuthError,

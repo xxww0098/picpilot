@@ -3,7 +3,7 @@ import {
   getImage,
   getImageThumbnail,
   getStoredFreshImageThumbnail,
-} from '../lib/db'
+} from '../lib/shared/db'
 
 const imageCache = new Map<string, string>()
 const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()

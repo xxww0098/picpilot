@@ -1,9 +1,9 @@
 import type { ApiProfile, AppMode, AppSettings, TaskImageSource, TaskRecord, UpstreamMode } from '../types'
-import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
-import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/api'
-import { logger, serializeError } from '../lib/logger'
-import { isApiTimeoutError } from '../lib/imageApiShared'
-import { isTeamStreamFallbackEnabled } from '../lib/runtimeTeamSettings'
+import { getActiveApiProfile, normalizeSettings } from '../lib/shared/apiProfiles'
+import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/image/api'
+import { logger, serializeError } from '../lib/shared/logger'
+import { isApiTimeoutError } from '../lib/image/imageApiShared'
+import { isTeamStreamFallbackEnabled } from '../lib/config/runtimeTeamSettings'
 import { useStore } from './coreStore'
 
 export function getCodexCliPromptKey(settings: AppSettings): string {

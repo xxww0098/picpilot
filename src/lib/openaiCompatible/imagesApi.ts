@@ -4,9 +4,9 @@ import {
   type CallApiResult,
   getImageApiFanoutConcurrency,
   mergeActualParams,
-} from '../imageApiShared'
-import { settleWithConcurrency } from '../runWithConcurrency'
-import { scheduleImageApiRequest } from '../imageRequestScheduler'
+} from '../image/imageApiShared'
+import { settleWithConcurrency } from '../shared/runWithConcurrency'
+import { scheduleImageApiRequest } from '../image/imageRequestScheduler'
 import { collectConcurrentFailures } from './shared'
 import { callGptImagesApiSingle } from './gptImageApi'
 import { callGrokImagesApiSingle } from './grokImageApi'

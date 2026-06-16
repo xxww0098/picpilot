@@ -4,11 +4,11 @@ import {
   fetchNotifications,
   markNotificationsRead,
   type NotificationItem,
-} from '../lib/notificationApi'
-import { formatRelative } from '../lib/format'
-import { showAppToast } from '../lib/dialog'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
-import { parseGalleryRevokedMeta } from '../lib/schemas'
+} from '../lib/server/notificationApi'
+import { formatRelative } from '../lib/ui/format'
+import { showAppToast } from '../lib/ui/dialog'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
+import { parseGalleryRevokedMeta } from '../lib/shared/schemas'
 import PanelShell from './PanelShell'
 import { BellIcon } from './icons'
 

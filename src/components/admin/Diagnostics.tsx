@@ -5,16 +5,16 @@ import {
   fetchAdminUpstreamHealth,
   type AdminFailureSummary,
   type AdminUpstreamHealth,
-} from '../../lib/adminApi'
-import { formatBytes, formatDurationMs, formatRelative } from '../../lib/format'
+} from '../../lib/server/adminApi'
+import { formatBytes, formatDurationMs, formatRelative } from '../../lib/ui/format'
 import {
   getAppModeLabel,
   getErrorTypeLabel,
   getFailureReasonLabel,
   getHttpStatusLabel,
   getUserFacingErrorMessage,
-} from '../../lib/userFacingText'
-import { showAppToast } from '../../lib/dialog'
+} from '../../lib/shared/userFacingText'
+import { showAppToast } from '../../lib/ui/dialog'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import QueryState from './QueryState'
 

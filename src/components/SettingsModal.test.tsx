@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, normalizeSettings } from '../lib/apiProfiles'
+import { DEFAULT_SETTINGS, normalizeSettings } from '../lib/shared/apiProfiles'
 import { useStore } from '../store'
 import SettingsModal from './SettingsModal'
 

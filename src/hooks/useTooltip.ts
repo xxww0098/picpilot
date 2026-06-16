@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { onDismissTooltips } from '../lib/tooltipDismiss'
+import { onDismissTooltips } from '../lib/ui/tooltipDismiss'
 
 /**
  * Unified tooltip hook that manages visibility, hover/focus/touch handlers,

@@ -1,31 +1,31 @@
 import type { TaskImageSource, TaskRecord } from '../types'
-import { getCachedAuthUser } from '../lib/auth'
+import { getCachedAuthUser } from '../lib/shared/auth'
 import {
   DEFAULT_VIDEO_DURATION_SECONDS,
   DEFAULT_VIDEO_MODEL,
   getActiveApiProfile,
-} from '../lib/apiProfiles'
-import { putVideo as dbPutVideo, storeImage } from '../lib/db'
-import { logger, serializeError } from '../lib/logger'
-import { IMAGE_FETCH_CORS_HINT } from '../lib/imageApiShared'
-import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
-import { normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+} from '../lib/shared/apiProfiles'
+import { putVideo as dbPutVideo, storeImage } from '../lib/shared/db'
+import { logger, serializeError } from '../lib/shared/logger'
+import { IMAGE_FETCH_CORS_HINT } from '../lib/image/imageApiShared'
+import { replaceImageMentionsForApi } from '../lib/ui/promptImageMentions'
+import { normalizeParamsForSettings } from '../lib/params/paramCompatibility'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import {
   getApiRequestNetworkErrorHint,
   getUpstreamApiErrorHint,
   isRecoverableConnectionError,
-} from '../lib/taskErrorHints'
-import { readBlobAsDataUrl } from '../lib/dataUrl'
+} from '../lib/task/taskErrorHints'
+import { readBlobAsDataUrl } from '../lib/imaging/dataUrl'
 import {
   firstActualParams,
   isAsyncCustomProviderTask,
   mapActualParamsByImage,
   putTask,
   readImageSizeParamsList,
-} from '../lib/taskPersistence'
-import { generateVideo } from '../lib/videoApi'
-import { applyTeamRuntimeSettings } from '../lib/runtimeTeamSettings'
+} from '../lib/agent/taskPersistence'
+import { generateVideo } from '../lib/server/videoApi'
+import { applyTeamRuntimeSettings } from '../lib/config/runtimeTeamSettings'
 import { cacheImage, ensureImageCached, evictCachedImage } from './imageCache'
 import { genId, useStore } from './coreStore'
 import {

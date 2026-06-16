@@ -1,6 +1,6 @@
-import { callImageApi } from '../api'
+import { callImageApi } from '../image/api'
 import { DEFAULT_PARAMS, type AppSettings } from '../../types'
-import { logger, serializeError } from '../logger'
+import { logger, serializeError } from '../shared/logger'
 import type { WorkflowGenerateFn } from './engine'
 import {
   WORKFLOW_GRAPH_VERSION,

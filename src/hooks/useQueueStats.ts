@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { fetchQueueStats } from '../lib/queueApi'
+import { fetchQueueStats } from '../lib/server/queueApi'
 import { useStore } from '../store'
 
 const POLL_INTERVAL_MS = 5_000

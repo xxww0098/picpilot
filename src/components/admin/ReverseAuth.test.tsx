@@ -6,8 +6,8 @@ import {
   bulkDeleteAdminReverseAuthAccounts,
   type AdminReverseAuthAccount,
   type AdminReverseAuthStatus,
-} from '../../lib/adminApi'
-import { openDestructiveConfirm, showAppToast } from '../../lib/dialog'
+} from '../../lib/server/adminApi'
+import { openDestructiveConfirm, showAppToast } from '../../lib/ui/dialog'
 
 const queryState = vi.hoisted(() => ({
   reload: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('../../hooks/useAsyncQuery', () => ({
   }),
 }))
 
-vi.mock('../../lib/adminApi', () => ({
+vi.mock('../../lib/server/adminApi', () => ({
   bulkDeleteAdminReverseAuthAccounts: vi.fn(),
   deleteAdminReverseAuthAccount: vi.fn(),
   downloadAdminReverseAuthAccounts: vi.fn(),
@@ -41,13 +41,13 @@ vi.mock('../../lib/adminApi', () => ({
   uploadAdminReverseAuthAccount: vi.fn(),
 }))
 
-vi.mock('../../lib/dialog', () => ({
+vi.mock('../../lib/ui/dialog', () => ({
   openDestructiveConfirm: vi.fn(),
   openPromptDialog: vi.fn(),
   showAppToast: vi.fn(),
 }))
 
-vi.mock('../../lib/userFacingText', () => ({
+vi.mock('../../lib/shared/userFacingText', () => ({
   getUserFacingErrorMessage: (_err: unknown, fallback: string) => fallback,
 }))
 

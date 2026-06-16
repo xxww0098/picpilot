@@ -1,8 +1,8 @@
 // store 测试的共享 setup：vi.mock 工厂与测试数据 helper。
 // 注意：vi.mock 按文件 hoisted，各测试文件需自行调用：
-//   vi.mock('./lib/db', async () => (await import('./storeTestSetup')).createDbMock())
-//   vi.mock('./lib/api', async () => (await import('./storeTestSetup')).createApiMock())
-//   vi.mock('./lib/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
+//   vi.mock('./lib/shared/db', async () => (await import('./storeTestSetup')).createDbMock())
+//   vi.mock('./lib/image/api', async () => (await import('./storeTestSetup')).createApiMock())
+//   vi.mock('./lib/agent/agentApi', async () => (await import('./storeTestSetup')).createAgentApiMock())
 import { vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'

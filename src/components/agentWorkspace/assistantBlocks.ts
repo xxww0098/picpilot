@@ -1,5 +1,5 @@
 import type { AgentRound, ResponsesOutputItem, TaskRecord } from '../../types'
-import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../../lib/agentWebSearch'
+import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../../lib/agent/agentWebSearch'
 
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 

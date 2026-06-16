@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, filterGalleryTasks } from '../store'
 import TaskCard from './TaskCard'
-import { openDestructiveConfirm } from '../lib/dialog'
+import { openDestructiveConfirm } from '../lib/ui/dialog'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)

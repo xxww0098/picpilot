@@ -9,8 +9,8 @@ import {
   type LogArea,
   type LogEntry,
   type LogLevel,
-} from '../lib/logger'
-import { copyTextToClipboard } from '../lib/clipboard'
+} from '../lib/shared/logger'
+import { copyTextToClipboard } from '../lib/ui/clipboard'
 import ModalShell from './ModalShell'
 import { CloseIcon, CopyIcon, DownloadIcon, TrashIcon } from './icons'
 

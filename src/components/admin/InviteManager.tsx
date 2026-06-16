@@ -5,11 +5,11 @@ import {
   fetchAdminInvites,
   type AdminInviteRedemption,
   type AdminInviteRow,
-} from '../../lib/adminApi'
-import { copyTextToClipboard } from '../../lib/clipboard'
-import { openDestructiveConfirm, showAppToast } from '../../lib/dialog'
-import { formatOptionalExpiry, formatRelative } from '../../lib/format'
-import { getUserFacingErrorMessage } from '../../lib/userFacingText'
+} from '../../lib/server/adminApi'
+import { copyTextToClipboard } from '../../lib/ui/clipboard'
+import { openDestructiveConfirm, showAppToast } from '../../lib/ui/dialog'
+import { formatOptionalExpiry, formatRelative } from '../../lib/ui/format'
+import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import QueryState from './QueryState'
 

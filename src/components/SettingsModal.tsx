@@ -15,12 +15,12 @@ import {
   normalizeStreamPartialImages,
   normalizeVideoDurationSeconds,
   switchApiProfileProvider,
-} from '../lib/apiProfiles'
-import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { testApiConnection } from '../lib/apiConnectionTest'
+} from '../lib/shared/apiProfiles'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/ui/clipboard'
+import { testApiConnection } from '../lib/image/apiConnectionTest'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition } from '../types'
-import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
-import { getUserFacingErrorMessage } from '../lib/userFacingText'
+import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/ui/dropdown'
+import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import ModalShell from './ModalShell'
 import { CloseIcon } from './icons'
 import {

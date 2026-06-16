@@ -8,7 +8,7 @@ import {
   mergeActualParams,
   normalizeBase64Image,
   pickActualParams,
-} from '../imageApiShared'
+} from '../image/imageApiShared'
 import {
   getNumberValue,
   getStringValue,

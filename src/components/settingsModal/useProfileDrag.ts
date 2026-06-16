@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type TouchEvent } from 'react'
-import { getApiProviderLabel, normalizeSettings } from '../../lib/apiProfiles'
+import { getApiProviderLabel, normalizeSettings } from '../../lib/shared/apiProfiles'
 import type { ApiProfile, AppSettings } from '../../types'
 
 export interface ProfileTouchDragPreview {

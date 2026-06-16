@@ -1,7 +1,7 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import ModalShell from '../ModalShell'
 import { CloseIcon, CopyIcon } from '../icons'
-import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/ui/clipboard'
 import type { AppState } from '../../store'
 
 export type DetailModalRawUrlsModalProps = {

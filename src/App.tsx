@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
-import { mergeImportedSettings } from './lib/apiProfiles'
-import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
-import { logger, serializeError } from './lib/logger'
+import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/config/urlSettings'
+import { mergeImportedSettings } from './lib/shared/apiProfiles'
+import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/config/customProviderConfigUrl'
+import { logger, serializeError } from './lib/shared/logger'
 import { useAuth } from './contexts/AuthProvider'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
@@ -19,7 +19,7 @@ import Toast from './components/Toast'
 import ImageContextMenu from './components/ImageContextMenu'
 import LoginModal from './components/LoginModal'
 import RegisterModal from './components/RegisterModal'
-import { useGlobalClickSuppression } from './lib/clickSuppression'
+import { useGlobalClickSuppression } from './lib/ui/clickSuppression'
 
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
 const VideoWorkspace = lazy(() => import('./components/VideoWorkspace'))

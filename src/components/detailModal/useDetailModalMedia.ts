@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ensureImageCached, getCachedImage } from '../../store'
-import { runWithConcurrency } from '../../lib/runWithConcurrency'
-import { createMaskPreviewDataUrl } from '../../lib/canvasImage'
-import { getVideo } from '../../lib/db'
+import { runWithConcurrency } from '../../lib/shared/runWithConcurrency'
+import { createMaskPreviewDataUrl } from '../../lib/imaging/canvasImage'
+import { getVideo } from '../../lib/shared/db'
 import type { TaskRecord } from '../../types'
 import { IMAGE_DECODE_CONCURRENCY } from './constants'
 

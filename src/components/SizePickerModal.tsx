@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
-import { getParamValueLabel } from '../lib/userFacingText'
-import { getProviderCapabilities } from '../lib/imageProviderCapabilities'
+import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/params/size'
+import { getParamValueLabel } from '../lib/shared/userFacingText'
+import { getProviderCapabilities } from '../lib/image/imageProviderCapabilities'
 import ModalShell from './ModalShell'
 import ViewportTooltip from './ViewportTooltip'
 

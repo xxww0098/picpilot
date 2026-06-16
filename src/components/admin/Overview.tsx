@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { fetchAdminOverview } from '../../lib/adminApi'
-import { formatBytes, formatDurationMs } from '../../lib/format'
-import { getErrorTypeLabel, getProviderDisplayName } from '../../lib/userFacingText'
+import { fetchAdminOverview } from '../../lib/server/adminApi'
+import { formatBytes, formatDurationMs } from '../../lib/ui/format'
+import { getErrorTypeLabel, getProviderDisplayName } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import QueryState from './QueryState'
 
