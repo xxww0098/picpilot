@@ -48,4 +48,10 @@ describe('userFacingText', () => {
     const blocked = 'Attention Required! | Cloudflare — Sorry, you have been blocked'
     expect(getUserFacingErrorMessage(blocked, '操作失败', { apiUpstream: true })).toContain('Cloudflare')
   })
+
+  it('preserves CPA reverse-import errors instead of mapping them to API key auth failures', () => {
+    const message = 'CPA 管理令牌无效：请填写 config.yaml 中 remote-management.secret-key 的明文值，不是 sk- 开头的出图 API Key。'
+    expect(getUserFacingErrorMessage(message)).toBe(message)
+    expect(getUserFacingErrorMessage(message)).not.toContain('API_PROXY_API_KEY')
+  })
 })

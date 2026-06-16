@@ -17,6 +17,13 @@ dev-proxy.config.json
 # Runtime data (auth.db, avatars, uploaded images, etc.)
 data/
 
+# Deployment secrets & credentials (real OAuth tokens, management keys)
+# Keep only examples/templates tracked; never commit real prod credentials.
+deploy/cliproxyapi/auths/*.json
+deploy/cliproxyapi/config.yaml
+deploy/cliproxyapi/logs/*
+!deploy/cliproxyapi/logs/.gitkeep
+
 # Local overrides
 *.local
 

@@ -1,9 +1,19 @@
+# ============================================================================
+# 遗留的“单文件全家桶”模板（仅供外部用户快速本地试用）
+#
+# 推荐生产做法：**picpilot 单独部署** + cliproxyapi 单独部署。
+#   - picpilot: deploy/picpilot/compose.yml （不包含 cliproxyapi 服务，只通过 env 描述上游）
+#   - cliproxyapi: deploy/cliproxyapi/compose.yml （独立项目）
+# 参考 deploy/DEPLOY-STRUCTURE.md 和 deploy/picpilot/compose.yml 顶部的说明。
+# ============================================================================
+
 services:
   caddy:
     image: caddy:2-alpine
+    # 演示模板里保留 container_name 是为了“看起来简单”，真实生产不要用！
     container_name: caddy
     restart: unless-stopped
-    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN:-localhost}", "--to", "auth:3001"]
+    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_ORIGIN:-localhost}", "--to", "picpilot:3001"]
     ports:
       - "80:80"
       - "443:443"
@@ -11,18 +21,18 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - auth
+      - picpilot
     networks:
-      - picpilot_net
+      - picpilot_net   # 这个模板内部自建网络，仅供单文件演示
 
   # 单镜像 = Go 后端 + 前端静态文件（构建上下文是仓库根，见 server-go/Dockerfile 头注）
-  auth:
+  picpilot:
     build:
       context: ..
       dockerfile: server-go/Dockerfile
       args:
         APP_VERSION: ${PICPILOT_VERSION:-dev}
-    container_name: picpilot-auth
+    container_name: picpilot
     restart: unless-stopped
     environment:
       - ADMIN_USERS=${ADMIN_USERS}
@@ -38,7 +48,7 @@ services:
       - CHATGPT_REVERSE_ACCOUNT_CONCURRENCY=${CHATGPT_REVERSE_ACCOUNT_CONCURRENCY:-1}
       - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cli-proxy-api:8317}
       - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY:-}
-      - CLIPROXY_LOG_DIR=/cliproxy-logs
+      - CLIPROXY_LOG_DIR=/cliproxyapi-logs
       - OUTBOUND_PROXY_TYPE=${OUTBOUND_PROXY_TYPE:-env}
       - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
       - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
@@ -51,20 +61,30 @@ services:
       - DB_PATH=/data/auth.db
     volumes:
       - auth_data:/data
-      - ./cliproxy/logs:/cliproxy-logs:ro
+      - ./cliproxyapi/logs:/cliproxyapi-logs:ro
     expose:
       - "3001"
     networks:
       - picpilot_net
 
+  # CLIProxyAPI (全名 cli-proxy-api) - OpenAI/Gemini/Claude/Codex/Grok CLI 代理
+  # 注意：不要设置 container_name！让 compose 用项目名前缀（picpilot-cli-proxy-api-1），避免和服务器上其他容器冲突。
+  # 服务使用全名 cli-proxy-api 作为可解析的主机名（而非缩写 cliproxyapi）。
+  # 如果你要独立跑 cli-proxy-api（不和 picpilot 同一个 compose），建议：
+  #   1. 放到单独目录 /opt/cliproxyapi
+  #   2. 用 docker compose -p cliproxyapi -f docker-compose.yml
+  #   3. 所有路径用绝对或带项目前缀的子目录，完全隔离 config/auths/logs
   cli-proxy-api:
     image: eceasy/cli-proxy-api:latest
-    container_name: cli-proxy-api
+    pull_policy: always
     restart: unless-stopped
+    environment:
+      - DEPLOY=docker
     volumes:
-      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml:ro
-      - ./cliproxy/auths:/root/.cli-proxy-api
-      - ./cliproxy/logs:/CLIProxyAPI/logs
+      - ./cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml
+      - ./cliproxyapi/auths:/root/.cli-proxy-api
+      - ./cliproxyapi/logs:/CLIProxyAPI/logs
+      - ./cliproxyapi/plugins:/CLIProxyAPI/plugins
     expose:
       - "8317"
     networks:

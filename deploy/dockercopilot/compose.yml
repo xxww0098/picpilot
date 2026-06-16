@@ -1,0 +1,23 @@
+# Docker Copilot 独立部署（实盘: /opt/dockercopilot/compose.yml）
+name: dockercopilot
+
+services:
+  dockercopilot:
+    container_name: dockercopilot
+    image: 0nlylty/dockercopilot:latest
+    restart: unless-stopped
+    privileged: true
+    environment:
+      TZ: Asia/Tokyo
+      DOCKER_HOST: unix:///var/run/docker.sock
+      secretKey: ${DOCKERCOPILOT_SECRET:?set DOCKERCOPILOT_SECRET in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    networks:
+      - dockercopilot-net
+
+networks:
+  dockercopilot-net:
+    name: dockercopilot-net
+    driver: bridge

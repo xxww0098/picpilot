@@ -1,0 +1,62 @@
+# 推荐的 CLIProxyAPI (cliproxyapi) 独立部署 compose（隔离优先）
+# 用法（强烈建议）：
+#   mkdir -p /opt/cliproxyapi/data/{config,auths,logs,plugins}
+#   cp config.example.yaml /opt/cliproxyapi/data/config/config.yaml   # 从官方依赖文件复制并自定义
+#   cd /opt/cliproxyapi
+#   docker compose -p cliproxyapi -f compose.yml up -d
+#
+# 优点：
+# - 无硬编码 container_name（容器会叫 cliproxyapi-cli-proxy-api-1，使用全名服务 cli-proxy-api）
+# - 端口全部可通过 .env 覆盖，避免和其他服务端口冲突
+# - 数据完全放到 ./data 子目录，和其他项目物理隔离
+# - 定义了自己的网络 cliproxyapi-net（方便以后其他容器按需加入）
+# - pull_policy + restart 安全默认
+#
+# PicPilot 单独部署时，只需在自己的 env 中配置上游地址指向这个 cliproxyapi 实例即可。
+# cliproxyapi 依赖官方 config.example.yaml（已放入本目录），复制后根据需要编辑（设置 auth-dir、api-keys、providers 等）。
+
+services:
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    pull_policy: ${PULL_POLICY:-always}
+    restart: unless-stopped
+
+    environment:
+      - DEPLOY=${DEPLOY:-docker}
+      # 可在这里加更多运行时 env（上游支持的）
+
+    ports:
+      # 全部可配置，避免冲突。示例：8317 用 18317 映射
+      - "${HOST_8317:-8317}:8317"
+      - "${HOST_8085:-8085}:8085"
+      - "${HOST_1455:-1455}:1455"
+      - "${HOST_54545:-54545}:54545"
+      - "${HOST_51121:-51121}:51121"
+      - "${HOST_11451:-11451}:11451"
+
+    volumes:
+      # 推荐做法：把 config 放在 data/config/config.yaml
+      - ${CONFIG_PATH:-./data/config/config.yaml}:/CLIProxyAPI/config.yaml
+      - ${AUTHS_PATH:-./data/auths}:/root/.cli-proxy-api
+      - ${LOGS_PATH:-./data/logs}:/CLIProxyAPI/logs
+      - ${PLUGINS_PATH:-./data/plugins}:/CLIProxyAPI/plugins
+
+    networks:
+      - cliproxyapi-net
+
+# 关键：使用 name: cliproxyapi-net 强制网络的真实名字为 "cliproxyapi-net"（不带 project 前缀）。
+# 这样独立的 picpilot compose 项目如果想用服务名 cli-proxy-api 访问（同主机场景），
+# 可以 external 加入这个网络。PicPilot 默认是完全独立的，只通过 env 变量描述上游 cliproxyapi。
+networks:
+  cliproxyapi-net:
+    driver: bridge
+    name: cliproxyapi-net   # 稳定跨项目名称
+
+# 可选：如果你有很多实例，可以复制这个文件成 compose.prod.yml
+# 然后 docker compose -p cliproxyapi-foo -f compose.prod.yml up -d
+# 每个实例用不同 -p、不同数据目录、不同 HOST_* 端口 → 完全隔离，互不影响。
+# 服务名使用全名 cli-proxy-api（DNS 主机名就是 cli-proxy-api）。
+
+# 可选：如果你有很多实例，可以复制这个文件成 compose.foo.yml
+# 然后 docker compose -p cliproxyapi-foo -f compose.foo.yml up -d
+# 每个实例数据目录、端口、project name 完全不同 → 完全隔离。

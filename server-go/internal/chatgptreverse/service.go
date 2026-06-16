@@ -290,7 +290,7 @@ func (s *Service) collectCodexImageItems(ctx context.Context, body map[string]an
 			if len(items) > 0 {
 				return items, nil
 			}
-			err = errors.New("内置 reverse 未从上游响应中解析到图片。")
+			err = newRetryableCodexStreamError("未从上游响应中解析到图片。")
 		}
 		last = err
 		if attempt >= attempts || !isRetryableCodexStreamError(err) {

@@ -131,6 +131,13 @@ func (s *Service) collectOneWebImage(ctx context.Context, imageBody map[string]a
 			return item, nil
 		}
 		last = err
+		if isPermanentWebImageError(err) {
+			release()
+			return nil, err
+		}
+		if isRetryableWebImageError(err) && s.logger != nil {
+			s.logger.Warn("chatgpt web image attempt failed; trying next account", "scope", "reverse", "email", active.Email, "err", truncateLogValue(err.Error(), 240))
+		}
 		var statusErr *httpStatusError
 		if errors.As(err, &statusErr) && statusErr.Status == http.StatusUnauthorized {
 			if refreshed, ok := s.refreshIfNeeded(ctx, active, true); ok && refreshed.AccessToken != active.AccessToken {
@@ -163,34 +170,25 @@ func (s *Service) collectOneWebImageWithAccount(ctx context.Context, acc account
 	session := newWebSession(acc.AccessToken)
 	requirements, err := s.getChatRequirements(ctx, session)
 	if err != nil {
-		return nil, err
+		return nil, wrapRetryableUpstreamHTTPError(err)
 	}
 	s.logger.Info("chatgpt web image requirements ready", "scope", "reverse", "email", acc.Email, "proof", requirements.ProofToken != "", "turnstile", requirements.TurnstileToken != "", "so", requirements.SOToken != "")
 	conduit, err := s.prepareImageConversation(ctx, session, requirements, prompt, model)
 	if err != nil {
-		return nil, err
+		return nil, wrapRetryableUpstreamHTTPError(err)
 	}
 	state, err := s.startImageConversation(ctx, session, requirements, conduit, prompt, model)
 	if err != nil {
-		return nil, err
+		return nil, wrapRetryableUpstreamHTTPError(err)
 	}
-	s.logger.Info("chatgpt web image stream ended", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "fileIds", len(state.FileIDs), "sedimentIds", len(state.SedimentIDs), "toolInvoked", state.ToolInvoked, "turnUseCase", state.TurnUseCase, "blocked", state.Blocked, "message", truncateLogValue(state.Message, 160))
-	if len(state.FileIDs) == 0 && len(state.SedimentIDs) == 0 && state.ConversationID != "" {
-		_ = s.pollImageIDs(ctx, session, &state, 120*time.Second)
+	s.logger.Info("chatgpt web image stream ended", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "fileIds", len(state.FileIDs), "sedimentIds", len(state.SedimentIDs), "toolInvoked", state.ToolInvoked, "turnUseCase", state.TurnUseCase, "blocked", state.Blocked, "textReply", isWebImageTextReply(state.Message), "message", truncateLogValue(state.Message, 160))
+	if err := s.pollWebImageIDsWithRetries(ctx, session, &state); err != nil {
+		return nil, err
 	}
 	s.logger.Info("chatgpt web image ids resolved", "scope", "reverse", "email", acc.Email, "conversationId", state.ConversationID, "fileIds", len(state.FileIDs), "sedimentIds", len(state.SedimentIDs))
-	urls, err := s.resolveImageURLs(ctx, session, state.ConversationID, state.FileIDs, state.SedimentIDs)
+	urls, err := s.resolveWebImageURLs(ctx, session, state)
 	if err != nil {
 		return nil, err
-	}
-	if len(urls) == 0 {
-		if state.Blocked && state.Message != "" {
-			return nil, errors.New(state.Message)
-		}
-		if state.Message != "" {
-			return nil, fmt.Errorf("ChatGPT Web 未返回图片：%s", state.Message)
-		}
-		return nil, errors.New("ChatGPT Web 未返回图片。")
 	}
 	imageBytes, err := s.downloadImage(ctx, session, urls[0])
 	if err != nil {
@@ -364,8 +362,8 @@ func (s *Service) startImageConversation(ctx context.Context, session webSession
 
 func (s *Service) pollImageIDs(ctx context.Context, session webSession, state *webImageState, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	if wait := 10 * time.Second; wait > 0 {
-		if err := sleepContext(ctx, wait); err != nil {
+	if webImagePollInitialDelay > 0 {
+		if err := sleepContext(ctx, webImagePollInitialDelay); err != nil {
 			return err
 		}
 	}
@@ -392,19 +390,22 @@ func (s *Service) pollImageIDs(ctx context.Context, session webSession, state *w
 		} else {
 			_ = resp.Body.Close()
 		}
-		if err := sleepContext(ctx, 10*time.Second); err != nil {
+		if err := sleepContext(ctx, webImagePollInterval); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Service) resolveImageURLs(ctx context.Context, session webSession, conversationID string, fileIDs, sedimentIDs []string) ([]string, error) {
+func (s *Service) resolveImageURLs(ctx context.Context, session webSession, conversationID string, fileIDs, sedimentIDs []string, readyTimeout time.Duration) ([]string, error) {
 	candidates := downloadURLCandidates(conversationID, fileIDs, sedimentIDs)
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	deadline := time.Now().Add(webImageDownloadURLReadyTimeout)
+	if readyTimeout <= 0 {
+		readyTimeout = webImageDownloadURLReadyTimeout
+	}
+	deadline := time.Now().Add(readyTimeout)
 	attempt := 0
 	var lastErr error
 	var lastStatus string

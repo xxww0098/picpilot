@@ -406,12 +406,12 @@ func (m *Module) fetchCLIProxyAuthFileCandidates(ctx context.Context, sourceID s
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("连接 CLIProxyAPI 失败：%s", err.Error())
+		return nil, humanizeCLIProxyConnectError(err, cfg.APIURL)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("CLIProxyAPI 返回 HTTP %d：%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, humanizeCLIProxyHTTPError(resp.StatusCode, string(body))
 	}
 	var payload any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&payload); err != nil {
@@ -438,12 +438,12 @@ func (m *Module) downloadCLIProxyAuthFile(ctx context.Context, sourceID, name st
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("下载 %s 失败：%s", name, err.Error())
+		return nil, fmt.Errorf("下载 %s 失败：%w", name, humanizeCLIProxyConnectError(err, cfg.APIURL))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("下载 %s 失败：HTTP %d %s", name, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("下载 %s 失败：%w", name, humanizeCLIProxyHTTPError(resp.StatusCode, string(body)))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReverseAuthUploadBytes+1))
 	if err != nil {

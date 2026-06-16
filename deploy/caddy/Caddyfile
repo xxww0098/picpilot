@@ -14,7 +14,7 @@
 	}
 }
 
-# auth（Go server）同时托管前端静态文件与 /api、/api-proxy，长超时覆盖出图流式响应。
+# picpilot（Go server）托管前端静态文件与 /api、/api-proxy。
 image.xxww.online {
 	encode zstd gzip
 
@@ -27,7 +27,7 @@ image.xxww.online {
 		X-Content-Type-Options "nosniff"
 	}
 
-	reverse_proxy auth:3001 {
+	reverse_proxy picpilot:3001 {
 		header_up X-Real-IP {remote_host}
 		transport http {
 			dial_timeout 60s
@@ -38,8 +38,9 @@ image.xxww.online {
 	}
 }
 
+# CLIProxyAPI 上游（容器名 cliproxyapi，经 cliproxyapi-net 解析）。
 api.xxww.online {
-	reverse_proxy cliproxy:8317 {
+	reverse_proxy cliproxyapi:8317 {
 		transport http {
 			dial_timeout 60s
 			response_header_timeout 600s

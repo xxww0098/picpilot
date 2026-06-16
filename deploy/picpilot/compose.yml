@@ -1,0 +1,50 @@
+# PicPilot 应用栈（实盘: /opt/picpilot/compose.yml）— 入口 Caddy 见 /opt/caddy
+name: picpilot
+
+services:
+  picpilot:
+    container_name: picpilot
+    image: picpilot-api:${PICPILOT_VERSION:?set PICPILOT_VERSION in .env or pass to deploy.sh}
+    build:
+      context: /root/picpilot
+      dockerfile: server-go/Dockerfile
+      args:
+        APP_VERSION: ${PICPILOT_VERSION}
+    restart: unless-stopped
+    environment:
+      - ADMIN_USERS=${ADMIN_USERS}
+      - JWT_SECRET=${JWT_SECRET}
+      - UPSTREAM_MODE=${UPSTREAM_MODE:-api}
+      - API_PROXY_URL=${API_PROXY_URL:-http://cliproxyapi:8317/v1}
+      - API_PROXY_API_KEY=${API_PROXY_API_KEY}
+      - CLIPROXY_API_URL=${CLIPROXY_API_URL:-http://cliproxyapi:8317}
+      - CLIPROXY_MGMT_KEY=${CLIPROXY_MGMT_KEY}
+      - REVERSE_PROXY_URL=${REVERSE_PROXY_URL:-internal}
+      - REVERSE_PROXY_API_KEY=${REVERSE_PROXY_API_KEY}
+      - CHATGPT2API_AUTH_KEY=${CHATGPT2API_AUTH_KEY}
+      - CHATGPT_REVERSE_INTERNAL=${CHATGPT_REVERSE_INTERNAL:-}
+      - CHATGPT_REVERSE_BASE_URL=${CHATGPT_REVERSE_BASE_URL:-https://chatgpt.com}
+      - CHATGPT_REVERSE_ACCOUNT_CONCURRENCY=${CHATGPT_REVERSE_ACCOUNT_CONCURRENCY:-1}
+      - CLIPROXY_LOG_DIR=/cliproxyapi-logs
+      - OUTBOUND_PROXY_TYPE=${OUTBOUND_PROXY_TYPE:-env}
+      - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
+      - MAX_CONCURRENT_PROXY_REQUESTS=${MAX_CONCURRENT_PROXY_REQUESTS:-5}
+      - PROXY_QUEUE_MAX=${PROXY_QUEUE_MAX:-10}
+      - PROXY_QUEUE_MAX_WAIT_MS=${PROXY_QUEUE_MAX_WAIT_MS:-240000}
+      - PROXY_USER_SOFT_LIMIT=${PROXY_USER_SOFT_LIMIT:-3}
+      - REQUEST_TIMEOUT_SECONDS=${REQUEST_TIMEOUT_SECONDS:-900}
+      - STREAM_FALLBACK_ENABLED=${STREAM_FALLBACK_ENABLED:-true}
+      - DATA_DIR=/data
+      - DB_PATH=/data/auth.db
+    volumes:
+      - ./data/picpilot:/data
+      - ./data/cliproxyapi-logs:/cliproxyapi-logs:ro
+    networks:
+      - picpilot-net
+      - cliproxyapi-net
+
+networks:
+  picpilot-net:
+    name: picpilot-net
+  cliproxyapi-net:
+    external: true

@@ -261,6 +261,7 @@ func completedResponse(events []map[string]any) map[string]any {
 		if output, ok := event["output"]; ok {
 			outputItems = appendOutputItems(outputItems, output)
 		}
+		outputItems = appendImageGenerationCallEvent(outputItems, event)
 	}
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
@@ -337,6 +338,40 @@ func appendOutputItems(out []any, value any) []any {
 	}
 }
 
+func appendImageGenerationCallEvent(out []any, event map[string]any) []any {
+	if stringValue(event["type"], "") != "response.image_generation_call.completed" {
+		return out
+	}
+	item := map[string]any{"type": "image_generation_call"}
+	if id := stringValue(event["item_id"], ""); id != "" {
+		item["id"] = id
+	}
+	for _, key := range []string{"result", "b64_json", "base64", "image", "data", "revised_prompt", "action", "size", "quality", "output_format", "background"} {
+		if value, ok := event[key]; ok {
+			item[key] = value
+		}
+	}
+	if len(imageStringsFromImageCall(item)) == 0 {
+		return out
+	}
+	id := stringValue(item["id"], "")
+	if id != "" {
+		for i := len(out) - 1; i >= 0; i-- {
+			existing, ok := out[i].(map[string]any)
+			if !ok || stringValue(existing["type"], "") != "image_generation_call" || stringValue(existing["id"], "") != id {
+				continue
+			}
+			next := cloneMap(existing)
+			for key, value := range item {
+				next[key] = value
+			}
+			out[i] = next
+			return out
+		}
+	}
+	return append(out, item)
+}
+
 func extractImageItems(value any) []imageItem {
 	var out []imageItem
 	walkImageItems(value, &out)
@@ -351,7 +386,7 @@ func walkImageItems(value any, out *[]imageItem) {
 		}
 	case map[string]any:
 		if stringValue(v["type"], "") == "image_generation_call" {
-			for _, b64 := range collectImageStrings(v["result"]) {
+			for _, b64 := range imageStringsFromImageCall(v) {
 				*out = append(*out, imageItem{B64: b64, RevisedPrompt: stringValue(v["revised_prompt"], "")})
 			}
 		}
@@ -361,6 +396,25 @@ func walkImageItems(value any, out *[]imageItem) {
 			}
 		}
 	}
+}
+
+func imageStringsFromImageCall(item map[string]any) []string {
+	out := collectImageStrings(item["result"])
+	for _, b64 := range collectImageStrings(item) {
+		if !stringSliceContains(out, b64) {
+			out = append(out, b64)
+		}
+	}
+	return out
+}
+
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func collectImageStrings(value any) []string {

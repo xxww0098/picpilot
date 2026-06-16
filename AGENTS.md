@@ -39,7 +39,7 @@
 - `src/lib/workflow/engine.ts` —— 纯逻辑数据流引擎（无 React 依赖），`templates.ts` 平台模板、`runtime.ts` 桥接 store 与出图 API；画布组件 `src/components/workflow/WorkflowCanvas.tsx`（@xyflow/react）。
 - `src/lib/imageModels.ts` / `chatModels.ts` —— 模型注册表；`src/lib/paramCompatibility.ts` —— 按服务商归一化参数并做批量 clamp；`src/lib/apiProfiles.ts` —— API 配置档案（`normalize*` 是恢复策略而非拒绝，勿改写成 reject 式校验）。
 
-**部署**：生产在 VPS `/opt/picpilot`（Caddy + auth + cliproxy；`auth` 为单镜像 = Go 后端 + 前端静态文件，`server-go/Dockerfile` 多阶段构建、上下文为仓库根），发布 / 回滚用 `deploy-vps` skill；实盘 compose 的脱敏备份在 `deploy/vps/compose.yml`，改实盘后须同步回该文件。
+**部署**：生产在 VPS `/opt/picpilot`（Caddy + picpilot + cliproxyapi；`picpilot` 容器 = 单镜像 Go 后端 + 前端静态文件，`server-go/Dockerfile` 多阶段构建、上下文为仓库根），发布 / 回滚用 `deploy-vps` skill；实盘 compose 模板在 `deploy/picpilot/compose.yml`，改实盘后须同步回仓库。
 
 ## 用户对话框（必读）
 
@@ -84,11 +84,11 @@ showAppToast('邀请链接已复制', 'success')
 
 ## 日志路径（排查线上问题用）
 
-部署在 `/opt/picpilot`（`compose.yml`，服务名 `auth`/`cliproxy`/`caddy`/`dockercopilot`；前端静态文件由 `auth` 容器内的 Go server 托管）。
+部署在四个独立栈：`/opt/picpilot`（容器 `picpilot`）、`/opt/caddy`（`caddy`）、`/opt/cliproxyapi`（`cliproxyapi`）、`/opt/dockercopilot`（`dockercopilot`）；前端静态文件由 `picpilot` 容器内的 Go server 托管。
 
 | 组件 | 位置 | 查看方式 |
 |------|------|---------|
-| picpilot 后端 + 前端静态（`server-go/`，slog JSON） | 输出到 stdout，无文件 | `docker logs picpilot-auth-1`（加 `-f`/`--tail 200`/`--since 1h`） |
+| picpilot 后端 + 前端静态（`server-go/`，slog JSON） | 输出到 stdout，无文件 | `docker logs picpilot`（加 `-f`/`--tail 200`/`--since 1h`） |
 | CLIProxyAPI（上游出图代理） | `/opt/picpilot/data/cliproxy/logs/` | `main.log` 为主日志（含每个请求路由账号与耗时）；`error-*.log` 为单请求错误快照（请求头 + 上游响应） |
 | Caddy（反代/TLS） | stdout | `docker logs picpilot-caddy-1` |
 

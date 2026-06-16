@@ -69,4 +69,20 @@ describe('ReverseAuthImportPanel', () => {
     })
     expect(await screen.findByText('openai-plus.json')).toBeTruthy()
   })
+
+  it('shows a hint when CPA address uses the legacy cliproxy hostname', async () => {
+    vi.mocked(fetchAdminReverseAuthImportSources).mockResolvedValue({
+      sources: [{
+        id: 'cpa-main',
+        type: 'cpa',
+        name: 'Main CPA',
+        baseUrl: 'http://cliproxy:8317',
+        managementKeyConfigured: false,
+      }],
+    })
+
+    render(<ReverseAuthImportPanel disabled={false} onImported={vi.fn()} />)
+
+    expect(await screen.findByText(/服务名是 cliproxyapi/)).toBeTruthy()
+  })
 })

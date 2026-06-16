@@ -1,0 +1,30 @@
+# Caddy TLS 入口（实盘: /opt/caddy/compose.yml）
+# 通过外部网络反代 picpilot、cliproxyapi、dockercopilot。
+name: caddy
+
+services:
+  caddy:
+    container_name: caddy
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - picpilot-net
+      - cliproxyapi-net
+      - dockercopilot-net
+
+networks:
+  picpilot-net:
+    external: true
+  cliproxyapi-net:
+    external: true
+  dockercopilot-net:
+    external: true
+
+volumes:
+  caddy_data:
+    external: true
+    name: caddy_data

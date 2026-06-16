@@ -1,0 +1,30 @@
+# CLIProxyAPI 独立部署（实盘: /opt/cliproxyapi/compose.yml）
+name: cliproxyapi
+
+services:
+  cliproxyapi:
+    container_name: cliproxyapi
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    pull_policy: ${PULL_POLICY:-always}
+    restart: unless-stopped
+    environment:
+      - DEPLOY=${DEPLOY:-docker}
+    ports:
+      - "${HOST_8317:-8317}:8317"
+      - "${HOST_8085:-8085}:8085"
+      - "${HOST_1455:-1455}:1455"
+      - "${HOST_54545:-54545}:54545"
+      - "${HOST_51121:-51121}:51121"
+      - "${HOST_11451:-11451}:11451"
+    volumes:
+      - ${CONFIG_PATH:-./data/config/config.yaml}:/CLIProxyAPI/config.yaml
+      - ${AUTHS_PATH:-./data/auths}:/root/.cli-proxy-api
+      - ${LOGS_PATH:-./data/logs}:/CLIProxyAPI/logs
+      - ${PLUGINS_PATH:-./data/plugins}:/CLIProxyAPI/plugins
+    networks:
+      - cliproxyapi-net
+
+networks:
+  cliproxyapi-net:
+    driver: bridge
+    name: cliproxyapi-net

@@ -12,6 +12,7 @@ import {
   type AdminReverseAuthImportSourceType,
 } from '../../lib/adminApi'
 import { showAppToast } from '../../lib/dialog'
+import { getCpaBaseUrlHint, getCpaManagementKeyHint } from '../../lib/reverseAuthImportHints'
 import { getUserFacingErrorMessage } from '../../lib/userFacingText'
 
 interface ReverseAuthImportPanelProps {
@@ -42,6 +43,7 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
   const [sub2Filters, setSub2Filters] = useState<Record<string, Sub2Filter>>({})
   const [sub2ImportingSourceId, setSub2ImportingSourceId] = useState<string | null>(null)
   const [lastSkipped, setLastSkipped] = useState<AdminReverseAuthImportSkipped[]>([])
+  const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -90,6 +92,14 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
 
   function updateSource(id: string, patch: Partial<AdminReverseAuthImportSource>) {
     setSources((items) => items.map((source) => source.id === id ? { ...source, ...patch } : source))
+    if ('baseUrl' in patch || 'managementKey' in patch) {
+      setSourceErrors((items) => {
+        if (!items[id]) return items
+        const next = { ...items }
+        delete next[id]
+        return next
+      })
+    }
   }
 
   function removeSource(id: string) {
@@ -119,6 +129,16 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
     }
   }
 
+  function validateCpaSourceInput(source: AdminReverseAuthImportSource): string | null {
+    const baseUrlHint = source.type === 'cpa' ? getCpaBaseUrlHint(source.baseUrl) : null
+    if (baseUrlHint) return baseUrlHint
+    const keyHint = source.type === 'cpa'
+      ? getCpaManagementKeyHint(source.managementKey ?? '', Boolean(source.managementKeyConfigured))
+      : null
+    if (keyHint) return keyHint
+    return null
+  }
+
   async function saveAndResolveSource(source: AdminReverseAuthImportSource) {
     if (!source.baseUrl.trim()) {
       showAppToast('请填写导入来源地址。', 'info')
@@ -126,6 +146,12 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
     }
     if (!source.managementKeyConfigured && !source.managementKey?.trim()) {
       showAppToast('请填写管理令牌。', 'info')
+      return null
+    }
+    const validationError = validateCpaSourceInput(source)
+    if (validationError) {
+      setSourceErrors((items) => ({ ...items, [source.id]: validationError }))
+      showAppToast(validationError, 'error')
       return null
     }
     const savedSources = await saveSources(true)
@@ -138,6 +164,11 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
     setCpaLoadingSourceId(savedSource.id)
     try {
       const result = await fetchAdminReverseAuthCLIProxyAccounts(savedSource.id)
+      setSourceErrors((items) => {
+        const next = { ...items }
+        delete next[savedSource.id]
+        return next
+      })
       setCpaState({
         sourceId: savedSource.id,
         sourceName: savedSource.name,
@@ -146,9 +177,15 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
         search: '',
       })
       setLastSkipped([])
-      showAppToast(`已读取 ${result.accounts.length} 个 CPA 账号。`, 'success')
+      if (result.accounts.length === 0) {
+        showAppToast('已连接 CPA，但没有可导入的 OpenAI/Codex OAuth 账号。', 'info')
+      } else {
+        showAppToast(`已读取 ${result.accounts.length} 个 CPA 账号。`, 'success')
+      }
     } catch (err) {
-      showAppToast(getUserFacingErrorMessage(err, '读取 CPA 账号失败'), 'error')
+      const message = getUserFacingErrorMessage(err, '读取 CPA 账号失败')
+      setSourceErrors((items) => ({ ...items, [savedSource.id]: message }))
+      showAppToast(message, 'error')
     } finally {
       setCpaLoadingSourceId(null)
     }
@@ -234,7 +271,7 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
         <div>
           <h4 className="text-sm font-semibold text-[hsl(var(--foreground))]">导入来源</h4>
           <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-            保存 CPA 和 Sub2API 地址，读取账号后导入到内置 reverse。同名导入会覆盖已存在的逆向账号信息，并清空旧检查结果和路由统计。
+            保存 CPA 和 Sub2API 地址，读取账号后导入到内置 reverse。Docker 部署时 CPA 地址填 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">http://cliproxyapi:8317</code>，管理令牌填 config.yaml 的 <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5">remote-management.secret-key</code>（不是 sk- 出图 Key）。同名导入会覆盖已存在的逆向账号信息，并清空旧检查结果和路由统计。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -277,7 +314,12 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
         <div className="mt-4 overflow-hidden rounded-lg border border-[hsl(var(--border))]">
           {sources.map((source) => {
             const sub2Filter = sub2Filters[source.id] ?? { search: '', status: '' }
-            const keyPlaceholder = source.managementKeyConfigured ? '已保存，留空保留' : '管理令牌'
+            const keyPlaceholder = source.managementKeyConfigured ? '已保存，留空保留' : 'CPA secret-key 明文'
+            const baseUrlHint = source.type === 'cpa' ? getCpaBaseUrlHint(source.baseUrl) : null
+            const keyHint = source.type === 'cpa'
+              ? getCpaManagementKeyHint(source.managementKey ?? '', Boolean(source.managementKeyConfigured))
+              : null
+            const inlineError = sourceErrors[source.id]
             return (
               <div key={source.id} className="border-b border-[hsl(var(--border))] p-3 last:border-0">
                 <div className="grid gap-3 lg:grid-cols-[7rem_minmax(0,0.8fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_auto] lg:items-end">
@@ -306,7 +348,7 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
                       value={source.baseUrl}
                       disabled={disabled || sourcesSaving}
                       onChange={(event) => updateSource(source.id, { baseUrl: event.target.value })}
-                      placeholder={source.type === 'cpa' ? 'https://cpa.example.com' : 'https://sub2api.example.com'}
+                      placeholder={source.type === 'cpa' ? 'http://cliproxyapi:8317' : 'https://sub2api.example.com'}
                       className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
@@ -353,6 +395,21 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
                     </button>
                   </div>
                 </div>
+                {(inlineError || baseUrlHint || keyHint) && (
+                  <div className="mt-2 space-y-1 text-xs">
+                    {inlineError && (
+                      <p className="rounded border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-rose-700 dark:text-rose-300">
+                        {inlineError}
+                      </p>
+                    )}
+                    {!inlineError && baseUrlHint && (
+                      <p className="text-amber-700 dark:text-amber-300">{baseUrlHint}</p>
+                    )}
+                    {!inlineError && keyHint && (
+                      <p className="text-amber-700 dark:text-amber-300">{keyHint}</p>
+                    )}
+                  </div>
+                )}
                 {source.type === 'sub2api' && (
                   <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem]">
                     <input
