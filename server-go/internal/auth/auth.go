@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +32,22 @@ const (
 	accountDisabledMessage = "账号已被禁用，请联系管理员。"
 	rateLimit              = 5
 	rateWindow             = 60 * time.Second
-	bcryptCost             = 10 // matches the Node bcrypt cost; verifies $2a/$2b/$2y
 )
+
+// bcryptCost is the bcrypt cost factor used when hashing new passwords. Higher
+// is slower (more resistant to offline brute force if the DB leaks) but adds
+// latency to every register/login. Default 12 (~250ms) is the 2026-era floor;
+// operators can override via the BCRYPT_COST env var (clamped to 4-31).
+// Verification of existing hashes accepts any cost embedded in the $2b$ string.
+var bcryptCost = func() int {
+	const defaultCost = 12
+	if v := os.Getenv("BCRYPT_COST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= bcrypt.MinCost && n <= 31 {
+			return n
+		}
+	}
+	return defaultCost
+}()
 
 type ctxKey int
 
