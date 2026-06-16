@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import { namespacedStorageKey } from '../lib/shared/auth'
 import type { AgentConversation, AgentPlatformId, AppSettings, TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
@@ -101,6 +101,51 @@ export async function deleteImageIfUnreferenced(imageId: string) {
   } catch {
     // 清理是内存/存储优化，失败不影响替换结果。
   }
+}
+
+// localStorage-backed persist storage that surfaces quota-exceeded write
+// failures instead of letting zustand/middleware swallow them silently.
+// Without this, a single oversized state write (e.g. accumulated agent drafts
+// + customProviders) fails under the 5MB cap and the user's settings silently
+// revert to defaults on next reload with no indication anything went wrong.
+let lastStorageFullWarnAt = 0
+function warnStorageFull() {
+  const now = Date.now()
+  // Debounce: at most one toast per 30s — state writes are high-frequency.
+  if (now - lastStorageFullWarnAt < 30_000) return
+  lastStorageFullWarnAt = now
+  // useStore is defined below in this module; by the time a write runs the
+  // store is already initialized, so this closure resolves correctly.
+  try {
+    useStore.getState().showToast('设置未能保存：浏览器本地存储空间可能已满，请清理历史记录或导出后重置。', 'error')
+  } catch {
+    // Store not ready yet (e.g. during initial hydration); skip silently.
+  }
+}
+
+const localStorageStateStorage = {
+  getItem: (name: string) => {
+    try {
+      return localStorage.getItem(name)
+    } catch {
+      return null
+    }
+  },
+  setItem: (name: string, value: string) => {
+    try {
+      localStorage.setItem(name, value)
+    } catch {
+      // QuotaExceededError or SecurityError (private mode / disabled storage).
+      warnStorageFull()
+    }
+  },
+  removeItem: (name: string) => {
+    try {
+      localStorage.removeItem(name)
+    } catch {
+      // ignore
+    }
+  },
 }
 
 export const useStore = create<AppState>()(
@@ -560,6 +605,7 @@ export const useStore = create<AppState>()(
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
       merge: mergePersistedState,
+      storage: createJSONStorage(() => localStorageStateStorage),
     },
   ),
 )
