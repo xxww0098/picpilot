@@ -3,6 +3,7 @@ package imageproc
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -107,5 +108,26 @@ func TestDecodeBase64StripsDataURL(t *testing.T) {
 	}
 	if !bytes.Equal(got, data) {
 		t.Fatal("decoded bytes differ from original")
+	}
+}
+
+func TestDecodeRejectsDecompressionBomb(t *testing.T) {
+	// 4097*4097 = 16_793_609 > maxDecodePixels (4096*4096 = 16_777_216): must be
+	// rejected by the header check without allocating the full pixel buffer.
+	data := sampleJPEG(t, 4097, 4097)
+	if _, err := Decode(data); !errors.Is(err, ErrImageTooLarge) {
+		t.Fatalf("Decode(4097x4097) err = %v, want ErrImageTooLarge", err)
+	}
+}
+
+func TestDecodeAcceptsAtPixelLimit(t *testing.T) {
+	// 4096*4096 sits exactly at the cap and must still decode successfully.
+	data := sampleJPEG(t, 4096, 4096)
+	img, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode(4096x4096) err = %v, want nil", err)
+	}
+	if img.Bounds().Dx() != 4096 || img.Bounds().Dy() != 4096 {
+		t.Fatalf("decoded dims = %v want 4096x4096", img.Bounds())
 	}
 }

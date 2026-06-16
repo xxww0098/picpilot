@@ -153,6 +153,7 @@ func main() {
 	upstreamConfigured := currentUpstreamConfigured(activeUpstream, reverseService)
 
 	r := chi.NewRouter()
+	r.Use(httpx.SecurityHeaders) // baseline CSP/nosniff/frame-ancestors on every response
 	r.Use(middleware.RealIP)     // real client IP from X-Real-IP (behind Caddy) for rate limiting
 	r.Use(middleware.Recoverer)  // panic -> 500, never crash the server
 	r.Use(requestLogger(logger)) // structured access log for /api/* (transparent to streaming)
@@ -180,7 +181,7 @@ func main() {
 	// telemetry event recorder + notifications; also runs the event-retention purge.
 	telemetryMod := telemetry.New(database, authMod, logger, cfg.EventRetentionDays)
 	telemetryMod.Register(r)
-	telemetryMod.StartPurge()
+	telemetryMod.StartPurge(appCtx)
 	// admin diagnostics: failure-summary, upstream-health (CLIProxy log), diagnostics bundle.
 	diagnostics.New(database, cfg, proxyQueue, settingsProvider, authMod, logger).Register(r)
 

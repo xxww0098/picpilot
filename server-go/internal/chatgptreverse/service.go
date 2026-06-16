@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -93,6 +94,10 @@ func New(cfg *config.Config, store *Store, logger *slog.Logger, sp ...*settings.
 	base.MaxIdleConns = 100
 	base.IdleConnTimeout = 90 * time.Second
 	base.TLSHandshakeTimeout = 20 * time.Second
+	// Bound the dial phase so an unreachable chatgpt.com (or proxy) does not
+	// hang requests indefinitely; the streaming response itself stays unbounded
+	// (set per-request via context where needed).
+	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	return &Service{
 		cfg:         cfg,
 		store:       store,
@@ -391,7 +396,12 @@ func (s *Service) postCodex(ctx context.Context, payload []byte) (*http.Response
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			release()
-			last = fmt.Errorf("上游暂不可用：HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			// Log the upstream body for diagnostics, but do not embed it in the
+			// user-facing error (it may leak upstream internals).
+			if s.logger != nil {
+				s.logger.Warn("chatgpt reverse upstream transient error", "scope", "reverse", "status", resp.StatusCode, "body", strings.TrimSpace(string(body)))
+			}
+			last = fmt.Errorf("上游暂不可用：HTTP %d", resp.StatusCode)
 			continue
 		}
 		// A Cloudflare challenge 403 is transient and correlated with this account's

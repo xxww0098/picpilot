@@ -10,6 +10,7 @@ package imageproc
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"image"
 	_ "image/gif"  // register gif decoder
 	_ "image/jpeg" // register jpeg decoder
@@ -24,13 +25,36 @@ import (
 
 var dataURLRe = regexp.MustCompile(`^data:image/[a-zA-Z0-9.+-]+;base64,`)
 
+// maxDecodePixels caps the decoded pixel dimensions accepted by Decode. A
+// hostile "decompression bomb" can encode a tiny (<50MB) PNG/WebP that expands
+// into gigabytes of uncompressed pixel buffer; reading the header first and
+// rejecting oversized frames bounds peak memory regardless of input bytes.
+// 4096*4096 ≈ 16.7M pixels (~67MB RGBA) is well above any legitimate gallery
+// upload (which is resized down to maxLong) yet small enough to neutralize bombs.
+const maxDecodePixels = 4096 * 4096
+
+// ErrImageTooLarge is returned by Decode when the source image's pixel
+// dimensions exceed maxDecodePixels.
+var ErrImageTooLarge = errors.New("image dimensions exceed the maximum allowed size")
+
 // DecodeBase64 strips an optional data-URL prefix and decodes standard base64.
 func DecodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(dataURLRe.ReplaceAllString(s, ""))
 }
 
-// Decode decodes jpeg/png/gif/webp bytes into an image.
+// Decode decodes jpeg/png/gif/webp bytes into an image. It rejects images
+// whose decoded pixel dimensions exceed maxDecodePixels to prevent
+// decompression-bomb memory exhaustion.
 func Decode(data []byte) (image.Image, error) {
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+		if int64(cfg.Width)*int64(cfg.Height) > maxDecodePixels {
+			return nil, ErrImageTooLarge
+		}
+	} else {
+		// DecodeConfig failed (unknown format, truncated header, etc.); fall
+		// through to Decode so the original error surfaces unchanged.
+		_ = err
+	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	return img, err
 }

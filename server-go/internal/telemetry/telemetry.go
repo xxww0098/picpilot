@@ -3,6 +3,7 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -41,13 +42,21 @@ func (m *Module) Register(r chi.Router) {
 }
 
 // StartPurge runs an immediate purge and then every 24h (matches the TS interval).
-func (m *Module) StartPurge() {
+// StartPurge runs an immediate purge and then every 24h (matches the TS
+// interval). The loop exits when ctx is cancelled so it does not leak when the
+// server shuts down (or if StartPurge is ever called more than once).
+func (m *Module) StartPurge(ctx context.Context) {
 	m.purge()
 	go func() {
 		t := time.NewTicker(24 * time.Hour)
 		defer t.Stop()
-		for range t.C {
-			m.purge()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				m.purge()
+			}
 		}
 	}()
 }

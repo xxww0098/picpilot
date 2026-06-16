@@ -118,9 +118,13 @@ func normalizeErrorBody(body string) string {
 	}
 	var js any
 	if json.Unmarshal([]byte(body), &js) == nil {
+		// Structured upstream error (e.g. OpenAI's {"error":{"message":...}}) —
+		// safe and useful to surface to the client.
 		return body
 	}
-	return jsonError("upstream_error", body)
+	// Non-JSON body (raw HTML error pages, reverse-proxy debug info, etc.) may
+	// leak internal details; replace it with a fixed message.
+	return jsonError("upstream_error", "上游请求失败。")
 }
 
 func upstreamHTTPError(resp *http.Response) error {

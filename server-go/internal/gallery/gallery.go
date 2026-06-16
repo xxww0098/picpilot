@@ -7,6 +7,7 @@ package gallery
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -80,6 +81,9 @@ func (m *Module) process(b64 string) (*processed, int, string) {
 	}
 	p, err := imageproc.ProcessPublic(raw, config.MaxImageLongEdge, config.ThumbLongEdge)
 	if err != nil {
+		if errors.Is(err, imageproc.ErrImageTooLarge) {
+			return nil, http.StatusBadRequest, "图片尺寸过大（宽×高超过 4096×4096），请缩小后重试。"
+		}
 		return nil, http.StatusBadRequest, "无法处理这张图片，请换一张试试。"
 	}
 	return &processed{id: idutil.UUIDv4(), final: p.Final, thumb: p.Thumb, width: p.Width, height: p.Height}, 0, ""
@@ -417,6 +421,10 @@ func (m *Module) handleAvatarUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := imageproc.ProcessAvatar(raw, config.AvatarSize)
 	if err != nil {
+		if errors.Is(err, imageproc.ErrImageTooLarge) {
+			httpx.Error(w, http.StatusBadRequest, "图片尺寸过大（宽×高超过 4096×4096），请缩小后重试。")
+			return
+		}
 		httpx.Error(w, http.StatusBadRequest, "无法解析这张图片，请换一张试试。")
 		return
 	}

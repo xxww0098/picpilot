@@ -273,8 +273,17 @@ func (a *Auth) Register(r chi.Router) {
 	})
 }
 
-func decodeJSON(r *http.Request, dst any) {
-	_ = json.NewDecoder(r.Body).Decode(dst)
+// maxAuthJSONBytes caps request body size for auth endpoints. Auth payloads are
+// tiny (username/password/invite/displayName); capping them prevents an
+// unauthenticated attacker from exhausting memory via oversized POSTs to the
+// public /api/auth/login and /api/auth/register routes.
+const maxAuthJSONBytes int64 = 1 << 20 // 1 MiB
+
+// decodeJSON decodes a size-capped JSON request body into dst. It returns an
+// error when the body is missing, malformed, or exceeds maxAuthJSONBytes.
+func decodeJSON(r *http.Request, dst any) error {
+	reader := http.MaxBytesReader(nil, r.Body, maxAuthJSONBytes)
+	return json.NewDecoder(reader).Decode(dst)
 }
 
 func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +294,10 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct{ Username, Password string }
-	decodeJSON(r, &body)
+	if err := decodeJSON(r, &body); err != nil {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "请求体过大或格式错误。")
+		return
+	}
 	if body.Username == "" || body.Password == "" {
 		httpx.Error(w, http.StatusBadRequest, "请输入用户名和密码。")
 		return
@@ -329,7 +341,10 @@ func (a *Auth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw struct{ Invite, Username, Password string }
-	decodeJSON(r, &raw)
+	if err := decodeJSON(r, &raw); err != nil {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "请求体过大或格式错误。")
+		return
+	}
 	invite := strings.TrimSpace(raw.Invite)
 	username := strings.TrimSpace(raw.Username)
 	password := raw.Password
@@ -486,7 +501,10 @@ func (a *Auth) handleProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		DisplayName any `json:"displayName"`
 	}
-	decodeJSON(r, &body)
+	if err := decodeJSON(r, &body); err != nil {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "请求体过大或格式错误。")
+		return
+	}
 	name, errMsg := normalizeDisplayName(body.DisplayName)
 	if errMsg != "" {
 		httpx.Error(w, http.StatusBadRequest, errMsg)

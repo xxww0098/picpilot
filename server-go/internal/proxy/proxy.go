@@ -382,7 +382,8 @@ func (p *Proxy) handleUpstreamPreflight(w http.ResponseWriter, r *http.Request) 
 	}
 	target, err := activeUpstream.ResolveProxy("/api-proxy/v1/models", "")
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, err.Error())
+		p.logger.Warn("upstream preflight resolve failed", "scope", "proxy", "err", err.Error())
+		httpx.Error(w, http.StatusInternalServerError, "上游 API 配置异常，请联系管理员。")
 		return
 	}
 	if target == nil {
@@ -394,13 +395,15 @@ func (p *Proxy) handleUpstreamPreflight(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, err.Error())
+		p.logger.Warn("upstream preflight request build failed", "scope", "proxy", "err", err.Error())
+		httpx.Error(w, http.StatusInternalServerError, "上游 API 预检请求构造失败。")
 		return
 	}
 	req.Header = buildUpstreamHeaders(r.Header, activeUpstream.APIKey)
 	resp, err := (&http.Client{Transport: p.transport}).Do(req)
 	if err != nil {
-		httpx.Error(w, http.StatusBadGateway, "上游 API 预检失败："+err.Error())
+		p.logger.Warn("upstream preflight request failed", "scope", "proxy", "err", err.Error())
+		httpx.Error(w, http.StatusBadGateway, "上游 API 预检失败，请稍后重试。")
 		return
 	}
 	defer resp.Body.Close()
@@ -414,7 +417,8 @@ func (p *Proxy) handleUpstreamPreflight(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusServiceUnavailable, "上游 API 被 Cloudflare 拦截，已暂停本次出图。请稍后重试或检查 CLIProxy 账号状态。")
 		return
 	}
-	httpx.Error(w, http.StatusServiceUnavailable, "上游 API 预检失败：HTTP "+strconv.Itoa(resp.StatusCode)+" "+truncateText(string(body), 300))
+	p.logger.Warn("upstream preflight non-2xx", "scope", "proxy", "status", resp.StatusCode, "body", truncateText(string(body), 300))
+	httpx.Error(w, http.StatusServiceUnavailable, "上游 API 预检失败（HTTP "+strconv.Itoa(resp.StatusCode)+"），请稍后重试或检查上游配置。")
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
