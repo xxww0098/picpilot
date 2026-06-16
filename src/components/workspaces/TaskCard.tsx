@@ -82,7 +82,9 @@ function TaskCard({
   const [swipeDirection, setSwipeDirection] = useState<-1 | 0 | 1>(0)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
-  const settings = useStore((s) => s.settings)
+  // Subscribe only to the single settings flag this card renders, not the whole
+  // settings object — otherwise changing any setting re-renders every card.
+  const alwaysShowRetryButton = useStore((s) => s.settings.alwaysShowRetryButton)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
   const streamPreviewSlots = useStore((s) => s.streamPreviewSlots[task.id])
   const regeneratingImageIndex = useStore((s) => s.regeneratingImageSlots[task.id] ?? null)
@@ -813,7 +815,7 @@ function TaskCard({
             >
               {/* 失败任务的重试已移到左上角（就地重试）；这里仅在"始终显示重试"开启且非失败态时，
                   提供"重新生成（新建卡片）"入口，避免与失败重试重复。 */}
-              {settings.alwaysShowRetryButton && task.status !== 'error' && (
+              {alwaysShowRetryButton && task.status !== 'error' && (
                 <TaskActionButton
                   tooltip="重新生成"
                   onClick={() => retryTask(task)}
