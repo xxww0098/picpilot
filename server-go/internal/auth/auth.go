@@ -318,6 +318,15 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "请输入用户名和密码。")
 		return
 	}
+	// Per-username rate limit (in addition to the IP limit above): defends
+	// against targeted brute force against one account even when the attacker
+	// rotates IPs (or forges X-Real-IP when not behind Caddy). Keyed with a
+	// prefix so it never collides with an IP entry.
+	if a.isRateLimited("user:" + body.Username) {
+		a.logger.Warn("login rate limited", "scope", "auth", "username", body.Username)
+		httpx.Error(w, http.StatusTooManyRequests, "该账号登录失败次数过多，请稍后再试。")
+		return
+	}
 	var (
 		id, username, hash    string
 		isAdmin, disabled, tv int
