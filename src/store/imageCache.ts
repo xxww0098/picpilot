@@ -12,6 +12,12 @@ const thumbnailBackfillRunningIds = new Set<string>()
 const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
 let thumbnailBackfillScheduled = false
 const MAX_IMAGE_CACHE_ENTRIES = 8
+// Cap the image cache by total bytes too, not just entry count. Full-image
+// dataUrls are large (a single 4K PNG base64 can be 25MB+ as a UTF-16 string);
+// 8 entries could otherwise hold 200MB+ resident. ~64MB is enough for the
+// active task's input/output set while bounding peak memory on mobile PWAs.
+const MAX_IMAGE_CACHE_BYTES = 64 * 1024 * 1024
+let imageCacheBytes = 0
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 
@@ -24,14 +30,37 @@ export function getCachedImage(id: string): string | undefined {
   return dataUrl
 }
 
+// Approximate heap bytes for a dataUrl string (UTF-16: 2 bytes/char). Used only
+// to bound the cache; precision is not required, only a sane upper bound.
+function dataUrlByteSize(dataUrl: string): number {
+  return dataUrl.length * 2
+}
+
 export function cacheImage(id: string, dataUrl: string) {
-  imageCache.delete(id)
+  // If refreshing an existing entry, account for the size delta first.
+  const prev = imageCache.get(id)
+  if (prev !== undefined) {
+    imageCacheBytes -= dataUrlByteSize(prev)
+    imageCache.delete(id)
+  }
+  const incomingBytes = dataUrlByteSize(dataUrl)
   imageCache.set(id, dataUrl)
-  while (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
+  imageCacheBytes += incomingBytes
+  // Evict oldest entries while over either the entry or the byte budget. A
+  // single oversized entry can exceed the byte cap on its own; we still keep it
+  // (it was just requested) but drop everything older.
+  while (
+    (imageCache.size > MAX_IMAGE_CACHE_ENTRIES || imageCacheBytes > MAX_IMAGE_CACHE_BYTES) &&
+    imageCache.size > 1
+  ) {
     const oldestKey = imageCache.keys().next().value
     if (oldestKey == null) break
+    const evicted = imageCache.get(oldestKey)
+    if (evicted !== undefined) imageCacheBytes -= dataUrlByteSize(evicted)
     imageCache.delete(oldestKey)
   }
+  // Guard against negative drift from estimation rounding.
+  if (imageCacheBytes < 0) imageCacheBytes = 0
 }
 
 function getCachedThumbnail(id: string) {
@@ -107,6 +136,9 @@ function notifyImageThumbnail(id: string, thumbnail: { dataUrl: string; width?: 
 }
 
 export function evictCachedImage(id: string) {
+  const removed = imageCache.get(id)
+  if (removed !== undefined) imageCacheBytes -= dataUrlByteSize(removed)
+  if (imageCacheBytes < 0) imageCacheBytes = 0
   imageCache.delete(id)
   thumbnailCache.delete(id)
 }
@@ -120,6 +152,7 @@ export function resetImageCacheEntry(id: string) {
 
 export function clearImageCaches() {
   imageCache.clear()
+  imageCacheBytes = 0
   thumbnailCache.clear()
   thumbnailBackfillIds.clear()
   thumbnailBackfillRunningIds.clear()
