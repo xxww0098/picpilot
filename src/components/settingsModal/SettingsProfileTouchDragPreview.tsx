@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { DragHandleIcon } from '../icons'
+import { DragHandleIcon } from '../ui/icons'
 import type { ProfileTouchDragPreview } from './useProfileDrag'
 
 // 触摸拖拽连接配置时跟手显示的预览卡片（由 SettingsModal 抽出，JSX 原样搬移、渲染等价）。

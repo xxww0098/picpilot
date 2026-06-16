@@ -15,7 +15,7 @@ import {
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { showAppToast } from '../../lib/ui/dialog'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/ui/clipboard'
-import ModalShell from '../ModalShell'
+import ModalShell from '../ui/ModalShell'
 
 const PAGE_SIZE = 50
 const EXPORT_MAX_DAYS = 31

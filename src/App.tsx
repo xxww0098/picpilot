@@ -6,28 +6,28 @@ import { mergeImportedSettings } from './lib/shared/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/config/customProviderConfigUrl'
 import { logger, serializeError } from './lib/shared/logger'
 import { useAuth } from './contexts/AuthProvider'
-import Header from './components/Header'
-import SearchBar from './components/SearchBar'
-import TaskGrid from './components/TaskGrid'
-import QueueBanner from './components/QueueBanner'
-import InputBar from './components/InputBar'
-import DetailModal from './components/DetailModal'
-import Lightbox from './components/Lightbox'
-import ConfirmDialog from './components/ConfirmDialog'
-import PromptDialog from './components/PromptDialog'
-import Toast from './components/Toast'
-import ImageContextMenu from './components/ImageContextMenu'
-import LoginModal from './components/LoginModal'
-import RegisterModal from './components/RegisterModal'
+import Header from './components/workspaces/Header'
+import SearchBar from './components/workspaces/SearchBar'
+import TaskGrid from './components/workspaces/TaskGrid'
+import QueueBanner from './components/workspaces/QueueBanner'
+import InputBar from './components/workspaces/InputBar'
+import DetailModal from './components/modals/DetailModal'
+import Lightbox from './components/modals/Lightbox'
+import ConfirmDialog from './components/ui/ConfirmDialog'
+import PromptDialog from './components/ui/PromptDialog'
+import Toast from './components/ui/Toast'
+import ImageContextMenu from './components/workspaces/ImageContextMenu'
+import LoginModal from './components/modals/LoginModal'
+import RegisterModal from './components/modals/RegisterModal'
 import { useGlobalClickSuppression } from './lib/ui/clickSuppression'
 
-const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
-const VideoWorkspace = lazy(() => import('./components/VideoWorkspace'))
+const AgentWorkspace = lazy(() => import('./components/workspaces/AgentWorkspace'))
+const VideoWorkspace = lazy(() => import('./components/workspaces/VideoWorkspace'))
 const WorkflowCanvas = lazy(() => import('./components/workflow/WorkflowCanvas'))
-const SettingsModal = lazy(() => import('./components/SettingsModal'))
-const LogPanel = lazy(() => import('./components/LogPanel'))
+const SettingsModal = lazy(() => import('./components/modals/SettingsModal'))
+const LogPanel = lazy(() => import('./components/modals/LogPanel'))
 // 遮罩编辑器较重（canvas + 图像处理），首屏不需要：首次打开时再加载，加载后保持挂载（行为同此前的常驻挂载）。
-const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
+const MaskEditorModal = lazy(() => import('./components/modals/MaskEditorModal'))
 
 let customProviderConfigUrlImportStarted = false
 

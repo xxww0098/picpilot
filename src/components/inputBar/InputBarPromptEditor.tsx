@@ -1,4 +1,4 @@
-import { CloseIcon } from '../icons'
+import { CloseIcon } from '../ui/icons'
 import { AtImageOptionThumb, type AtImageOption } from './atImageOptions'
 import type { useInputBarPromptEditor } from './useInputBarPromptEditor'
 

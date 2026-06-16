@@ -1,5 +1,5 @@
 import type { TouchEvent as ReactTouchEvent } from 'react'
-import { ChevronDownIcon, EditIcon, SidebarLeftIcon } from '../icons'
+import { ChevronDownIcon, EditIcon, SidebarLeftIcon } from '../ui/icons'
 
 export default function AgentMobileTopBar({
   visible,

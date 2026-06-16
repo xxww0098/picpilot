@@ -2,7 +2,7 @@ import { dismissAllTooltips } from '../../lib/ui/tooltipDismiss'
 import { useHintTooltip } from '../../hooks/useHintTooltip'
 import { getProviderCapabilities } from '../../lib/image/imageProviderCapabilities'
 import { getOutputFormatSelectOptions } from '../../lib/params/outputFormats'
-import Select from '../Select'
+import Select from '../ui/Select'
 import ButtonTooltip from './ButtonTooltip'
 import type { OutputImageFormat, TaskParams } from '../../types'
 

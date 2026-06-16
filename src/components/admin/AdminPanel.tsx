@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import PanelShell from '../PanelShell'
+import PanelShell from '../ui/PanelShell'
 import Overview from './Overview'
 import UserList from './UserList'
 import TeamSettings from './TeamSettings'

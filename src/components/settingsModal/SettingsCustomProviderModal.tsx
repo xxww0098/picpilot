@@ -1,7 +1,7 @@
 import { type RefObject } from 'react'
-import ModalShell from '../ModalShell'
-import ViewportTooltip from '../ViewportTooltip'
-import { CloseIcon, LinkIcon } from '../icons'
+import ModalShell from '../ui/ModalShell'
+import ViewportTooltip from '../ui/ViewportTooltip'
+import { CloseIcon, LinkIcon } from '../ui/icons'
 import type { CustomProviderForm } from './constants'
 
 // 自定义服务商导入/编辑弹窗（由 SettingsModal 抽出）。表单状态、tooltip 计时与各 handler

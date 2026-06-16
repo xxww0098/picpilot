@@ -1,6 +1,6 @@
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, SetStateAction, TouchEvent as ReactTouchEvent } from 'react'
 import type { AgentConversation, AgentPlatformId } from '../../types'
-import { EditIcon, SidebarLeftIcon } from '../icons'
+import { EditIcon, SidebarLeftIcon } from '../ui/icons'
 import ConversationListItem from './ConversationListItem'
 import { groupConversationsByTime } from '../../lib/agent/agentConversationGroups'
 

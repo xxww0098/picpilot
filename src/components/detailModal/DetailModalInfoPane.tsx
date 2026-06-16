@@ -1,5 +1,5 @@
 import { ActualValueBadge, DetailParamValue } from '../../lib/params/paramDisplay'
-import { CloseIcon, CopyIcon, EditIcon, TrashIcon } from '../icons'
+import { CloseIcon, CopyIcon, EditIcon, TrashIcon } from '../ui/icons'
 import type { AppState } from '../../store'
 import type { TaskImageSource, TaskParams, TaskRecord } from '../../types'
 

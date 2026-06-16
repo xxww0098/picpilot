@@ -1,8 +1,8 @@
 import { type ChangeEvent, type RefObject } from 'react'
 import { exportData } from '../../store'
 import type { AppState } from '../../store'
-import { Checkbox } from '../Checkbox'
-import { ExportIcon, ImportIcon, TrashIcon } from '../icons'
+import { Checkbox } from '../ui/Checkbox'
+import { ExportIcon, ImportIcon, TrashIcon } from '../ui/icons'
 
 // 「数据」设置页（由 SettingsModal 抽出）。复选框状态与导入/清除处理器仍由父组件持有透传，
 // props 名与父组件变量一一对应，故内部 JSX 与原实现逐字节一致，行为严格等价。

@@ -1,5 +1,5 @@
 import type { AgentPlatformStarterPrompt } from '../../lib/platforms/types'
-import { WrenchIcon } from '../icons'
+import { WrenchIcon } from '../ui/icons'
 
 export default function AgentStarterPanel({
   label,

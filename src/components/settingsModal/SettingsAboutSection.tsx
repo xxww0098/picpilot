@@ -3,7 +3,7 @@ import { useAuth } from '../../contexts/AuthProvider'
 import { useStore } from '../../store'
 import { formatBytes } from '../../lib/ui/format'
 import { showAppToast } from '../../lib/ui/dialog'
-import { CopyIcon } from '../icons'
+import { CopyIcon } from '../ui/icons'
 
 // 「关于」设置页：应用标识 + 结合当前功能（服务能力、账户、本地数据）的运行状态概览。
 export default function SettingsAboutSection() {

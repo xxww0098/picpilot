@@ -1,5 +1,5 @@
 import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import ViewportTooltip from '../ViewportTooltip'
+import ViewportTooltip from '../ui/ViewportTooltip'
 
 // 带 hover/focus tooltip 的图标按钮（由 AgentWorkspace 抽出，供会话列表项与消息操作栏共用）。
 export default function AgentActionButton({

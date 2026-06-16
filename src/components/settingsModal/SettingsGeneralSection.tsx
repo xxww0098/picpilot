@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import Select from '../Select'
+import Select from '../ui/Select'
 import type { AppSettings } from '../../types'
 
 // 「习惯配置」设置页：纯展示 + 通过 commitSettings 写回，无私有状态。

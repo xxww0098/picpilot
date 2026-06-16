@@ -1,6 +1,6 @@
 import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent, type TouchEvent as ReactTouchEvent } from 'react'
 import type { AgentConversation } from '../../types'
-import { EditIcon, TrashIcon } from '../icons'
+import { EditIcon, TrashIcon } from '../ui/icons'
 import AgentActionButton from './AgentActionButton'
 import AgentPlatformBadge from './AgentPlatformBadge'
 

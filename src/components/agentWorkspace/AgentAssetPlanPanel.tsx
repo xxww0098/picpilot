@@ -1,6 +1,6 @@
 import type { AgentAssetStatus, AgentConversation, TaskRecord } from '../../types'
 import { getAgentPlatformAssetSlot, getAgentPlatformDefinition } from '../../lib/platforms/registry'
-import { PhotoIcon } from '../icons'
+import { PhotoIcon } from '../ui/icons'
 
 function getTaskAssetStatus(task: TaskRecord): AgentAssetStatus {
   return task.assetStatus ?? 'candidate'

@@ -1,4 +1,4 @@
-import { ChevronDownIcon } from '../icons'
+import { ChevronDownIcon } from '../ui/icons'
 
 export default function AgentMobilePullIndicator({
   pullDownOffset,

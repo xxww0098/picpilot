@@ -10,7 +10,7 @@ import { formatRelative } from '../../lib/ui/format'
 import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
-import Avatar from '../Avatar'
+import Avatar from '../ui/Avatar'
 import QueryState from './QueryState'
 
 export default function UserList() {

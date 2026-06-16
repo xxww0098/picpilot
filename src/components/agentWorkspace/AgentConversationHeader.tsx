@@ -1,5 +1,5 @@
 import type { AgentPlatformId } from '../../types'
-import { EditIcon, HistoryIcon, PhotoIcon, WrenchIcon } from '../icons'
+import { EditIcon, HistoryIcon, PhotoIcon, WrenchIcon } from '../ui/icons'
 import AgentPlatformBadge from './AgentPlatformBadge'
 
 export default function AgentConversationHeader({

@@ -9,9 +9,9 @@ import {
 } from '../../lib/shared/apiProfiles'
 import type { AppState } from '../../store'
 import type { ApiProfile, AppSettings, CustomProviderDefinition } from '../../types'
-import Select from '../Select'
-import ViewportTooltip from '../ViewportTooltip'
-import { ChevronDownIcon, CopyIcon, DragHandleIcon, LinkIcon, PlusIcon, TrashIcon } from '../icons'
+import Select from '../ui/Select'
+import ViewportTooltip from '../ui/ViewportTooltip'
+import { ChevronDownIcon, CopyIcon, DragHandleIcon, LinkIcon, PlusIcon, TrashIcon } from '../ui/icons'
 
 // 「API 与模型」设置页（由 SettingsModal 抽出）。配置下拉菜单、tooltip、拖拽与高级选项的
 // 状态和处理器仍由父组件持有，以同名 props 透传，故内部 JSX 与原实现逐字节一致、行为严格等价。
