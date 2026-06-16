@@ -238,6 +238,54 @@ export function clearImages(): Promise<undefined> {
   )
 }
 
+/**
+ * Returns true when an error is an IndexedDB quota / storage-exhausted failure.
+ * Browsers surface this as a DOMException whose name is `QuotaExceededError`
+ * (write) or `AbortError` with a quota message (transaction abort). We match by
+ * name to stay robust across engines.
+ */
+export function isQuotaExceededError(err: unknown): boolean {
+  if (err == null) return false
+  const name = (err as { name?: string }).name
+  if (name === 'QuotaExceededError' || name === 'QuotaExceeded') return true
+  // Some engines abort the whole transaction with a generic error when a put
+  // exceeds quota; fall back to a message sniff.
+  const msg = (err as { message?: string }).message ?? ''
+  return /quota|storage|exceeded/i.test(msg)
+}
+
+/**
+ * Removes the `count` oldest images (and their thumbnails) from the store,
+ * ranked by `createdAt`. Returns the ids that were actually removed. This is a
+ * last-resort eviction used when a write hits the quota limit — callers should
+ * have already tried deleting orphaned images first.
+ */
+export async function evictOldestImages(count: number): Promise<string[]> {
+  if (count <= 0) return []
+  const db = await openDB()
+  return await new Promise<string[]>((resolve, reject) => {
+    let removedIds: string[] = []
+    const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
+    const images = tx.objectStore(STORE_IMAGES)
+    const thumbnails = tx.objectStore(STORE_THUMBNAILS)
+    const req = images.getAll()
+    req.onsuccess = () => {
+      const all = (req.result as StoredImage[]) ?? []
+      // Oldest first; entries without createdAt are treated as oldest.
+      all.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      const victims = all.slice(0, count)
+      removedIds = victims.map((img) => img.id)
+      for (const img of victims) {
+        images.delete(img.id)
+        thumbnails.delete(img.id)
+      }
+    }
+    tx.oncomplete = () => resolve(removedIds)
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
+  })
+}
+
 // ===== Videos =====
 // 视频缓存到浏览器（IndexedDB），与图片分库；mp4 以 Blob 存储，播放用 URL.createObjectURL。
 
@@ -366,4 +414,22 @@ async function safeCreateImageThumbnail(dataUrl: string): Promise<Partial<Omit<S
   } catch {
     return {}
   }
+}
+
+/**
+ * Thrown when an image cannot be persisted even after reclaiming space
+ * (orphan eviction + oldest-image eviction + retry). Carries `isStorageFull`
+ * so callers can distinguish "the image was generated but we could not save it"
+ * from a genuine generation failure — the upstream credit was already spent.
+ */
+export class StorageFullError extends Error {
+  readonly isStorageFull = true
+  constructor(message = '浏览器存储已满，无法保存这张图片。请清理历史记录后重试。') {
+    super(message)
+    this.name = 'StorageFullError'
+  }
+}
+
+export function isStorageFullError(err: unknown): boolean {
+  return err instanceof StorageFullError || (err as { isStorageFull?: boolean })?.isStorageFull === true
 }

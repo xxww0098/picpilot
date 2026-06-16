@@ -1,7 +1,7 @@
-import type { AppMode, TaskRecord } from '../types'
+import type { AppMode, StoredImage, TaskRecord } from '../types'
 import { getCachedAuthUser } from '../lib/shared/auth'
 import { fetchQueueStats } from '../lib/server/queueApi'
-import { deleteImage, deleteVideo, storeImage } from '../lib/shared/db'
+import { deleteImage, deleteVideo, evictOldestImages, getAllImageIds, isQuotaExceededError, storeImage, StorageFullError } from '../lib/shared/db'
 import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/image/api'
 import { logger, serializeError } from '../lib/shared/logger'
 import { getImageApiFanoutConcurrency } from '../lib/image/imageApiShared'
@@ -187,6 +187,61 @@ export async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   }
 }
 
+/**
+ * Persist a generated image, reclaiming IndexedDB space if the store is full.
+ *
+ * Without this wrapper a `QuotaExceededError` would bubble up from `storeImage`
+ * and the caller would treat it as a generation failure — even though the image
+ * was already produced upstream (credit spent). Instead we:
+ *   1. try to save normally;
+ *   2. on quota error, delete orphaned images (no task/draft references) and retry;
+ *   3. still full — evict the oldest images by createdAt and retry;
+ *   4. still full — throw {@link StorageFullError} so the caller can keep the
+ *      generated image in memory and tell the user "storage full" rather than
+ *      "generation failed".
+ *
+ * The eviction batches are best-effort; victims also get purged from the
+ * in-memory image cache. Only `source === 'generated'` paths need reclaim;
+ * uploads/masks are small, but the wrapper is safe for all sources.
+ */
+
+/** Number of oldest images dropped in one reclaim batch. */
+const EVICT_BATCH_SIZE = 8
+
+export async function storeImageWithReclaim(
+  dataUrl: string,
+  source: NonNullable<StoredImage['source']> = 'generated',
+): Promise<string> {
+  try {
+    return await storeImage(dataUrl, source)
+  } catch (err) {
+    if (!isQuotaExceededError(err)) throw err
+    logger.warn('taskRuntime', 'IndexedDB 配额不足，开始清理孤儿图片后重试', { source })
+  }
+
+  // Reclaim pass 1: orphaned images (no task/draft/input references).
+  try {
+    const allIds = await getAllImageIds()
+    await deleteUnreferencedImageIds(allIds)
+    return await storeImage(dataUrl, source)
+  } catch (err) {
+    if (!isQuotaExceededError(err)) throw err
+    logger.warn('taskRuntime', '清理孤儿后仍不足，开始淘汰最旧图片后重试', { source })
+  }
+
+  // Reclaim pass 2: evict the oldest images regardless of references.
+  try {
+    const evicted = await evictOldestImages(EVICT_BATCH_SIZE)
+    for (const id of evicted) evictCachedImage(id)
+    return await storeImage(dataUrl, source)
+  } catch (err) {
+    if (!isQuotaExceededError(err)) throw err
+    logger.error('taskRuntime', '淘汰最旧图片后仍无法保存，存储已满', { source })
+  }
+
+  throw new StorageFullError()
+}
+
 export async function deleteUnreferencedVideoIds(videoIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(videoIds).filter(Boolean)))
   if (candidates.length === 0) return
@@ -203,7 +258,7 @@ export async function deleteUnreferencedVideoIds(videoIds: Iterable<string>) {
 
 export async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
   try {
-    const imgId = await storeImage(dataUrl, 'generated')
+    const imgId = await storeImageWithReclaim(dataUrl, 'generated')
     cacheImage(imgId, dataUrl)
 
     const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
@@ -321,7 +376,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   const actualParamsList = await readImageSizeParamsList(result.images)
   const outputIds: string[] = []
   for (const dataUrl of result.images) {
-    const imgId = await storeImage(dataUrl, 'generated')
+    const imgId = await storeImageWithReclaim(dataUrl, 'generated')
     cacheImage(imgId, dataUrl)
     outputIds.push(imgId)
   }

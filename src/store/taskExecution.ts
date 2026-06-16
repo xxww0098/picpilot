@@ -5,7 +5,8 @@ import {
   DEFAULT_VIDEO_MODEL,
   getActiveApiProfile,
 } from '../lib/shared/apiProfiles'
-import { putVideo as dbPutVideo, storeImage } from '../lib/shared/db'
+import { isStorageFullError, putVideo as dbPutVideo } from '../lib/shared/db'
+import { storeImageWithReclaim } from './taskRuntime'
 import { logger, serializeError } from '../lib/shared/logger'
 import { IMAGE_FETCH_CORS_HINT } from '../lib/image/imageApiShared'
 import { replaceImageMentionsForApi } from '../lib/ui/promptImageMentions'
@@ -321,7 +322,7 @@ export async function executeTask(taskId: string) {
     // 存储输出图片
     const outputIds: string[] = []
     for (const dataUrl of result.images) {
-      const imgId = await storeImage(dataUrl, 'generated')
+      const imgId = await storeImageWithReclaim(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
       outputIds.push(imgId)
     }
@@ -416,6 +417,22 @@ export async function executeTask(taskId: string) {
       elapsedMs: Date.now() - task.createdAt,
       error: serializeError(err),
     })
+    // 图片已生成成功但无法写入 IndexedDB（配额耗尽且自动回收空间后仍不足）：
+    // 上游额度已消耗，不应误报为"生成失败"。给出准确的"存储已满"提示。
+    if (isStorageFullError(err)) {
+      const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
+      if (latestTask.status === 'running') {
+        updateTaskInStore(taskId, {
+          status: 'error',
+          error: '图片已生成成功，但浏览器存储空间已满，未能保存。请清理历史记录后重试。',
+          customRecoverable: false,
+          finishedAt: Date.now(),
+          elapsed: Date.now() - task.createdAt,
+        })
+        useStore.getState().setDetailTaskId(taskId)
+      }
+      return
+    }
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
     if (latestTask.status !== 'running') return
     const latestCustomTaskInfo = customTaskInfo ?? (latestTask.customTaskId ? { taskId: latestTask.customTaskId } : null)
@@ -774,7 +791,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
 
     const newIds: string[] = []
     for (const dataUrl of result.images) {
-      const imgId = await storeImage(dataUrl, 'generated')
+      const imgId = await storeImageWithReclaim(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
       newIds.push(imgId)
     }
@@ -812,6 +829,11 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     return { added: newIds.length, stillFailed }
   } catch (err) {
     if (options.silent) throw err
+    if (isStorageFullError(err)) {
+      logger.error('task', '重试失败图片时存储已满', { taskId, error: serializeError(err) })
+      useStore.getState().showToast('图片已生成，但浏览器存储空间已满，未能保存。请清理历史记录后重试。', 'error')
+      return null
+    }
     const isNetworkOrTimeout = err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError')
     const message = getUserFacingErrorMessage(err, '重试失败', { apiUpstream: !isNetworkOrTimeout })
     const task = useStore.getState().tasks.find((t) => t.id === taskId)

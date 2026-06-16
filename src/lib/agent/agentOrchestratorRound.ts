@@ -15,7 +15,7 @@ import { IMAGE_FETCH_CORS_HINT } from '../image/imageApiShared'
 import { getApiRequestNetworkErrorHint, getUpstreamApiErrorHint } from '../task/taskErrorHints'
 import { getUserFacingErrorMessage } from '../shared/userFacingText'
 import { shouldRunAgentNoImageFallback } from './agentNoImageFallback'
-import { storeImage } from '../shared/db'
+import { storeImageWithReclaim } from '../../store/taskRuntime'
 import { cacheImage, ensureImageCached } from '../../store/imageCache'
 import { getCachedAuthUser } from '../shared/auth'
 import { logger, serializeError } from '../shared/logger'
@@ -206,7 +206,7 @@ export async function executeAgentRound(
       const latestTask = getState().tasks.find((task) => task.id === taskId)
       if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
 
-      const imgId = await storeImage(image.dataUrl, 'generated')
+      const imgId = await storeImageWithReclaim(image.dataUrl, 'generated')
       cacheImage(imgId, image.dataUrl)
       const actualParams: Partial<TaskParams> = {
         ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
@@ -624,7 +624,7 @@ export async function executeAgentRound(
         if (!latestConversationForImage || !latestRoundForImage) continue
         const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
         const promptRefs = await resolveReferenceImages(promptRefIds)
-        const imgId = await storeImage(image.dataUrl, 'generated')
+        const imgId = await storeImageWithReclaim(image.dataUrl, 'generated')
         cacheImage(imgId, image.dataUrl)
         const finalConversationForImage = getState().agentConversations.find((item) => item.id === conversationId)
         const finalRoundForImage = finalConversationForImage?.rounds.find((item) => item.id === roundId) ?? null
