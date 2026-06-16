@@ -123,7 +123,7 @@ func fetchSub2APIAccountsData(ctx context.Context, dataURL, adminToken string) (
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 		req.Header.Set("X-API-Key", adminToken)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return sub2APIDataPayload{}, fmt.Errorf("连接 sub2api 失败：%s", err.Error())
 	}

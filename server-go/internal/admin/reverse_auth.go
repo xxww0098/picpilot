@@ -404,7 +404,7 @@ func (m *Module) fetchCLIProxyAuthFileCandidates(ctx context.Context, sourceID s
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return nil, humanizeCLIProxyConnectError(err, cfg.APIURL)
 	}
@@ -436,7 +436,7 @@ func (m *Module) downloadCLIProxyAuthFile(ctx context.Context, sourceID, name st
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ssrfSafeClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s 失败：%w", name, humanizeCLIProxyConnectError(err, cfg.APIURL))
 	}
