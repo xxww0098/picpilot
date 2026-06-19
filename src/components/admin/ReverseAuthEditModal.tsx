@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AdminReverseAuthAccount } from '../../lib/server/adminApi'
 import ModalShell from '../ui/ModalShell'
+import Button from '../ui/Button'
 
 interface ReverseAuthEditModalProps {
   account: AdminReverseAuthAccount
@@ -76,14 +77,9 @@ export default function ReverseAuthEditModal({ account, rawJson, saving, onClose
           <h3 className="text-base font-semibold text-[hsl(var(--foreground))]">编辑逆向账号 JSON</h3>
           <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">{account.name}</p>
         </div>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={onClose}
-          className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <Button type="button" variant="outline" size="sm" disabled={saving} onClick={onClose}>
           关闭
-        </button>
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
@@ -106,31 +102,16 @@ export default function ReverseAuthEditModal({ account, rawJson, saving, onClose
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[hsl(var(--border))] px-5 py-4">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={handleFormat}
-          className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <Button type="button" variant="outline" size="sm" disabled={saving} onClick={handleFormat}>
           格式化 JSON
-        </button>
+        </Button>
         <div className="flex gap-2">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={onClose}
-            className="rounded border border-[hsl(var(--border))] px-4 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
             取消
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={handleSave}
-            className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          </Button>
+          <Button type="button" variant="primary" disabled={saving} onClick={handleSave}>
             {saving ? '保存中...' : '保存账号'}
-          </button>
+          </Button>
         </div>
       </div>
     </ModalShell>

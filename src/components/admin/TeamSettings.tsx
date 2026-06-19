@@ -5,6 +5,9 @@ import { openPromptDialog, showAppToast } from '../../lib/ui/dialog'
 import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
+import Button from '../ui/Button'
+import Input from '../ui/Input'
+import { Card } from '../ui/Card'
 import QueryState from './QueryState'
 import type { OutputImageFormat } from '../../types'
 
@@ -286,42 +289,37 @@ function CLIProxySettingCard({ apiUrl, keyConfigured, disabled, onSave }: {
   const canSave = dirty && (normalizedUrl === '' || /^https?:\/\//i.test(normalizedUrl))
 
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+    <Card className="sm:col-span-2 xl:col-span-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
         <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
           <span className="mb-1 block">CPA 服务器地址</span>
-          <input
+          <Input
             value={nextUrl}
             disabled={disabled}
             onChange={(event) => setNextUrl(event.target.value)}
             placeholder="https://cpa.example.com"
-            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full"
           />
         </label>
         <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
           <span className="mb-1 block">管理密钥</span>
-          <input
+          <Input
             value={nextKey}
             disabled={disabled}
             type="password"
             onChange={(event) => setNextKey(event.target.value)}
             placeholder={keyConfigured ? '已配置，留空保留' : '未配置'}
-            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full"
           />
         </label>
-        <button
-          type="button"
-          disabled={disabled || !canSave}
-          onClick={() => onSave(normalizedUrl, normalizedKey)}
-          className="h-9 rounded bg-[hsl(var(--primary))] px-3 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <Button variant="primary" disabled={disabled || !canSave} onClick={() => onSave(normalizedUrl, normalizedKey)}>
           保存 CPA
-        </button>
+        </Button>
       </div>
       <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
         用于在逆向账号页读取远程 CPA / CLIProxyAPI 的 OpenAI OAuth 账号列表并批量导入。
       </p>
-    </div>
+    </Card>
   )
 }
 
@@ -358,7 +356,7 @@ function ProxySettingCard({ proxyType, proxyUrl, disabled, onSave }: {
   const canSave = dirty && (!needsUrl || normalizedUrl.length > 0)
 
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+    <Card className="sm:col-span-2 xl:col-span-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
         <label className="min-w-40 text-xs font-medium text-[hsl(var(--muted-foreground))]">
           <span className="mb-1 block">出站代理类型</span>
@@ -370,7 +368,7 @@ function ProxySettingCard({ proxyType, proxyUrl, disabled, onSave }: {
               setNextType(value)
               if (!proxyTypeNeedsUrl(value)) setNextUrl('')
             }}
-            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-3 text-sm text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))] focus:ring-2 focus:ring-[hsl(var(--ring)/0.35)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {OUTBOUND_PROXY_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -379,27 +377,22 @@ function ProxySettingCard({ proxyType, proxyUrl, disabled, onSave }: {
         </label>
         <label className="min-w-0 flex-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
           <span className="mb-1 block">代理地址</span>
-          <input
+          <Input
             value={nextUrl}
             disabled={disabled || !needsUrl}
             onChange={(event) => setNextUrl(event.target.value)}
             placeholder={needsUrl ? 'host:port 或 scheme://host:port' : '当前模式不需要地址'}
-            className="h-9 w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full"
           />
         </label>
-        <button
-          type="button"
-          disabled={disabled || !canSave}
-          onClick={() => onSave(nextType, normalizedUrl)}
-          className="h-9 rounded bg-[hsl(var(--primary))] px-3 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <Button variant="primary" disabled={disabled || !canSave} onClick={() => onSave(nextType, normalizedUrl)}>
           保存代理
-        </button>
+        </Button>
       </div>
       <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
         作用于服务端访问 ChatGPT、上游 API 与图片下载；环境变量模式继续读取容器的代理环境变量。
       </p>
-    </div>
+    </Card>
   )
 }
 
@@ -410,22 +403,17 @@ function BooleanSettingCard({ label, enabled, disabled, onToggle }: {
   onToggle: () => void
 }) {
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3">
+    <Card>
       <div className="flex items-center justify-between">
         <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{label}</dt>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onToggle}
-          className="text-xs font-medium text-[hsl(var(--primary))] transition-colors hover:underline disabled:opacity-50"
-        >
+        <Button variant="link" size="xs" disabled={disabled} onClick={onToggle}>
           切换
-        </button>
+        </Button>
       </div>
       <dd className="mt-1 flex items-baseline gap-1 text-[hsl(var(--foreground))]">
         <span className="text-2xl font-semibold">{enabled ? '开启' : '关闭'}</span>
       </dd>
-    </div>
+    </Card>
   )
 }
 
@@ -445,17 +433,12 @@ function OutputFormatSettingCard({ allowedOutputFormats, disabled, onSave }: {
   const canSave = dirty && draft.length > 0
 
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3 sm:col-span-2 xl:col-span-4">
+    <Card className="sm:col-span-2 xl:col-span-4">
       <div className="flex items-center justify-between">
         <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">可选出图格式</dt>
-        <button
-          type="button"
-          disabled={disabled || !canSave}
-          onClick={() => onSave(draft)}
-          className="text-xs font-medium text-[hsl(var(--primary))] transition-colors hover:underline disabled:opacity-50"
-        >
+        <Button variant="link" size="xs" disabled={disabled || !canSave} onClick={() => onSave(draft)}>
           保存
-        </button>
+        </Button>
       </div>
       <dd className="mt-1 flex items-center justify-between gap-3">
         <span className="text-2xl font-semibold tabular-nums text-[hsl(var(--foreground))]">
@@ -495,7 +478,7 @@ function OutputFormatSettingCard({ allowedOutputFormats, disabled, onSave }: {
       <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
         用户端只会看到这里勾选的格式。至少保留一种，保存后立即生效。
       </p>
-    </div>
+    </Card>
   )
 }
 
@@ -507,22 +490,17 @@ function SettingCard({ label, value, unit, disabled, onEdit }: {
   onEdit: () => void
 }) {
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-4 py-3">
+    <Card>
       <div className="flex items-center justify-between">
         <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{label}</dt>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onEdit}
-          className="text-xs font-medium text-[hsl(var(--primary))] transition-colors hover:underline disabled:opacity-50"
-        >
+        <Button variant="link" size="xs" disabled={disabled} onClick={onEdit}>
           修改
-        </button>
+        </Button>
       </div>
       <dd className="mt-1 flex items-baseline gap-1 text-[hsl(var(--foreground))]">
         <span className="text-2xl font-semibold tabular-nums">{value}</span>
         <span className="text-sm text-[hsl(var(--muted-foreground))]">{unit}</span>
       </dd>
-    </div>
+    </Card>
   )
 }

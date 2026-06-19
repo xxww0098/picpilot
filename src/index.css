@@ -22,6 +22,12 @@
   --input: 240 6% 90%;
   --primary: 221 83% 53%;
   --primary-foreground: 0 0% 100%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --warning: 25 95% 53%;
+  --warning-foreground: 0 0% 100%;
+  --ring: 221 83% 53%;
+  --radius: 0.5rem;
   --sidebar: 240 5% 96%;
   --sidebar-foreground: 240 10% 10%;
   --font-ui-sans: 'HarmonyOS Sans SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -87,6 +93,11 @@ body.drag-selecting * {
     --input: 240 4% 22%;
     --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
+    --destructive: 0 63% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 25 95% 53%;
+    --warning-foreground: 0 0% 100%;
+    --ring: 217 91% 60%;
     --sidebar: 240 5% 12%;
     --sidebar-foreground: 0 0% 98%;
   }

@@ -3,6 +3,7 @@ import { useStore } from '../../store'
 import ModalShell from './ModalShell'
 import { Checkbox } from './Checkbox'
 import { CopyIcon } from './icons'
+import Button from './Button'
 
 function renderMessage(message: string) {
   return message.split(/(`[^`]+`|「[^」]+」|\*\*[^*]+\*\*)/g).map((part, index) => {
@@ -34,13 +35,11 @@ function renderMessage(message: string) {
   })
 }
 
-function getActionButtonClass(tone: 'primary' | 'secondary' | 'danger' | 'warning' = 'primary') {
-  if (tone === 'secondary') {
-    return 'border border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-400 dark:hover:bg-white/[0.06]'
-  }
-  if (tone === 'warning') return 'bg-orange-500 text-white hover:bg-orange-600'
-  if (tone === 'danger') return 'bg-red-500 text-white hover:bg-red-600'
-  return 'bg-blue-500 text-white hover:bg-blue-600'
+function confirmToneToVariant(tone: 'primary' | 'secondary' | 'danger' | 'warning' | undefined): 'primary' | 'outline' | 'destructive' | 'warning' {
+  if (tone === 'secondary') return 'outline'
+  if (tone === 'danger') return 'destructive'
+  if (tone === 'warning') return 'warning'
+  return 'primary'
 }
 
 export default function ConfirmDialog() {
@@ -78,7 +77,6 @@ export default function ConfirmDialog() {
   if (!confirmDialog) return null
   const isDestructive = confirmDialog.title.includes('删除') || confirmDialog.title.includes('清空')
   const confirmTone = confirmDialog.tone ?? (isDestructive ? 'danger' : undefined)
-  const confirmClassName = getActionButtonClass(confirmTone === 'danger' || confirmTone === 'warning' ? confirmTone : 'primary')
   const confirmText = confirmDialog.confirmText ?? (isDestructive ? '确认删除' : '确认')
   const cancelText = confirmDialog.cancelText ?? '取消'
   const customButtons = confirmDialog.buttons?.filter((button) => button.label.trim()) ?? []
@@ -120,41 +118,40 @@ export default function ConfirmDialog() {
         {customButtons.length > 0 ? (
           <div className="flex gap-2">
             {customButtons.map((button) => (
-              <button
+              <Button
                 key={button.label}
+                variant={confirmToneToVariant(button.tone)}
+                className="flex-1 rounded-lg"
                 onClick={() => {
                   if (!canConfirm) return
                   button.action(checkboxChecked)
                   setConfirmDialog(null)
                 }}
                 disabled={!canConfirm}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${getActionButtonClass(button.tone)}`}
               >
                 {button.label}
-              </button>
+              </Button>
             ))}
           </div>
         ) : (
           <div className="flex gap-2">
             {confirmDialog.showCancel !== false && (
-              <button
-                onClick={handleCancel}
-                className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
-              >
+              <Button variant="outline" className="flex-1 rounded-lg" onClick={handleCancel}>
                 {cancelText}
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              variant={confirmToneToVariant(confirmTone === 'danger' || confirmTone === 'warning' ? confirmTone : 'primary')}
+              className="flex-1 rounded-lg"
               onClick={() => {
                 if (!canConfirm) return
                 confirmDialog.action?.(checkboxChecked)
                 setConfirmDialog(null)
               }}
               disabled={!canConfirm}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${confirmClassName}`}
             >
               {confirmText}
-            </button>
+            </Button>
           </div>
         )}
     </ModalShell>

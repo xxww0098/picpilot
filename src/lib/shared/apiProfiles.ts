@@ -17,6 +17,13 @@ import type {
 } from '../../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../../types'
 import { DEFAULT_AGENT_MODEL } from '../image/chatModels'
+import {
+  DEFAULT_VIDEO_ASPECT_RATIO,
+  DEFAULT_VIDEO_RESOLUTION,
+  normalizeVideoAspectRatio,
+  normalizeVideoDurationChoice,
+  normalizeVideoResolution,
+} from '../video/videoCapabilities'
 import { classifyImportEnvelope } from './schemas'
 
 const CLIENT_VISIBLE_BASE_URL = ''
@@ -493,15 +500,15 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
     agentModel: typeof record.agentModel === 'string' && record.agentModel.trim() ? record.agentModel.trim() : DEFAULT_AGENT_MODEL,
     videoDurationSeconds: normalizeVideoDurationSeconds(record.videoDurationSeconds),
+    videoAspectRatio: normalizeVideoAspectRatio(record.videoAspectRatio),
+    videoResolution: normalizeVideoResolution(record.videoResolution),
     profiles,
     activeProfileId,
   }
 }
 
 export function normalizeVideoDurationSeconds(value: unknown, fallback = DEFAULT_VIDEO_DURATION_SECONDS): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.min(15, Math.max(1, Math.trunc(numeric)))
+  return normalizeVideoDurationChoice(value, fallback)
 }
 
 export function getCustomProviderDefinition(settings: Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
@@ -784,4 +791,6 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentWebSearch: false,
   agentModel: DEFAULT_AGENT_MODEL,
   videoDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS,
+  videoAspectRatio: DEFAULT_VIDEO_ASPECT_RATIO,
+  videoResolution: DEFAULT_VIDEO_RESOLUTION,
 })

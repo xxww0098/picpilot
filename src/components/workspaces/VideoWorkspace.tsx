@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useStore } from '../../store'
 import { DEFAULT_VIDEO_DURATION_SECONDS, normalizeVideoDurationSeconds } from '../../lib/shared/apiProfiles'
+import { VIDEO_DURATION_OPTIONS } from '../../lib/video/videoCapabilities'
 import QueueBanner from './QueueBanner'
 import SearchBar from './SearchBar'
 import TaskGrid from './TaskGrid'
@@ -100,7 +101,7 @@ export default function VideoWorkspace() {
             </div>
 
             <div className="inline-flex w-fit items-center gap-1 rounded-xl border border-gray-200 bg-white p-1 dark:border-white/[0.08] dark:bg-white/[0.03]">
-              {[6, 10, 15].map((seconds) => (
+              {VIDEO_DURATION_OPTIONS.map((seconds) => (
                 <button
                   key={seconds}
                   type="button"

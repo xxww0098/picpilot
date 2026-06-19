@@ -85,6 +85,8 @@ describe('generateVideo', () => {
       model: 'grok-imagine-video-1.5-preview',
       prompt: 'move',
       duration: 6,
+      resolution: '720p',
+      aspect_ratio: '16:9',
       image: { url: 'data:image/png;base64,abc' },
     })
   })

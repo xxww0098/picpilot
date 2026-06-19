@@ -15,7 +15,13 @@ import {
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { showAppToast } from '../../lib/ui/dialog'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/ui/clipboard'
+import Button from '../ui/Button'
 import ModalShell from '../ui/ModalShell'
+
+const SELECT_CLASS =
+  'h-9 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-3 text-sm text-[hsl(var(--foreground))] outline-none transition-[border-color,box-shadow,background-color] focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]'
+const DATE_INPUT_CLASS =
+  'h-9 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-2 text-sm text-[hsl(var(--foreground))] outline-none transition-[border-color,box-shadow,background-color] focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]'
 
 const PAGE_SIZE = 50
 const EXPORT_MAX_DAYS = 31
@@ -129,11 +135,11 @@ export default function EventLog() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <select
           value={appMode}
           onChange={(e) => { setPage(0); setAppMode(e.target.value) }}
-          className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
+          className={SELECT_CLASS}
         >
           <option value="">所有模式</option>
           <option value="gallery">画廊</option>
@@ -143,7 +149,7 @@ export default function EventLog() {
         <select
           value={eventType}
           onChange={(e) => { setPage(0); setEventType(e.target.value) }}
-          className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
+          className={SELECT_CLASS}
         >
           <option value="">所有结果</option>
           <option value="success">成功</option>
@@ -154,7 +160,7 @@ export default function EventLog() {
         <select
           value={errorType}
           onChange={(e) => { setPage(0); setErrorType(e.target.value) }}
-          className="rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm"
+          className={SELECT_CLASS}
         >
           <option value="">所有错误类型</option>
           <option value="timeout">请求超时</option>
@@ -171,27 +177,15 @@ export default function EventLog() {
             value={day}
             max={todayString()}
             onChange={(e) => changeDay(e.target.value)}
-            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm"
+            className={DATE_INPUT_CLASS}
           />
-          <button
-            type="button"
-            onClick={() => changeDay(todayString())}
-            className="rounded border border-[hsl(var(--border))] px-2 py-1.5 text-xs hover:bg-[hsl(var(--muted))]"
-          >
-            今天
-          </button>
-          <button
-            type="button"
-            onClick={() => changeDay('')}
-            className="rounded border border-[hsl(var(--border))] px-2 py-1.5 text-xs hover:bg-[hsl(var(--muted))]"
-          >
-            全部
-          </button>
+          <Button variant="outline" size="sm" onClick={() => changeDay(todayString())}>今天</Button>
+          <Button variant="outline" size="sm" onClick={() => changeDay('')}>全部</Button>
         </div>
         <span className="text-sm text-[hsl(var(--muted-foreground))]">共 {total} 条</span>
-        <button onClick={() => setExportOpen(true)} className="ml-auto rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))]">
-          批量导出 CSV
-        </button>
+        <div className="ml-auto">
+          <Button variant="primary" onClick={() => setExportOpen(true)}>批量导出 CSV</Button>
+        </div>
       </div>
 
       {loading && <p className="text-sm text-[hsl(var(--muted-foreground))]">加载中…</p>}
@@ -199,61 +193,55 @@ export default function EventLog() {
 
       {!loading && !error && (
         <>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
-                <th className="py-2 pr-3">时间</th>
-                <th className="py-2 pr-3">用户</th>
-                <th className="py-2 pr-3">模式</th>
-                <th className="py-2 pr-3">结果</th>
-                <th className="py-2 pr-3">操作</th>
-                <th className="py-2 pr-3">服务商</th>
-                <th className="py-2 pr-3">模型</th>
-                <th className="py-2 pr-3 text-right">耗时</th>
-                <th className="py-2 pr-3">错误类型</th>
-                <th className="py-2 pr-3">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.length === 0 && (
-                <tr><td colSpan={10} className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
-              )}
-              {events.map((e) => (
-                <tr key={e.id} className="border-b border-[hsl(var(--border))] last:border-0">
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatTimestamp(e.created_at)}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--foreground))]">{e.username}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getAppModeLabel(e.app_mode)}</td>
-                  <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{getEventTypeLabel(e.event_type)}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getEventActionLabel(e.action_type)}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getProviderDisplayName(e.provider)}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{e.model ?? '—'}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
-                  <td className="py-2 pr-3 max-w-xs truncate text-red-500" title={e.error_message ? getUserFacingErrorMessage(e.error_message) : ''}>{getErrorTypeLabel(e.error_type)}</td>
-                  <td className="py-2 pr-3">
-                    <button onClick={() => setDetail(e)} className="text-xs text-[hsl(var(--primary))] hover:underline">详情</button>
-                  </td>
+          <div className="overflow-x-auto rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-sm shadow-black/[0.03] dark:shadow-black/20">
+            <table className="w-full text-sm">
+              <thead className="bg-[hsl(var(--muted)/0.4)]">
+                <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+                  <th className="py-2.5 pr-3 pl-4">时间</th>
+                  <th className="py-2.5 pr-3">用户</th>
+                  <th className="py-2.5 pr-3">模式</th>
+                  <th className="py-2.5 pr-3">结果</th>
+                  <th className="py-2.5 pr-3">操作</th>
+                  <th className="py-2.5 pr-3">服务商</th>
+                  <th className="py-2.5 pr-3">模型</th>
+                  <th className="py-2.5 pr-3 text-right">耗时</th>
+                  <th className="py-2.5 pr-3">错误类型</th>
+                  <th className="py-2.5 pr-3 pr-4">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {events.length === 0 && (
+                  <tr><td colSpan={10} className="py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">暂无请求记录</td></tr>
+                )}
+                {events.map((e) => (
+                  <tr key={e.id} className="border-b border-[hsl(var(--border))] last:border-0 transition-colors hover:bg-[hsl(var(--muted)/0.35)]">
+                    <td className="py-2 pr-3 pl-4 text-[hsl(var(--muted-foreground))]">{formatTimestamp(e.created_at)}</td>
+                    <td className="py-2 pr-3 text-[hsl(var(--foreground))]">{e.username}</td>
+                    <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getAppModeLabel(e.app_mode)}</td>
+                    <td className={`py-2 pr-3 ${eventTypeColor(e.event_type)}`}>{getEventTypeLabel(e.event_type)}</td>
+                    <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getEventActionLabel(e.action_type)}</td>
+                    <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{getProviderDisplayName(e.provider)}</td>
+                    <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{e.model ?? '—'}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
+                    <td className="py-2 pr-3 max-w-xs truncate text-red-500" title={e.error_message ? getUserFacingErrorMessage(e.error_message) : ''}>{getErrorTypeLabel(e.error_type)}</td>
+                    <td className="py-2 pr-3 pr-4">
+                      <Button type="button" variant="link" size="xs" onClick={() => setDetail(e)}>详情</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div className="flex items-center justify-between text-sm">
             <span className="text-[hsl(var(--muted-foreground))]">第 {page + 1} / {maxPage + 1} 页</span>
             <div className="flex gap-2">
-              <button
-                disabled={page === 0}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1 disabled:opacity-50"
-              >
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
                 上一页
-              </button>
-              <button
-                disabled={page >= maxPage}
-                onClick={() => setPage((p) => Math.min(maxPage, p + 1))}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1 disabled:opacity-50"
-              >
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= maxPage} onClick={() => setPage((p) => Math.min(maxPage, p + 1))}>
                 下一页
-              </button>
+              </Button>
             </div>
           </div>
         </>
@@ -283,13 +271,7 @@ export default function EventLog() {
         >
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-base font-semibold">请求详情 #{detail.id}</h3>
-              <button
-                type="button"
-                onClick={() => void copyDetail(detail)}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
-              >
-                复制详情
-              </button>
+              <Button variant="outline" size="sm" onClick={() => void copyDetail(detail)}>复制详情</Button>
             </div>
             <dl className="grid grid-cols-3 gap-y-2 text-sm">
               <Field label="时间">{formatTimestamp(detail.created_at)}</Field>
@@ -334,14 +316,8 @@ export default function EventLog() {
               </div>
             )}
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => void copyDetail(detail)}
-                className="rounded border border-[hsl(var(--border))] px-4 py-1.5 text-sm hover:bg-[hsl(var(--muted))]"
-              >
-                复制详情
-              </button>
-              <button onClick={() => setDetail(null)} className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))]">关闭</button>
+              <Button variant="outline" onClick={() => void copyDetail(detail)}>复制详情</Button>
+              <Button variant="primary" onClick={() => setDetail(null)}>关闭</Button>
             </div>
         </ModalShell>
       )}
@@ -419,7 +395,7 @@ function ExportDialog({
             value={from}
             max={to || today}
             onChange={(e) => setFrom(e.target.value)}
-            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm text-[hsl(var(--foreground))]"
+            className="h-9 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]"
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-[hsl(var(--muted-foreground))]">
@@ -430,7 +406,7 @@ function ExportDialog({
             min={from}
             max={today}
             onChange={(e) => setTo(e.target.value)}
-            className="rounded border border-[hsl(var(--border))] bg-transparent px-2 py-1.5 text-sm text-[hsl(var(--foreground))]"
+            className="h-9 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-2 text-sm text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]"
           />
         </label>
       </div>
@@ -444,22 +420,10 @@ function ExportDialog({
       )}
       {localError && <p className="mt-3 text-xs text-red-500">{localError}</p>}
       <div className="mt-5 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={downloading}
-          className="rounded border border-[hsl(var(--border))] px-4 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-        >
-          取消
-        </button>
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={disabled}
-          className="rounded bg-[hsl(var(--primary))] px-4 py-1.5 text-sm text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-        >
+        <Button variant="outline" onClick={onClose} disabled={downloading}>取消</Button>
+        <Button variant="primary" onClick={handleDownload} disabled={disabled}>
           {downloading ? '导出中…' : '下载 CSV'}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   )

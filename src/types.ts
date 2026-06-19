@@ -105,6 +105,10 @@ export interface AppSettings {
   agentModel: string
   // 视频模式默认时长（秒）。xAI Imagine 视频接口当前按秒控制时长。
   videoDurationSeconds: number
+  /** Grok 视频宽高比；auto 表示由上游决定 */
+  videoAspectRatio: string
+  /** Grok 视频分辨率：480p | 720p */
+  videoResolution: string
   profiles: ApiProfile[]
   activeProfileId: string
 }
@@ -205,6 +209,10 @@ export interface TaskRecord {
   outputVideos?: string[]
   /** 视频时长（秒，请求值），仅视频任务 */
   videoDurationSeconds?: number
+  /** 视频宽高比（请求值），仅视频任务 */
+  videoAspectRatio?: string
+  /** 视频分辨率（请求值），仅视频任务 */
+  videoResolution?: string
   /** 批量生成（n>1）中失败的张数；部分成功时 > 0，此时 status 仍为 'done' */
   failedImageCount?: number
   /** 当前失败槽位最后一次实际尝试使用的来源；旧记录为空时回退到任务级来源 */

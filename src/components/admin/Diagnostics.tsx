@@ -16,6 +16,8 @@ import {
 } from '../../lib/shared/userFacingText'
 import { showAppToast } from '../../lib/ui/dialog'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import Badge, { type BadgeTone } from '../ui/Badge'
+import Button from '../ui/Button'
 import QueryState from './QueryState'
 
 export default function Diagnostics() {
@@ -50,21 +52,10 @@ export default function Diagnostics() {
               <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">最近 7 天的失败原因、上游账号健康和可导出的脱敏诊断包。</p>
             </div>
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void reload()}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))]"
-              >
-                刷新
-              </button>
-              <button
-                type="button"
-                disabled={exporting}
-                onClick={() => void exportDiagnostics()}
-                className="rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-              >
+              <Button variant="outline" onClick={() => void reload()}>刷新</Button>
+              <Button variant="primary" disabled={exporting} onClick={() => void exportDiagnostics()}>
                 导出诊断包
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -174,29 +165,29 @@ function UpstreamHealthPanel({ upstream }: { upstream: AdminUpstreamHealth }) {
       ) : upstream.accounts.length === 0 ? (
         <p className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">日志中暂未发现账号路由记录</p>
       ) : (
-        <div className="mt-5 overflow-x-auto">
+        <div className="mt-5 overflow-x-auto rounded-xl border border-[hsl(var(--border))] shadow-sm shadow-black/[0.03] dark:shadow-black/20">
           <table className="w-full text-sm">
-            <thead>
+            <thead className="bg-[hsl(var(--muted)/0.4)]">
               <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
-                <th className="py-2 pr-3">账号</th>
-                <th className="py-2 pr-3">状态</th>
-                <th className="py-2 pr-3 text-right">请求</th>
-                <th className="py-2 pr-3 text-right">失败率</th>
-                <th className="py-2 pr-3 text-right">均耗</th>
-                <th className="py-2 pr-3">最近</th>
-                <th className="py-2 pr-3">建议</th>
+                <th className="py-2.5 pr-3 pl-4">账号</th>
+                <th className="py-2.5 pr-3">状态</th>
+                <th className="py-2.5 pr-3 text-right">请求</th>
+                <th className="py-2.5 pr-3 text-right">失败率</th>
+                <th className="py-2.5 pr-3 text-right">均耗</th>
+                <th className="py-2.5 pr-3">最近</th>
+                <th className="py-2.5 pr-3 pr-4">建议</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-[hsl(var(--background))]">
               {upstream.accounts.map((account) => (
-                <tr key={account.accountKey} className="border-b border-[hsl(var(--border))] last:border-0">
-                  <td className="py-2 pr-3 font-medium text-[hsl(var(--foreground))]">{account.label}</td>
+                <tr key={account.accountKey} className="border-b border-[hsl(var(--border))] last:border-0 transition-colors hover:bg-[hsl(var(--muted)/0.35)]">
+                  <td className="py-2 pr-3 pl-4 font-medium text-[hsl(var(--foreground))]">{account.label}</td>
                   <td className="py-2 pr-3"><HealthBadge status={account.status} /></td>
                   <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{account.total}</td>
                   <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{(account.failureRate * 100).toFixed(0)}%</td>
                   <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{formatDurationMs(account.avgDurationMs)}</td>
                   <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatRelative(account.lastSeenAt)}</td>
-                  <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{account.recommendation}</td>
+                  <td className="py-2 pr-3 pr-4 text-[hsl(var(--muted-foreground))]">{account.recommendation}</td>
                 </tr>
               ))}
             </tbody>
@@ -208,11 +199,7 @@ function UpstreamHealthPanel({ upstream }: { upstream: AdminUpstreamHealth }) {
 }
 
 function HealthBadge({ status }: { status: AdminUpstreamHealth['accounts'][number]['status'] }) {
-  const cls = status === 'isolate'
-    ? 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300'
-    : status === 'watch'
-      ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  const tone: BadgeTone = status === 'isolate' ? 'danger' : status === 'watch' ? 'warning' : 'success'
   const label = status === 'isolate' ? '建议隔离' : status === 'watch' ? '观察' : '健康'
-  return <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{label}</span>
+  return <Badge tone={tone}>{label}</Badge>
 }

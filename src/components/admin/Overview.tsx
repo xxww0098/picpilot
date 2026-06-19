@@ -3,6 +3,15 @@ import { fetchAdminOverview } from '../../lib/server/adminApi'
 import { formatBytes, formatDurationMs } from '../../lib/ui/format'
 import { getErrorTypeLabel, getProviderDisplayName } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import {
+  ActivityIcon,
+  AlertIcon,
+  CalendarIcon,
+  CheckIcon,
+  ClockIcon,
+  PhotoIcon,
+  ServerIcon,
+} from '../ui/icons'
 import QueryState from './QueryState'
 
 export default function Overview() {
@@ -24,35 +33,35 @@ function OverviewContent({ data }: { data: NonNullable<Awaited<ReturnType<typeof
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-sm font-medium text-[hsl(var(--foreground))]">
-        <Icon className="h-4 w-4 text-[hsl(var(--muted-foreground))]" path={ICONS.calendar} />
+        <CalendarIcon className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
         最近 7 天请求统计
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi
           accent="blue"
-          icon={ICONS.activity}
+          icon={<ActivityIcon className="h-4 w-4" />}
           label="请求总数"
           value={String(totals.total)}
           caption="近 7 天累计"
         />
         <Kpi
           accent="emerald"
-          icon={ICONS.check}
+          icon={<CheckIcon className="h-4 w-4" />}
           label="成功率"
           value={`${successRate}%`}
           caption={`成功 ${totals.success} · 失败 ${totals.failure}`}
         />
         <Kpi
           accent="amber"
-          icon={ICONS.clock}
+          icon={<ClockIcon className="h-4 w-4" />}
           label="平均耗时"
           value={formatDurationMs(totals.avg_duration ?? 0)}
           caption="每次出图请求"
         />
         <Kpi
           accent="violet"
-          icon={ICONS.image}
+          icon={<PhotoIcon className="h-4 w-4" />}
           label="累计图片大小"
           value={formatBytes(totals.total_output ?? 0)}
           caption="已生成输出"
@@ -60,7 +69,7 @@ function OverviewContent({ data }: { data: NonNullable<Awaited<ReturnType<typeof
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel icon={ICONS.alert} title="错误分布" iconClass="text-rose-500">
+        <Panel title="错误分布" icon={<AlertIcon className="h-4 w-4 text-rose-500" />}>
           {errors.length === 0 ? (
             <Empty>暂无错误</Empty>
           ) : (
@@ -79,7 +88,7 @@ function OverviewContent({ data }: { data: NonNullable<Awaited<ReturnType<typeof
           )}
         </Panel>
 
-        <Panel icon={ICONS.server} title="服务商分布" iconClass="text-[hsl(var(--primary))]">
+        <Panel title="服务商分布" icon={<ServerIcon className="h-4 w-4 text-[hsl(var(--primary))]" />}>
           {providers.length === 0 ? (
             <Empty>暂无数据</Empty>
           ) : (
@@ -117,7 +126,7 @@ function Kpi({
   caption,
 }: {
   accent: keyof typeof ACCENTS
-  icon: string
+  icon: ReactNode
   label: string
   value: string
   caption: string
@@ -127,7 +136,7 @@ function Kpi({
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{label}</p>
         <span className={`grid h-7 w-7 place-items-center rounded-lg ${ACCENTS[accent]}`}>
-          <Icon className="h-4 w-4" path={icon} />
+          {icon}
         </span>
       </div>
       <p className="mt-2 text-2xl font-semibold tabular-nums text-[hsl(var(--foreground))]">{value}</p>
@@ -136,11 +145,11 @@ function Kpi({
   )
 }
 
-function Panel({ icon, title, iconClass, children }: { icon: string; title: string; iconClass: string; children: ReactNode }) {
+function Panel({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <section className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-sm shadow-black/[0.03] dark:shadow-black/20">
       <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-[hsl(var(--foreground))]">
-        <Icon className={`h-4 w-4 ${iconClass}`} path={icon} />
+        {icon}
         {title}
       </h3>
       {children}
@@ -170,22 +179,3 @@ function Bar({ label, value, max, total, fillClass }: { label: string; value: nu
 function Empty({ children }: { children: ReactNode }) {
   return <p className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">{children}</p>
 }
-
-function Icon({ className, path }: { className?: string; path: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d={path} />
-    </svg>
-  )
-}
-
-// Lucide-style 24x24 stroke 图标路径
-const ICONS = {
-  calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
-  activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
-  check: 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3',
-  clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
-  image: 'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21',
-  alert: 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
-  server: 'M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM7 7h.01M7 17h.01',
-} as const

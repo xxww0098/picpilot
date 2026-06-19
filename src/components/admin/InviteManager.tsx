@@ -11,6 +11,8 @@ import { openDestructiveConfirm, showAppToast } from '../../lib/ui/dialog'
 import { formatOptionalExpiry, formatRelative } from '../../lib/ui/format'
 import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import Button from '../ui/Button'
+import Input from '../ui/Input'
 import QueryState from './QueryState'
 
 function buildInviteUrl(code: string): string {
@@ -83,85 +85,78 @@ export default function InviteManager() {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={(e) => void createInvite(e)} className="rounded-lg border border-[hsl(var(--border))] p-4">
-        <h3 className="mb-3 text-sm font-medium text-[hsl(var(--foreground))]">创建注册邀请码</h3>
+      <form
+        onSubmit={(e) => void createInvite(e)}
+        className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-sm shadow-black/[0.03] dark:shadow-black/20"
+      >
+        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[hsl(var(--foreground))]">
+          创建注册邀请码
+        </h3>
         <div className="grid gap-3 md:grid-cols-4">
           <div>
             <label className="text-xs text-[hsl(var(--muted-foreground))]">生成数量</label>
-            <input
+            <Input
+              className="mt-1"
               type="number"
               min={1}
               max={50}
               value={newCount}
               onChange={(e) => setNewCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-              className="mt-1 w-full rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm outline-none focus:border-[hsl(var(--primary))]"
             />
           </div>
           <div>
             <label className="text-xs text-[hsl(var(--muted-foreground))]">每码可注册人数</label>
-            <input
+            <Input
+              className="mt-1"
               type="number"
               min={1}
               max={1000}
               value={newMaxUses}
               onChange={(e) => setNewMaxUses(Math.max(1, Number(e.target.value)))}
-              className="mt-1 w-full rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm outline-none focus:border-[hsl(var(--primary))]"
             />
           </div>
           <div>
             <label className="text-xs text-[hsl(var(--muted-foreground))]">有效期（天，留空为永久）</label>
-            <input
+            <Input
+              className="mt-1"
               type="number"
               min={1}
               value={newExpiresDays}
               onChange={(e) => setNewExpiresDays(e.target.value === '' ? '' : Number(e.target.value))}
-              className="mt-1 w-full rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm outline-none focus:border-[hsl(var(--primary))]"
             />
           </div>
           <div>
             <label className="text-xs text-[hsl(var(--muted-foreground))]">备注（可选）</label>
-            <input
+            <Input
+              className="mt-1"
               type="text"
               placeholder="例如：给设计组"
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
-              className="mt-1 w-full rounded border border-[hsl(var(--border))] bg-transparent px-3 py-1.5 text-sm outline-none focus:border-[hsl(var(--primary))]"
             />
           </div>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <button
-            type="submit"
-            disabled={creating}
-            className="rounded-md bg-[hsl(var(--primary))] px-4 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 disabled:opacity-50"
-          >
+          <Button type="submit" variant="primary" disabled={creating}>
             {creating ? '创建中…' : newCount > 1 ? `批量生成 ${newCount} 个` : '创建邀请码'}
-          </button>
+          </Button>
         </div>
 
         {lastCreated && lastCreated.length > 0 && (
-          <div className="mt-4 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-3">
+          <div className="mt-4 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] p-3">
             <div className="mb-2 flex items-center justify-between text-xs text-[hsl(var(--muted-foreground))]">
               <span>本次生成 {lastCreated.length} 条邀请链接</span>
-              <button
-                type="button"
-                onClick={() => void copyAllUrls(lastCreated)}
-                className="text-[hsl(var(--primary))] hover:underline"
-              >
+              <Button type="button" variant="link" size="xs" onClick={() => void copyAllUrls(lastCreated)}>
                 复制全部
-              </button>
+              </Button>
             </div>
             <ul className="max-h-48 space-y-1 overflow-y-auto text-xs font-mono">
               {lastCreated.map((c) => (
                 <li key={c} className="flex items-center justify-between gap-2">
                   <span className="truncate text-[hsl(var(--foreground))]">{buildInviteUrl(c)}</span>
-                  <button
-                    type="button"
-                    onClick={() => void copyInviteUrl(c)}
-                    className="shrink-0 text-[hsl(var(--primary))] hover:underline"
-                  >
+                  <Button type="button" variant="link" size="xs" className="shrink-0" onClick={() => void copyInviteUrl(c)}>
                     复制
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -197,18 +192,19 @@ function InviteTable({
   }
 
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
-          <th className="py-2 pr-3 w-6"></th>
-          <th className="py-2 pr-3">邀请码</th>
-          <th className="py-2 pr-3">备注</th>
-          <th className="py-2 pr-3 text-right">已注册 / 可注册</th>
-          <th className="py-2 pr-3">有效期</th>
-          <th className="py-2 pr-3">创建人</th>
-          <th className="py-2 pr-3">操作</th>
-        </tr>
-      </thead>
+    <div className="overflow-x-auto rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-sm shadow-black/[0.03] dark:shadow-black/20">
+      <table className="w-full text-sm">
+        <thead className="bg-[hsl(var(--muted)/0.4)]">
+          <tr className="border-b border-[hsl(var(--border))] text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+            <th className="py-2.5 pr-3 pl-4 w-6"></th>
+            <th className="py-2.5 pr-3">邀请码</th>
+            <th className="py-2.5 pr-3">备注</th>
+            <th className="py-2.5 pr-3 text-right">已注册 / 可注册</th>
+            <th className="py-2.5 pr-3">有效期</th>
+            <th className="py-2.5 pr-3">创建人</th>
+            <th className="py-2.5 pr-3 pr-4">操作</th>
+          </tr>
+        </thead>
       <tbody>
         {invites.map((inv) => {
           const expired = inv.expires_at != null && inv.expires_at < Date.now()
@@ -231,6 +227,7 @@ function InviteTable({
         })}
       </tbody>
     </table>
+    </div>
   )
 }
 
@@ -253,20 +250,22 @@ function RowFragment({
 }) {
   return (
     <>
-      <tr className="border-b border-[hsl(var(--border))] last:border-0">
-        <td className="py-2.5 pr-3">
-          <button
+      <tr className="border-b border-[hsl(var(--border))] last:border-0 transition-colors hover:bg-[hsl(var(--muted)/0.35)]">
+        <td className="py-2.5 pr-3 pl-4">
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             onClick={onToggle}
             disabled={!hasRedemptions}
             aria-label={isOpen ? '收起兑换记录' : '展开兑换记录'}
             aria-expanded={isOpen}
-            className="flex h-5 w-5 items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-30"
+            className="rounded text-[hsl(var(--muted-foreground))] disabled:opacity-30"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-90' : ''}`}>
               <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          </button>
+          </Button>
         </td>
         <td className="py-2.5 pr-3 font-mono text-[hsl(var(--foreground))]">
           <span className={dead ? 'line-through text-[hsl(var(--muted-foreground))]' : ''}>{inv.code}</span>
@@ -275,10 +274,10 @@ function RowFragment({
         <td className="py-2.5 pr-3 text-right tabular-nums">{inv.used_count} / {inv.max_uses}</td>
         <td className="py-2.5 pr-3 text-[hsl(var(--muted-foreground))]">{formatOptionalExpiry(inv.expires_at)}</td>
         <td className="py-2.5 pr-3 text-[hsl(var(--muted-foreground))]">{inv.creator_username ?? '—'}</td>
-        <td className="py-2.5 pr-3">
+        <td className="py-2.5 pr-3 pr-4">
           <div className="flex gap-2">
-            <button onClick={onCopy} className="text-xs text-[hsl(var(--primary))] hover:underline">复制链接</button>
-            <button onClick={onRevoke} className="text-xs text-red-500 hover:underline">吊销</button>
+            <Button type="button" variant="link" size="xs" onClick={onCopy}>复制链接</Button>
+            <Button type="button" variant="link" size="xs" className="text-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive))]" onClick={onRevoke}>吊销</Button>
           </div>
         </td>
       </tr>

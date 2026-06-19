@@ -24,6 +24,11 @@ import { useInputBarPromptEditor } from '../inputBar/useInputBarPromptEditor'
 import { useAuth } from '../../contexts/AuthProvider'
 import Select from '../ui/Select'
 import { HelpCircleIcon } from '../ui/icons'
+import {
+  VIDEO_ASPECT_RATIO_OPTIONS,
+  VIDEO_DURATION_OPTIONS,
+  VIDEO_RESOLUTION_OPTIONS,
+} from '../../lib/video/videoCapabilities'
 
 
 
@@ -767,18 +772,41 @@ export default function InputBar() {
         <Select
           value={settings.videoDurationSeconds}
           onChange={(value) => setSettings({ videoDurationSeconds: Number(value) })}
-          options={[
-            { label: '6 秒', value: 6 },
-            { label: '10 秒', value: 10 },
-            { label: '15 秒', value: 15 },
-          ]}
+          options={VIDEO_DURATION_OPTIONS.map((seconds) => ({
+            label: `${seconds} 秒`,
+            value: seconds,
+          }))}
+          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm"
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">比例</span>
+        <Select
+          value={settings.videoAspectRatio}
+          onChange={(value) => setSettings({ videoAspectRatio: String(value) })}
+          options={VIDEO_ASPECT_RATIO_OPTIONS.map((item) => ({
+            label: item.label,
+            value: item.value,
+          }))}
+          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm"
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">分辨率</span>
+        <Select
+          value={settings.videoResolution}
+          onChange={(value) => setSettings({ videoResolution: String(value) })}
+          options={VIDEO_RESOLUTION_OPTIONS.map((item) => ({
+            label: item.label,
+            value: item.value,
+          }))}
           className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm"
         />
       </label>
       <label className="flex flex-col gap-0.5">
         <span className="text-gray-400 dark:text-gray-500 ml-1">模型</span>
-        <div className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] text-xs text-gray-500 dark:text-gray-400">
-          Grok Video
+        <div className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] text-xs text-gray-500 dark:text-gray-400 truncate" title="grok-imagine-video-1.5-preview">
+          Grok Video 1.5
         </div>
       </label>
     </div>
@@ -859,7 +887,7 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
-              {isVideoMode ? renderVideoParams('grid-cols-2') : renderParams('grid-cols-6')}
+              {isVideoMode ? renderVideoParams('grid-cols-4') : renderParams('grid-cols-6')}
 
               <InputBarActions variant="desktop" {...actionProps} />
             </div>
@@ -868,7 +896,7 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               {!mobileCollapsed && (
                 <>
-                  {isVideoMode ? renderVideoParams('grid-cols-2') : renderParams('grid-cols-2')}
+                  {isVideoMode ? renderVideoParams('grid-cols-2 sm:grid-cols-4') : renderParams('grid-cols-2')}
                   <div className="h-2" />
                 </>
               )}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   bulkDeleteAdminReverseAuthAccounts,
   deleteAdminReverseAuthAccount,
@@ -19,6 +19,8 @@ import { openDestructiveConfirm, openPromptDialog, showAppToast } from '../../li
 import { formatBytes, formatRelative } from '../../lib/ui/format'
 import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
+import Badge from '../ui/Badge'
+import Button from '../ui/Button'
 import QueryState from './QueryState'
 import ReverseAuthEditModal from './ReverseAuthEditModal'
 import ReverseAuthImportPanel from './ReverseAuthImportPanel'
@@ -319,55 +321,44 @@ export default function ReverseAuth() {
                 导入 ChatGPT OAuth JSON 到数据库，供 Go 内置 reverse 读取。普通用户只需要在 API 配置里选择逆向模式。
               </p>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void reload()}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))]"
-              >
-                刷新
-              </button>
-              <button
-                type="button"
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => void reload()}>刷新</Button>
+              <Button
+                variant="outline"
                 disabled={!data.configured || checking}
                 onClick={() => void handleCheckAccounts()}
                 title="读取 ChatGPT Web image_gen 剩余额度和 reset_after 恢复时间；额度周期以上游返回为准。"
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {checking ? progressButtonText(checkJob) : '检查额度'}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="outline"
                 disabled={!data.configured || exporting}
                 onClick={() => void handleExportAccounts()}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {exporting ? '导出中...' : '导出 JSON'}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="danger"
                 disabled={quotaLimitedNames.length === 0 || bulkDeleting}
                 onClick={confirmBulkDeleteNoQuota}
-                className="rounded border border-rose-500/30 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
               >
                 {bulkDeleting ? '删除中...' : `删除无额度${quotaLimitedNames.length ? ` (${quotaLimitedNames.length})` : ''}`}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
                 disabled={!data.configured || uploading}
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {uploading ? '导入中...' : '导入 JSON'}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="outline"
                 disabled={!data.configured || importingToken}
                 onClick={promptImportAccessToken}
-                className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-sm hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {importingToken ? '导入中...' : '导入 Token'}
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -416,12 +407,12 @@ export default function ReverseAuth() {
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="搜索名称、邮箱、状态"
-                  className="h-8 w-48 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-xs outline-none focus:border-[hsl(var(--primary))]"
+                  className="h-8 w-48 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-2 text-xs text-[hsl(var(--foreground))] outline-none transition-[border-color,box-shadow,background-color] placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]"
                 />
                 <select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value as AccountStatusFilter)}
-                  className="h-8 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-xs outline-none focus:border-[hsl(var(--primary))]"
+                  className="h-8 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] px-2 text-xs text-[hsl(var(--foreground))] outline-none transition-[border-color,box-shadow,background-color] focus:border-[hsl(var(--primary))] focus:bg-[hsl(var(--background))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)]"
                 >
                   {ACCOUNT_STATUS_FILTERS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
@@ -430,35 +421,35 @@ export default function ReverseAuth() {
                 <span className="rounded-full border border-[hsl(var(--border))] px-2.5 py-1 text-xs text-[hsl(var(--muted-foreground))]">
                   {filteredRows.length} / {data.accounts.length} 个
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  size="xs"
                   disabled={!data.configured || checking || filteredRows.length === 0}
                   onClick={() => void handleCheckFilteredAccounts()}
-                  className="h-8 rounded border border-[hsl(var(--border))] px-2.5 text-xs font-medium transition hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   刷新筛选结果
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="danger"
+                  size="xs"
                   disabled={selectedDeleteNames.length === 0 || bulkDeleting}
                   onClick={confirmBulkDeleteSelected}
-                  className="h-8 rounded border border-rose-500/30 px-2.5 text-xs font-medium text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
                 >
                   {bulkDeleting ? '删除中...' : `删除已选 (${selectedDeleteNames.length})`}
-                </button>
+                </Button>
               </div>
             </div>
 
             {data.accounts.length === 0 ? (
               <p className="rounded-lg border border-dashed border-[hsl(var(--border))] px-4 py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
-                还没有 reverse 账号。点击右上角“导入 JSON”添加。
+                还没有 reverse 账号。点击右上角"导入 JSON"添加。
               </p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-sm shadow-black/[0.03] dark:shadow-black/20">
                 <table className="w-full text-sm">
-                  <thead>
+                  <thead className="bg-[hsl(var(--muted)/0.4)]">
                     <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
-                      <th className="w-10 py-2 pr-3">
+                      <th className="w-10 py-2.5 pr-3 pl-4">
                         <input
                           type="checkbox"
                           aria-label="选择当前筛选结果"
@@ -468,20 +459,20 @@ export default function ReverseAuth() {
                           className="h-4 w-4 rounded border-[hsl(var(--border))] accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
                         />
                       </th>
-                      <th className="py-2 pr-3">名称</th>
-                      <th className="py-2 pr-3">账号</th>
-                      <th className="py-2 pr-3">续期</th>
-                      <th className="py-2 pr-3">状态 / 额度</th>
-                      <th className="py-2 pr-3">最近检查</th>
-                      <th className="py-2 pr-3 text-right">大小</th>
-                      <th className="py-2 pr-3">更新</th>
-                      <th className="py-2 pl-3 text-right">操作</th>
+                      <th className="py-2.5 pr-3">名称</th>
+                      <th className="py-2.5 pr-3">账号</th>
+                      <th className="py-2.5 pr-3">续期</th>
+                      <th className="py-2.5 pr-3">状态 / 额度</th>
+                      <th className="py-2.5 pr-3">最近检查</th>
+                      <th className="py-2.5 pr-3 text-right">大小</th>
+                      <th className="py-2.5 pr-3">更新</th>
+                      <th className="py-2.5 pl-3 pr-4 text-right">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRows.map(({ account, check }) => (
-                      <tr key={account.name} className="border-b border-[hsl(var(--border))] last:border-0">
-                        <td className="py-2 pr-3">
+                      <tr key={account.name} className="border-b border-[hsl(var(--border))] last:border-0 transition-colors hover:bg-[hsl(var(--muted)/0.35)]">
+                        <td className="py-2 pr-3 pl-4">
                           <input
                             type="checkbox"
                             aria-label={`选择 ${account.name}`}
@@ -507,24 +498,24 @@ export default function ReverseAuth() {
                         </td>
                         <td className="py-2 pr-3 text-right tabular-nums text-[hsl(var(--muted-foreground))]">{formatBytes(account.size)}</td>
                         <td className="py-2 pr-3 text-[hsl(var(--muted-foreground))]">{formatRelative(account.modifiedAt)}</td>
-                        <td className="py-2 pl-3 text-right">
+                        <td className="py-2 pl-3 pr-4 text-right">
                           <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
+                            <Button
+                              variant="outline"
+                              size="xs"
                               disabled={loadingEditName === account.name || deletingName === account.name}
                               onClick={() => void openEditAccount(account)}
-                              className="rounded border border-[hsl(var(--border))] px-2.5 py-1 text-xs font-medium transition hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {loadingEditName === account.name ? '读取中...' : '编辑'}
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="xs"
                               disabled={deletingName === account.name}
                               onClick={() => confirmDelete(account)}
-                              className="rounded border border-rose-500/30 px-2.5 py-1 text-xs font-medium text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
                             >
                               {deletingName === account.name ? '删除中...' : '删除'}
-                            </button>
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -746,15 +737,4 @@ function formatRestoreAt(value: string) {
   const ts = Date.parse(value)
   if (Number.isFinite(ts)) return new Date(ts).toLocaleString()
   return value
-}
-
-function Badge({ children, tone, title }: { children: ReactNode; tone: 'success' | 'warning' | 'danger' | 'neutral'; title?: string }) {
-  const cls = tone === 'success'
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-    : tone === 'danger'
-      ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
-      : tone === 'neutral'
-        ? 'border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
-        : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-  return <span title={title} className={`rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{children}</span>
 }

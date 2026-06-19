@@ -1,4 +1,5 @@
 import type { AppMode, AppSettings, TaskParams } from '../../types'
+import type { ImagePersistTelemetryOutcome } from './imageTelemetry'
 import { logger, serializeError } from '../shared/logger'
 import { encodeBlobAsDataUrl } from '../imaging/dataUrl'
 
@@ -45,6 +46,8 @@ export interface CallApiOptions {
     taskId?: string
     imageIndex?: number
     awaitReport?: boolean
+    /** 画廊等路径：API 成功后再等 IndexedDB 落库才上报 success */
+    deferSuccessTelemetry?: boolean
   }
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
@@ -72,6 +75,11 @@ export interface CallApiResult {
   failedCount?: number
   /** 失败槽位的错误信息 */
   failedErrors?: string[]
+  /** deferSuccessTelemetry 时由调用方在本地保存完成后调用 */
+  reportPersistOutcome?: (
+    outcome: ImagePersistTelemetryOutcome,
+    opts?: { images?: string[]; err?: unknown; durationMs?: number },
+  ) => void | Promise<void>
 }
 
 export function isHttpUrl(value: unknown): value is string {

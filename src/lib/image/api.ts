@@ -6,6 +6,12 @@ import { logger, serializeError } from '../shared/logger'
 import { classifyError, reportEvent } from '../server/telemetry'
 import { applyTeamRuntimeSettings } from '../config/runtimeTeamSettings'
 import { preflightImageUpstream } from './upstreamPreflight'
+import {
+  buildImageGenerationTelemetryBase,
+  reportImageGenerationPersistOutcome,
+  type ImageGenerationTelemetryBase,
+  type ImagePersistTelemetryOutcome,
+} from './imageTelemetry'
 
 export type { CallApiOptions, CallApiResult } from './imageApiShared'
 
@@ -15,6 +21,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
   const effectiveOpts = { ...opts, settings: effectiveSettings }
   const startedAt = Date.now()
   const appMode = opts.telemetry?.appMode ?? 'gallery'
+  const deferSuccess = Boolean(opts.telemetry?.deferSuccessTelemetry)
   const baseEvent = {
     provider: profile.provider,
     app_mode: appMode,
@@ -31,6 +38,17 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     task_id: opts.telemetry?.taskId,
     image_index: opts.telemetry?.imageIndex,
   }
+  const telemetryBase: ImageGenerationTelemetryBase = buildImageGenerationTelemetryBase({
+    profile,
+    appMode,
+    prompt: opts.prompt,
+    params: opts.params,
+    inputImageCount: opts.inputImageDataUrls.length,
+    hasMask: Boolean(opts.maskDataUrl),
+    actionType: opts.telemetry?.actionType ?? 'generate',
+    taskId: opts.telemetry?.taskId,
+    imageIndex: opts.telemetry?.imageIndex,
+  })
   logger.info('api', '图像 API 调用开始', {
     appMode,
     provider: profile.provider,
@@ -59,6 +77,16 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       rawImageUrls: result.rawImageUrls?.length ?? 0,
       elapsedMs,
     })
+    if (deferSuccess) {
+      const reportPersistOutcome = (outcome: ImagePersistTelemetryOutcome, persistOpts?: { images?: string[]; err?: unknown; durationMs?: number }) =>
+        reportImageGenerationPersistOutcome(telemetryBase, outcome, {
+          durationMs: persistOpts?.durationMs ?? elapsedMs,
+          images: persistOpts?.images ?? result.images,
+          err: persistOpts?.err,
+          awaitReport: opts.telemetry?.awaitReport,
+        })
+      return { ...result, reportPersistOutcome }
+    }
     const event = {
       ...baseEvent,
       event_type: 'success',

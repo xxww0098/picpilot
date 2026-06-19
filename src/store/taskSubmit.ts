@@ -186,6 +186,8 @@ export async function submitVideoTask() {
   await Promise.all(inputImages.map((img) => storeImage(img.dataUrl)))
 
   const durationSeconds = normalizeVideoDurationSeconds(settings.videoDurationSeconds, DEFAULT_VIDEO_DURATION_SECONDS)
+  const videoAspectRatio = settings.videoAspectRatio
+  const videoResolution = settings.videoResolution
   const task: TaskRecord = {
     id: genId(),
     prompt: prompt.trim(),
@@ -201,6 +203,8 @@ export async function submitVideoTask() {
     mediaType: 'video',
     outputVideos: [],
     videoDurationSeconds: durationSeconds,
+    videoAspectRatio,
+    videoResolution,
     status: 'running',
     error: null,
     createdAt: Date.now(),

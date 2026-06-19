@@ -9,6 +9,7 @@ import { isStorageFullError, putVideo as dbPutVideo } from '../lib/shared/db'
 import { storeImageWithReclaim } from './taskRuntime'
 import { logger, serializeError } from '../lib/shared/logger'
 import { IMAGE_FETCH_CORS_HINT } from '../lib/image/imageApiShared'
+import { persistGeneratedImagesAndReport } from '../lib/image/imageTelemetry'
 import { replaceImageMentionsForApi } from '../lib/ui/promptImageMentions'
 import { normalizeParamsForSettings } from '../lib/params/paramCompatibility'
 import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
@@ -26,6 +27,7 @@ import {
   readImageSizeParamsList,
 } from '../lib/agent/taskPersistence'
 import { generateVideo } from '../lib/server/videoApi'
+import { normalizeVideoAspectRatio, normalizeVideoResolution } from '../lib/video/videoCapabilities'
 import { applyTeamRuntimeSettings } from '../lib/config/runtimeTeamSettings'
 import { cacheImage, ensureImageCached, evictCachedImage } from './imageCache'
 import { genId, useStore } from './coreStore'
@@ -128,6 +130,8 @@ export async function executeVideoTask(taskId: string) {
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       imageDataUrl: inputDataUrls[0],
       durationSeconds: task.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS,
+      aspectRatio: normalizeVideoAspectRatio(task.videoAspectRatio),
+      resolution: normalizeVideoResolution(task.videoResolution),
       pollTimeoutMs: Math.max(30, getCachedAuthUser()?.requestTimeoutSeconds ?? 900) * 1000,
       signal: abortController.signal,
     })
@@ -281,6 +285,7 @@ export async function executeTask(taskId: string) {
               actionType: 'generate',
               appMode,
               taskId,
+              deferSuccessTelemetry: true,
             },
             signal: abortController.signal,
             fanoutConcurrency,
@@ -298,6 +303,7 @@ export async function executeTask(taskId: string) {
             actionType: 'generate',
             appMode,
             taskId,
+            deferSuccessTelemetry: true,
           },
           inputImageDataUrls: inputDataUrls,
           maskDataUrl,
@@ -319,13 +325,11 @@ export async function executeTask(taskId: string) {
       return
     }
 
-    // 存储输出图片
-    const outputIds: string[] = []
-    for (const dataUrl of result.images) {
+    const outputIds = await persistGeneratedImagesAndReport(result, async (dataUrl) => {
       const imgId = await storeImageWithReclaim(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
-      outputIds.push(imgId)
-    }
+      return imgId
+    })
     const isAsyncCustomTask = taskProvider !== 'openai' && Boolean(customTaskInfo)
     const actualParamsList = isAsyncCustomTask
       ? await readImageSizeParamsList(result.images)
@@ -771,6 +775,7 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
         appMode,
         taskId,
         awaitReport: true,
+        deferSuccessTelemetry: true,
       },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -789,12 +794,11 @@ export async function retryFailedImages(taskId: string, options: { silent?: bool
     const latest = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latest) return null
 
-    const newIds: string[] = []
-    for (const dataUrl of result.images) {
+    const newIds = await persistGeneratedImagesAndReport(result, async (dataUrl) => {
       const imgId = await storeImageWithReclaim(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
-      newIds.push(imgId)
-    }
+      return imgId
+    })
 
     const stillFailed = Math.max(0, targetOutputCount - latest.outputImages.length - newIds.length)
     const mergedOutput = [...latest.outputImages, ...newIds]

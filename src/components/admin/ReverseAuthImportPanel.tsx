@@ -14,6 +14,7 @@ import {
 import { showAppToast } from '../../lib/ui/dialog'
 import { getCpaBaseUrlHint, getCpaManagementKeyHint } from '../../lib/server/reverseAuthImportHints'
 import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
+import Button from '../ui/Button'
 
 interface ReverseAuthImportPanelProps {
   disabled: boolean
@@ -275,30 +276,15 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={disabled || sourcesLoading}
-            onClick={() => addSource('cpa')}
-            className="h-8 rounded border border-[hsl(var(--border))] px-2.5 text-xs font-medium transition hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button type="button" variant="outline" size="xs" disabled={disabled || sourcesLoading} onClick={() => addSource('cpa')}>
             添加 CPA
-          </button>
-          <button
-            type="button"
-            disabled={disabled || sourcesLoading}
-            onClick={() => addSource('sub2api')}
-            className="h-8 rounded border border-[hsl(var(--border))] px-2.5 text-xs font-medium transition hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          </Button>
+          <Button type="button" variant="outline" size="xs" disabled={disabled || sourcesLoading} onClick={() => addSource('sub2api')}>
             添加 Sub2API
-          </button>
-          <button
-            type="button"
-            disabled={disabled || sourcesLoading || sourcesSaving}
-            onClick={() => void saveSources()}
-            className="h-8 rounded bg-[hsl(var(--primary))] px-3 text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          </Button>
+          <Button type="button" variant="primary" size="xs" disabled={disabled || sourcesLoading || sourcesSaving} onClick={() => void saveSources()}>
             {sourcesSaving ? '保存中...' : '保存来源'}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -365,34 +351,29 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
                   </label>
                   <div className="flex flex-wrap justify-end gap-2">
                     {source.type === 'cpa' ? (
-                      <button
+                      <Button
                         type="button"
+                        variant="outline"
                         aria-label={`读取 ${source.name || 'CPA'}`}
                         disabled={disabled || cpaLoadingSourceId === source.id || sourcesSaving}
                         onClick={() => void loadCPAAccounts(source)}
-                        className="h-9 rounded border border-[hsl(var(--border))] px-3 text-sm font-medium transition hover:bg-[hsl(var(--muted))] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {cpaLoadingSourceId === source.id ? '读取中...' : '读取账号'}
-                      </button>
+                      </Button>
                     ) : (
-                      <button
+                      <Button
                         type="button"
+                        variant="primary"
                         aria-label={`导入 ${source.name || 'Sub2API'}`}
                         disabled={disabled || sub2ImportingSourceId === source.id || sourcesSaving}
                         onClick={() => void importSub2APIAccounts(source)}
-                        className="h-9 rounded bg-[hsl(var(--primary))] px-3 text-sm font-medium text-[hsl(var(--primary-foreground))] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {sub2ImportingSourceId === source.id ? '导入中...' : '导入'}
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      type="button"
-                      disabled={disabled || sourcesSaving}
-                      onClick={() => removeSource(source.id)}
-                      className="h-9 rounded border border-rose-500/30 px-3 text-sm font-medium text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
-                    >
+                    <Button type="button" variant="danger" disabled={disabled || sourcesSaving} onClick={() => removeSource(source.id)}>
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 {(inlineError || baseUrlHint || keyHint) && (
@@ -460,14 +441,9 @@ export default function ReverseAuthImportPanel({ disabled, onImported }: Reverse
               <span className="rounded-full border border-[hsl(var(--border))] px-2.5 py-1 text-xs text-[hsl(var(--muted-foreground))]">
                 已选 {selectedCount} / {cpaState.accounts.length}
               </span>
-              <button
-                type="button"
-                disabled={disabled || cpaImporting || selectedCount === 0}
-                onClick={() => void importSelectedCPAAccounts()}
-                className="h-8 rounded bg-[hsl(var(--primary))] px-3 text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:cursor-not-allowed disabled:opacity-50"
-              >
+              <Button type="button" variant="primary" size="xs" disabled={disabled || cpaImporting || selectedCount === 0} onClick={() => void importSelectedCPAAccounts()}>
                 {cpaImporting ? '导入中...' : '导入所选'}
-              </button>
+              </Button>
             </div>
           </div>
           <div className="max-h-64 overflow-auto">

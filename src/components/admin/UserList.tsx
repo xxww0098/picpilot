@@ -11,6 +11,8 @@ import { getUserFacingErrorMessage } from '../../lib/shared/userFacingText'
 import { useAsyncQuery } from '../../hooks/useAsyncQuery'
 import { useAuth } from '../../contexts/AuthProvider'
 import Avatar from '../ui/Avatar'
+import Badge from '../ui/Badge'
+import Button from '../ui/Button'
 import QueryState from './QueryState'
 
 export default function UserList() {
@@ -239,18 +241,12 @@ function UserCard({
           <div className="flex items-center gap-2">
             <h3 className={`truncate text-sm font-semibold ${isDisabled ? 'text-[hsl(var(--muted-foreground))] line-through' : 'text-[hsl(var(--foreground))]'}`}>{user.username}</h3>
             {user.is_admin ? (
-              <span className="shrink-0 rounded-full bg-[hsl(var(--primary)/0.12)] px-1.5 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--primary))]">
-                管理员
-              </span>
+              <Badge tone="primary" className="px-1.5 py-0.5 text-[0.65rem]">管理员</Badge>
             ) : (
-              <span className="shrink-0 rounded-full bg-[hsl(var(--muted))] px-1.5 py-0.5 text-[0.65rem] font-medium text-[hsl(var(--muted-foreground))]">
-                成员
-              </span>
+              <Badge tone="neutral" className="px-1.5 py-0.5 text-[0.65rem]">成员</Badge>
             )}
             {isDisabled && (
-              <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[0.65rem] font-medium text-red-600 dark:text-red-400">
-                已禁用
-              </span>
+              <Badge tone="danger" className="px-1.5 py-0.5 text-[0.65rem]">已禁用</Badge>
             )}
           </div>
           <p className="mt-0.5 truncate text-xs text-[hsl(var(--muted-foreground))]">
@@ -316,21 +312,23 @@ function UserActionsMenu({
 
   return (
     <div ref={rootRef} className="relative shrink-0">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="用户操作"
-        className="rounded-lg p-2 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+        className="rounded-lg text-[hsl(var(--muted-foreground))]"
       >
         <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
           <circle cx="12" cy="5" r="1.5" />
           <circle cx="12" cy="12" r="1.5" />
           <circle cx="12" cy="19" r="1.5" />
         </svg>
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -368,15 +366,16 @@ function MenuButton({
   destructive?: boolean
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       role="menuitem"
       onClick={onClick}
-      className={`flex w-full px-3 py-2 text-left text-sm transition-colors hover:bg-[hsl(var(--muted)/0.5)] ${
-        destructive ? 'text-red-600 dark:text-red-400' : 'text-[hsl(var(--foreground))]'
+      className={`h-auto w-full justify-start rounded-none px-3 py-2 text-left text-sm font-normal hover:bg-[hsl(var(--muted)/0.5)] ${
+        destructive ? 'text-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive))]' : ''
       }`}
     >
       {children}
-    </button>
+    </Button>
   )
 }

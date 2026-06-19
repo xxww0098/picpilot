@@ -5,6 +5,9 @@ import { deleteImage, deleteVideo, evictOldestImages, getAllImageIds, isQuotaExc
 import { callImageApi, type CallApiOptions, type CallApiResult } from '../lib/image/api'
 import { logger, serializeError } from '../lib/shared/logger'
 import { getImageApiFanoutConcurrency } from '../lib/image/imageApiShared'
+import { applyTeamRuntimeSettings } from '../lib/config/runtimeTeamSettings'
+import { getActiveApiProfile } from '../lib/shared/apiProfiles'
+import { buildImageGenerationTelemetryBase, reportImageGenerationPersistOutcome } from '../lib/image/imageTelemetry'
 import { settleWithConcurrency } from '../lib/shared/runWithConcurrency'
 import { getCustomQueuedImageResult } from '../lib/image/openaiCompatibleImageApi'
 import { getCustomProviderDefinition } from '../lib/shared/apiProfiles'
@@ -319,8 +322,12 @@ export async function callImageApiPerInput(
     inputDataUrls,
     baseOpts.fanoutConcurrency ?? getImageApiFanoutConcurrency(),
     (dataUrl, inputIndex) => {
+      const childTelemetry = baseOpts.telemetry
+        ? { ...baseOpts.telemetry, deferSuccessTelemetry: true }
+        : undefined
       const opts: CallApiOptions = {
         ...baseOpts,
+        telemetry: childTelemetry,
         inputImageDataUrls: [dataUrl],
         onPartialImage: onPartialImage
           ? (partial) => onPartialImage({ ...partial, requestIndex: inputIndex * perInputCount + (partial.requestIndex ?? 0) })
@@ -349,7 +356,7 @@ export async function callImageApiPerInput(
   const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
   const failedCount = rejected.length * perInputCount
   const failedErrors = rejected.map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
-  return {
+  const merged: CallApiResult = {
     images,
     actualParams: fulfilled[0]?.actualParams,
     actualParamsList,
@@ -357,6 +364,30 @@ export async function callImageApiPerInput(
     ...(rawImageUrls.length ? { rawImageUrls } : {}),
     ...(failedCount ? { failedCount, failedErrors } : {}),
   }
+  if (baseOpts.telemetry?.deferSuccessTelemetry) {
+    const effectiveSettings = applyTeamRuntimeSettings(baseOpts.settings)
+    const profile = getActiveApiProfile(effectiveSettings)
+    const appMode = baseOpts.telemetry.appMode ?? 'gallery'
+    const telemetryBase = buildImageGenerationTelemetryBase({
+      profile,
+      appMode,
+      prompt: baseOpts.prompt,
+      params: baseOpts.params,
+      inputImageCount: inputDataUrls.length,
+      hasMask: false,
+      actionType: baseOpts.telemetry.actionType ?? 'generate',
+      taskId: baseOpts.telemetry.taskId,
+      imageIndex: baseOpts.telemetry.imageIndex,
+    })
+    merged.reportPersistOutcome = (outcome, opts) =>
+      reportImageGenerationPersistOutcome(telemetryBase, outcome, {
+        durationMs: opts?.durationMs ?? 0,
+        images: opts?.images ?? merged.images,
+        err: opts?.err,
+        awaitReport: baseOpts.telemetry?.awaitReport,
+      })
+  }
+  return merged
 }
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {

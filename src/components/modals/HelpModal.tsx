@@ -76,7 +76,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
                   <ul className="list-disc pl-4 space-y-2">
                     <li>video 模式使用 <code className="rounded bg-gray-100 px-1 py-0.5 text-xs dark:bg-white/[0.06]">grok-imagine-video-1.5-preview</code> 提交异步视频任务。</li>
                     <li>可直接输入提示词生成视频，也可上传 1 张参考图做图生视频。</li>
-                    <li>底部参数可选择 6、10、15 秒；视频模式不支持遮罩局部重绘。</li>
+                    <li>底部可选时长（5/6/10/15 秒）、宽高比（含 16:9、9:16 等）与分辨率（480p/720p）；不支持遮罩局部重绘。</li>
                     <li>生成完成后会缓存视频文件，视频记录只在 video 页显示，不混入图片画廊。</li>
                   </ul>
                 </div>

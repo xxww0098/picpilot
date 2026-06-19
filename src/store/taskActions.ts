@@ -18,6 +18,7 @@ import {
 } from '../lib/shared/db'
 import { logger, serializeError } from '../lib/shared/logger'
 import { replaceImageMentionsForApi } from '../lib/ui/promptImageMentions'
+import { persistGeneratedImagesAndReport } from '../lib/image/imageTelemetry'
 import { normalizeParamsForSettings } from '../lib/params/paramCompatibility'
 import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
 import { firstActualParams, readImageSizeParamsList } from '../lib/agent/taskPersistence'
@@ -156,6 +157,7 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
         taskId,
         imageIndex,
         awaitReport: true,
+        deferSuccessTelemetry: true,
       },
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -177,8 +179,14 @@ export async function regenerateTaskImage(taskId: string, imageIndex: number): P
     const replacementImage = result.images[0]
     if (!replacementImage) throw new Error('接口没有返回可替换的图片')
 
-    const newImageId = await storeImage(replacementImage, 'generated')
-    cacheImage(newImageId, replacementImage)
+    const [newImageId] = await persistGeneratedImagesAndReport(
+      { ...result, images: [replacementImage] },
+      async (dataUrl) => {
+        const imgId = await storeImage(dataUrl, 'generated')
+        cacheImage(imgId, dataUrl)
+        return imgId
+      },
+    )
 
     const actualParamsList = result.actualParamsList?.length
       ? [result.actualParamsList[0]]

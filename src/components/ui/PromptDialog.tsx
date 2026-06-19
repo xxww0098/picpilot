@@ -1,16 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import ModalShell from './ModalShell'
-
-const INPUT_CLASS =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
-
-function getActionButtonClass(tone: 'primary' | 'secondary' = 'primary') {
-  if (tone === 'secondary') {
-    return 'border border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-400 dark:hover:bg-white/[0.06]'
-  }
-  return 'bg-blue-500 text-white hover:bg-blue-600'
-}
+import Button from './Button'
+import Input from './Input'
 
 export default function PromptDialog() {
   const promptDialog = useStore((s) => s.promptDialog)
@@ -66,7 +58,7 @@ export default function PromptDialog() {
           {promptDialog.message}
         </p>
       )}
-      <input
+      <Input
         ref={inputRef}
         type={promptDialog.inputType ?? 'text'}
         value={value}
@@ -81,25 +73,17 @@ export default function PromptDialog() {
             handleSubmit()
           }
         }}
-        className={`${INPUT_CLASS} ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
+        className={error ? 'border-[hsl(var(--destructive))] focus:border-[hsl(var(--destructive))] focus:ring-[hsl(var(--destructive)/0.2)]' : undefined}
         autoComplete={promptDialog.inputType === 'password' ? 'new-password' : 'off'}
       />
       {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
       <div className={`flex gap-2 ${error ? 'mt-4' : 'mt-6'}`}>
-        <button
-          type="button"
-          onClick={handleClose}
-          className={`flex-1 rounded-lg py-2 text-sm transition ${getActionButtonClass('secondary')}`}
-        >
+        <Button type="button" variant="outline" className="flex-1 rounded-lg" onClick={handleClose}>
           {cancelText}
-        </button>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${getActionButtonClass('primary')}`}
-        >
+        </Button>
+        <Button type="button" variant="primary" className="flex-1 rounded-lg" onClick={handleSubmit}>
           {confirmText}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   )

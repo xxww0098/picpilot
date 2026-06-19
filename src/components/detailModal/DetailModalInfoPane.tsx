@@ -1,6 +1,12 @@
 import { ActualValueBadge, DetailParamValue } from '../../lib/params/paramDisplay'
 import { CloseIcon, CopyIcon, EditIcon, TrashIcon } from '../ui/icons'
 import type { AppState } from '../../store'
+import {
+  getVideoAspectRatioLabel,
+  getVideoResolutionLabel,
+  normalizeVideoAspectRatio,
+  normalizeVideoResolution,
+} from '../../lib/video/videoCapabilities'
 import type { TaskImageSource, TaskParams, TaskRecord } from '../../types'
 
 export type DetailModalInfoPaneProps = {
@@ -228,6 +234,20 @@ export default function DetailModalInfoPane({
                     <span className="text-gray-400 dark:text-gray-500">时长</span>
                     <br />
                     <span className="font-medium text-gray-700 dark:text-gray-200">{task.videoDurationSeconds ?? '-'} 秒</span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">比例</span>
+                    <br />
+                    <span className="font-medium text-gray-700 dark:text-gray-200">
+                      {task.videoAspectRatio ? getVideoAspectRatioLabel(normalizeVideoAspectRatio(task.videoAspectRatio)) : '-'}
+                    </span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">分辨率</span>
+                    <br />
+                    <span className="font-medium text-gray-700 dark:text-gray-200">
+                      {task.videoResolution ? getVideoResolutionLabel(normalizeVideoResolution(task.videoResolution)) : '-'}
+                    </span>
                   </div>
                 </>
               ) : (

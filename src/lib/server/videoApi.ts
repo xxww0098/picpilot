@@ -1,7 +1,7 @@
 // grok-imagine-video（异步视频生成）客户端。
 //
 // 契约依据 xAI Imagine 文档（cliproxy 兼容）：
-//   POST /v1/videos/generations  { model, prompt, duration?, image?: { url } } → 返回任务 id
+//   POST /v1/videos/generations  { model, prompt, duration?, aspect_ratio?, resolution?, image?: { url } } → 返回任务 id
 //   GET  /v1/videos/{id}         → { status, ... , video.url(mp4) }，轮询至完成
 // 因未对线上做真实探测（视频是付费异步任务），下面的字段解析做多形态容错。
 // 真实契约差异等线上实测再校准。
@@ -10,6 +10,14 @@ import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../con
 import { getStoredAuthToken } from '../shared/auth'
 import { getApiErrorMessage } from '../image/imageApiShared'
 import { logger, serializeError } from '../shared/logger'
+import {
+  normalizeVideoAspectRatio,
+  normalizeVideoResolution,
+  videoAspectRatioForApi,
+  videoResolutionForApi,
+  type VideoAspectRatioSetting,
+  type VideoResolutionSetting,
+} from '../video/videoCapabilities'
 import { classifyError, reportEvent } from './telemetry'
 
 export interface VideoGenerationResult {
@@ -119,6 +127,10 @@ export interface GenerateVideoOptions {
   imageDataUrl?: string
   /** 视频时长（秒），不传则用上游默认 */
   durationSeconds?: number
+  /** Grok 宽高比；auto 时不写入请求体 */
+  aspectRatio?: VideoAspectRatioSetting
+  /** Grok 分辨率：480p | 720p */
+  resolution?: VideoResolutionSetting
   /** 轮询间隔（毫秒），默认 5000 */
   pollIntervalMs?: number
   /** 轮询总超时（毫秒），默认 10 分钟 */
@@ -148,6 +160,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGenerationResult> {
   const { model, prompt, imageDataUrl, durationSeconds, signal, onStatus } = opts
+  const aspectRatio = normalizeVideoAspectRatio(opts.aspectRatio)
+  const resolution = normalizeVideoResolution(opts.resolution)
   const startedAt = Date.now()
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   const pollTimeoutMs = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS
@@ -157,6 +171,9 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGe
 
   const submitBody: Record<string, unknown> = { model, prompt }
   if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) submitBody.duration = durationSeconds
+  const aspectForApi = videoAspectRatioForApi(aspectRatio)
+  if (aspectForApi) submitBody.aspect_ratio = aspectForApi
+  submitBody.resolution = videoResolutionForApi(resolution)
   if (imageDataUrl) submitBody.image = { url: imageDataUrl }
 
   logger.info('api', '视频 API 调用开始', {
@@ -167,6 +184,8 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGe
     apiProxy: useApiProxy,
     hasInputImage: Boolean(imageDataUrl),
     durationSeconds,
+    aspectRatio,
+    resolution,
     promptChars: prompt.length,
   })
 
