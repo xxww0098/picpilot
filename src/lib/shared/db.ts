@@ -433,3 +433,118 @@ export class StorageFullError extends Error {
 export function isStorageFullError(err: unknown): boolean {
   return err instanceof StorageFullError || (err as { isStorageFull?: boolean })?.isStorageFull === true
 }
+
+// ===== Storage health & durability =====
+// Browser storage is best-effort: the UA may evict origin data under storage pressure
+// unless the origin is granted *persistent* storage. Since user tasks/images live ONLY
+// here (never uploaded to the server), these helpers let the app request durability,
+// surface usage to the user, and self-check stored-image integrity.
+
+/**
+ * Asks the browser to mark this origin's storage as persistent (exempt from automatic
+ * eviction). Returns true when persistence is granted (or already granted). Safe to call
+ * repeatedly; resolves false when the StorageManager API is unavailable.
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (!navigator.storage?.persist) return false
+    if (await navigator.storage.persisted?.()) return true
+    return await navigator.storage.persist()
+  } catch (error) {
+    logger.warn('db', '申请持久化存储失败', { error: serializeError(error) })
+    return false
+  }
+}
+
+/** Whether this origin's storage is currently persisted (won't be auto-evicted). */
+export async function isStoragePersisted(): Promise<boolean> {
+  try {
+    return (await navigator.storage?.persisted?.()) ?? false
+  } catch {
+    return false
+  }
+}
+
+export interface StorageEstimateInfo {
+  /** Bytes used by this origin (all storage, per the UA estimate — not just our DB). */
+  usageBytes: number
+  /** Total bytes the UA is willing to grant this origin; 0 when unknown. */
+  quotaBytes: number
+  /** usage/quota as a 0-100 percentage; 0 when quota is unknown. */
+  percentUsed: number
+  /** Whether storage is persisted (durable). */
+  persisted: boolean
+}
+
+/** Best-effort storage usage/quota estimate plus persistence status. */
+export async function estimateStorageUsage(): Promise<StorageEstimateInfo> {
+  let usageBytes = 0
+  let quotaBytes = 0
+  try {
+    const est = await navigator.storage?.estimate?.()
+    usageBytes = est?.usage ?? 0
+    quotaBytes = est?.quota ?? 0
+  } catch (error) {
+    logger.warn('db', '读取存储用量失败', { error: serializeError(error) })
+  }
+  const persisted = await isStoragePersisted()
+  const percentUsed = quotaBytes > 0 ? (usageBytes / quotaBytes) * 100 : 0
+  return { usageBytes, quotaBytes, percentUsed, persisted }
+}
+
+export interface StorageCounts {
+  images: number
+  thumbnails: number
+  videos: number
+  tasks: number
+  agentConversations: number
+}
+
+function countStore(storeName: string): Promise<number> {
+  return dbTransaction(storeName, 'readonly', (s) => s.count())
+}
+
+/** Per-store row counts, for the storage health view. */
+export async function getStorageCounts(): Promise<StorageCounts> {
+  const [images, thumbnails, videos, tasks, agentConversations] = await Promise.all([
+    countStore(STORE_IMAGES),
+    countStore(STORE_THUMBNAILS),
+    countStore(STORE_VIDEOS),
+    countStore(STORE_TASKS),
+    countStore(STORE_AGENT_CONVERSATIONS),
+  ])
+  return { images, thumbnails, videos, tasks, agentConversations }
+}
+
+export interface IntegrityReport {
+  totalImages: number
+  /** Images whose stored bytes no longer hash to their id (silent corruption). */
+  corrupted: string[]
+  /** Images that exist but have no thumbnail row (cosmetic; backfillable). */
+  missingThumbnails: number
+}
+
+/**
+ * Re-hashes every stored image and flags any whose content no longer matches its id —
+ * since the id IS the content hash, a mismatch means the stored bytes were corrupted.
+ * Manual, user-triggered audit: it reads every image into memory, so it is intentionally
+ * never run automatically. Cross-task orphan cleanup is handled at the store layer.
+ */
+export async function scanStorageIntegrity(): Promise<IntegrityReport> {
+  const images = await getAllImages()
+  const thumbnailKeys = await dbTransaction<IDBValidKey[]>(STORE_THUMBNAILS, 'readonly', (s) => s.getAllKeys())
+  const thumbnailIds = new Set(thumbnailKeys.map(String))
+  const corrupted: string[] = []
+  let missingThumbnails = 0
+  for (const img of images) {
+    if (!thumbnailIds.has(img.id)) missingThumbnails++
+    const fallbackId = img.id.startsWith('fallback-')
+    const expected = fallbackId ? hashDataUrlFallback(img.dataUrl) : await hashDataUrl(img.dataUrl)
+    // Only flag when we computed a comparable hash. If we silently fell back to a
+    // different scheme than the id was created with, skip it to avoid false positives.
+    if (expected !== img.id && expected.startsWith('fallback-') === fallbackId) {
+      corrupted.push(img.id)
+    }
+  }
+  return { totalImages: images.length, corrupted, missingThumbnails }
+}

@@ -6,12 +6,13 @@
 import { vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
+import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, StoredVideo, TaskRecord } from './types'
 
 export function createDbMock() {
   const tasks = new Map<string, TaskRecord>()
   const images = new Map<string, StoredImage>()
   const thumbnails = new Map<string, StoredImageThumbnail>()
+  const videos = new Map<string, StoredVideo>()
   const agentConversations = new Map<string, AgentConversation>()
   let imageSeq = 0
 
@@ -68,6 +69,21 @@ export function createDbMock() {
       const id = `stored-image-${++imageSeq}`
       images.set(id, { id, dataUrl, source, createdAt: Date.now() })
       return id
+    },
+    putVideo: async (video: StoredVideo) => {
+      videos.set(video.id, video)
+      return video.id
+    },
+    deleteVideo: async (id: string) => {
+      videos.delete(id)
+    },
+    // 测试里永远不会写满存储，没有可驱逐项
+    evictOldestImages: async (_count: number): Promise<string[]> => [],
+    requestPersistentStorage: async () => false,
+    isQuotaExceededError: (_err: unknown) => false,
+    isStorageFullError: (_err: unknown) => false,
+    StorageFullError: class StorageFullError extends Error {
+      readonly isStorageFull = true
     },
   }
 }

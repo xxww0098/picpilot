@@ -3,6 +3,7 @@ import { exportData } from '../../store'
 import type { AppState } from '../../store'
 import { Checkbox } from '../ui/Checkbox'
 import { ExportIcon, ImportIcon, TrashIcon } from '../ui/icons'
+import StorageHealthPanel from './StorageHealthPanel'
 
 // 「数据」设置页（由 SettingsModal 抽出）。复选框状态与导入/清除处理器仍由父组件持有透传，
 // props 名与父组件变量一一对应，故内部 JSX 与原实现逐字节一致，行为严格等价。
@@ -53,6 +54,8 @@ export default function SettingsDataSection({
           所有的配置、任务记录和生成的图片均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如果您需要清理浏览器站点数据、重置浏览器或使用其他设备，请先导出备份。
         </div>
       </div>
+
+      <StorageHealthPanel />
 
       <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
         <div className="flex items-center gap-2 mb-1">
