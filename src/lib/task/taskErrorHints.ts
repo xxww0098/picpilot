@@ -5,10 +5,11 @@ import { isApiTimeoutError } from '../image/imageApiShared'
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
 const TIMEOUT_PARTIAL_IMAGES_LOW_HINT = '也可尝试提高「请求中间步骤图像数」来维持连接，避免长时间无数据传输导致断开。'
+const AGENT_RESPONSES_IDLE_HINT = 'Agent 长对话在长时间无流式输出时，易被反向代理按空闲连接断开；可开启流式传输，或请管理员将 Caddy/nginx read_timeout 与团队「请求超时」对齐（建议 ≥600 秒）。'
 
 export type TimeoutStreamingHintProfile = Pick<ApiProfile, 'provider' | 'streamImages' | 'streamPartialImages'>
 
-function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
+function getTimeoutStreamingHint(profile?: Partial<Pick<ApiProfile, 'provider' | 'streamImages' | 'streamPartialImages'>> | null) {
   if (profile?.provider !== 'openai') return ''
   const partialImages = profile.streamPartialImages ?? DEFAULT_SETTINGS.streamPartialImages ?? 0
   if (profile.streamImages !== true) return TIMEOUT_STREAMING_HINT
@@ -16,7 +17,14 @@ function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
   return partialImages < 3 ? TIMEOUT_PARTIAL_IMAGES_LOW_HINT : ''
 }
 
-export function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
+function getAgentResponsesHint(profile?: Partial<Pick<ApiProfile, 'apiMode' | 'streamImages'>> | null) {
+  if (profile?.apiMode === 'responses' && profile.streamImages !== true) {
+    return ` ${AGENT_RESPONSES_IDLE_HINT}`
+  }
+  return ''
+}
+
+export function createOpenAITimeoutError(timeoutSeconds: number, profile?: Partial<Pick<ApiProfile, 'provider' | 'streamImages' | 'streamPartialImages'>> | null) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
 }
 
@@ -26,38 +34,61 @@ export function isRecoverableConnectionError(err: unknown) {
   return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
 }
 
-function isApiRequestNetworkError(err: unknown): boolean {
+/** Browser fetch failures, including Chrome/Edge `TypeError: network error` on dropped SSE streams. */
+export function isFetchNetworkError(err: unknown): boolean {
   if (err instanceof TypeError) {
     const message = err.message.toLowerCase()
-    return /failed to fetch|fetch failed|load failed|networkerror|network request failed/i.test(message)
+    return /failed to fetch|fetch failed|load failed|networkerror|network request failed|^network error$/i.test(message)
   }
-  return false
+  const message = err instanceof Error ? err.message : String(err)
+  return /^network error$/i.test(message.trim())
 }
+
+function isApiRequestNetworkError(err: unknown): boolean {
+  return isFetchNetworkError(err)
+}
+
+type NetworkHintProfile = Partial<Pick<ApiProfile, 'provider' | 'apiMode' | 'streamImages' | 'streamPartialImages' | 'timeout'>> | null | undefined
 
 export function getApiRequestNetworkErrorHint(
   err: unknown,
   createdAt: number,
   _usesApiProxy: boolean,
-  profile?: Pick<ApiProfile, 'provider' | 'apiMode' | 'streamImages' | 'streamPartialImages'> | null,
+  profile?: NetworkHintProfile,
 ): string | null {
   if (!isApiRequestNetworkError(err)) return null
 
   const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
   const roundedElapsedSeconds = Math.max(1, Math.round(elapsedSeconds))
+  const streamHint = `${getTimeoutStreamingHint(profile)}${getAgentResponsesHint(profile)}`
+
+  const configuredTimeout = profile?.timeout
+  if (
+    typeof configuredTimeout === 'number'
+    && configuredTimeout >= 30
+    && elapsedSeconds >= configuredTimeout - 25
+    && elapsedSeconds <= configuredTimeout + 45
+  ) {
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，耗时接近团队/配置中的请求超时（${configuredTimeout} 秒）。请在管理端「团队设置」调大请求超时，并确保 Caddy 等反向代理的 read_timeout 不小于该值。${streamHint}`
+  }
 
   if (elapsedSeconds <= 15) {
     return '提示：请求立即失败，请联系管理员检查团队 API 代理服务是否正常运行。'
   }
 
   if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
-    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是某一层反向代理的默认超时，而非接口本身报错。请检查所有代理层的超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是某一层反向代理的默认超时（约 60 秒），而非接口本身报错。请检查所有代理层的超时设置。${streamHint}`
   }
 
   if (elapsedSeconds >= 110 && elapsedSeconds <= 140) {
-    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制，而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${getTimeoutStreamingHint(profile)}`
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制（约 100–120 秒），而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${streamHint}`
   }
 
-  return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，通常是反向代理或网关的超时限制，或服务在部署/重启时断开连接。可检查代理超时设置和服务重启时间，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
+  if (elapsedSeconds >= 165 && elapsedSeconds <= 210) {
+    return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，常见于反向代理或团队「请求超时」设为约 180 秒，或长连接在 Agent/流式响应中长时间无数据被掐断。请把团队请求超时与 Caddy read_timeout 提高到 600 秒以上并重试。${streamHint}`
+  }
+
+  return `提示：请求等待约 ${roundedElapsedSeconds} 秒后被断开，通常是反向代理或网关的超时限制，或服务在部署/重启时断开连接。可检查代理超时设置和服务重启时间。${streamHint}`
 }
 
 export function getUpstreamApiErrorHint(err: unknown): string | null {

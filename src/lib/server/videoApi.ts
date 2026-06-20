@@ -19,6 +19,8 @@ import {
   type VideoResolutionSetting,
 } from '../video/videoCapabilities'
 import { classifyError, reportEvent } from './telemetry'
+import { getApiRequestNetworkErrorHint, getUpstreamApiErrorHint } from '../task/taskErrorHints'
+import { IMAGE_FETCH_CORS_HINT } from '../image/imageApiShared'
 
 export interface VideoGenerationResult {
   /** 生成的视频远端地址（mp4）。由调用方抓取后缓存到 IndexedDB。 */
@@ -271,6 +273,15 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGe
       error: serializeError(err),
     })
     const cls = classifyError(err)
+    let errorMessage = err instanceof Error ? err.message : String(err)
+    const usesApiProxy = true
+    const networkErrorHint = getApiRequestNetworkErrorHint(err, startedAt, usesApiProxy, null)
+    if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
+      errorMessage += `\n${networkErrorHint}`
+    } else {
+      const upstreamHint = getUpstreamApiErrorHint(err)
+      if (upstreamHint) errorMessage += `\n${upstreamHint}`
+    }
     void reportEvent({
       event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
       app_mode: 'video',
@@ -284,7 +295,7 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<VideoGe
       duration_ms: elapsedMs,
       http_status: cls.http_status,
       error_type: cls.error_type,
-      error_message: err instanceof Error ? err.message : String(err),
+      error_message: errorMessage,
       error_stack: err instanceof Error ? err.stack : undefined,
     })
     throw err

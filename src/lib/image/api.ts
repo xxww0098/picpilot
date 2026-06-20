@@ -4,6 +4,8 @@ import type { CallApiOptions, CallApiResult } from './imageApiShared'
 import { getDataUrlDecodedByteSize } from './imageApiShared'
 import { logger, serializeError } from '../shared/logger'
 import { classifyError, reportEvent } from '../server/telemetry'
+import { getApiRequestNetworkErrorHint, getUpstreamApiErrorHint } from '../task/taskErrorHints'
+import { IMAGE_FETCH_CORS_HINT } from './imageApiShared'
 import { applyTeamRuntimeSettings } from '../config/runtimeTeamSettings'
 import { preflightImageUpstream } from './upstreamPreflight'
 import {
@@ -109,13 +111,22 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
       error: serializeError(err),
     })
     const cls = classifyError(err)
+    let errorMessage = err instanceof Error ? err.message : String(err)
+    const usesApiProxy = true
+    const networkErrorHint = getApiRequestNetworkErrorHint(err, startedAt, usesApiProxy, profile)
+    if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
+      errorMessage += `\n${networkErrorHint}`
+    } else {
+      const upstreamHint = getUpstreamApiErrorHint(err)
+      if (upstreamHint) errorMessage += `\n${upstreamHint}`
+    }
     const event = {
       ...baseEvent,
       event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
       duration_ms: elapsedMs,
       http_status: cls.http_status,
       error_type: cls.error_type,
-      error_message: err instanceof Error ? err.message : String(err),
+      error_message: errorMessage,
       error_stack: err instanceof Error ? err.stack : undefined,
     } as const
     if (opts.telemetry?.awaitReport) await reportEvent(event)

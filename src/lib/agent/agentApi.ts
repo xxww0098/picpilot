@@ -7,6 +7,8 @@ import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../con
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image } from '../image/imageApiShared'
 import { logger, serializeError } from '../shared/logger'
 import { classifyError, reportEvent } from '../server/telemetry'
+import { getApiRequestNetworkErrorHint, getUpstreamApiErrorHint } from '../task/taskErrorHints'
+import { IMAGE_FETCH_CORS_HINT } from '../image/imageApiShared'
 import { applyTeamRuntimeSettings } from '../config/runtimeTeamSettings'
 import { AGENT_TITLE_INSTRUCTIONS, createAgentInstructions, createAgentTools, resolveAgentModel } from './agentApiInstructions'
 import { extractImageFromOutputItem, extractImages, extractText, getNumberValue, getStreamResponsePayload, getStringValue, isEventStreamResponse, isRecordValue, parseAgentConversationTitleXml, parseAgentStreamResponse, readJsonServerSentEvents, throwIfAborted } from './agentApiParsing'
@@ -149,6 +151,15 @@ export async function callAgentResponsesApi(opts: {
       error: serializeError(err),
     })
     const cls = classifyError(err)
+    let errorMessage = err instanceof Error ? err.message : String(err)
+    const usesApiProxy = useApiProxy
+    const networkErrorHint = getApiRequestNetworkErrorHint(err, startedAt, usesApiProxy, profile)
+    if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
+      errorMessage += `\n${networkErrorHint}`
+    } else {
+      const upstreamHint = getUpstreamApiErrorHint(err)
+      if (upstreamHint) errorMessage += `\n${upstreamHint}`
+    }
     void reportEvent({
       event_type: cls.error_type === 'cancelled' ? 'cancelled' : cls.error_type === 'timeout' ? 'timeout' : 'failure',
       app_mode: 'agent',
@@ -164,7 +175,7 @@ export async function callAgentResponsesApi(opts: {
       duration_ms: elapsedMs,
       http_status: cls.http_status,
       error_type: cls.error_type,
-      error_message: err instanceof Error ? err.message : String(err),
+      error_message: errorMessage,
       error_stack: err instanceof Error ? err.stack : undefined,
     })
     throw err

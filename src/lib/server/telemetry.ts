@@ -42,6 +42,8 @@ export function classifyError(err: unknown): { error_type: string; http_status?:
   if (lower.includes('400') || lower.includes('invalid') || lower.includes('bad request')) return { error_type: 'invalid_request', http_status: 400 }
   if (lower.includes('5') && (lower.includes('500') || lower.includes('502') || lower.includes('503') || lower.includes('504'))) return { error_type: 'server_error' }
   if (lower.includes('network') || lower.includes('fetch') || lower.includes('cors')) return { error_type: 'network' }
+  // Explicit raw Chrome/Edge fetch network error (e.g., "TypeError: network error")
+  if (/^network error$/i.test(msg.trim())) return { error_type: 'network' }
   return { error_type: 'unknown' }
 }
 

@@ -30,6 +30,10 @@ describe('userFacingText', () => {
     expect(getUserFacingErrorMessage(new TypeError('Failed to fetch'))).toContain('网络请求失败')
   })
 
+  it('turns Chrome network error into actionable messages', () => {
+    expect(getUserFacingErrorMessage(new TypeError('network error'))).toContain('网络请求失败')
+  })
+
   it('preserves server error messages', () => {
     const message = '服务繁忙，当前 5 个请求在处理中，请几秒后重试。'
     expect(getUserFacingErrorMessage(message)).toBe(message)

@@ -461,6 +461,7 @@ export async function executeTask(taskId: string) {
         apiMode: settings.apiMode,
         streamImages: activeProfile.streamImages,
         streamPartialImages: activeProfile.streamPartialImages,
+        timeout: activeProfile.timeout,
       }
       const networkErrorHint = getApiRequestNetworkErrorHint(err, latestTask.createdAt, usesApiProxy, hintProfile)
       if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
