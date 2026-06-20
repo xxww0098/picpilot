@@ -191,10 +191,12 @@ func (e *Executor) run(id string) {
 		cancel()
 	}()
 
-	// Acquire a global slot (shared with the sync proxy). Persisted tasks can wait
+	// Acquire a global slot (shared with the sync proxy), tagged with the resolved upstream
+	// provider so it counts toward per-provider limits. Persisted tasks can wait
 	// indefinitely, so re-try on a transiently full queue instead of failing.
+	provider := upstream.FromConfigForMode(e.cfg, t.UpstreamMode).Mode
 	for {
-		switch err := e.q.Acquire(ctx, 0, t.UserID); {
+		switch err := e.q.AcquireTask(ctx, 0, t.UserID, provider); {
 		case err == nil:
 			goto acquired
 		case errors.Is(err, queue.ErrClientAbort):
@@ -210,7 +212,7 @@ func (e *Executor) run(id string) {
 		}
 	}
 acquired:
-	defer e.q.Release(t.UserID)
+	defer e.q.Release(t.UserID, provider)
 
 	won, err := e.store.Claim(id)
 	if err != nil || !won {

@@ -364,6 +364,8 @@ func (p *Proxy) handleQueueStats(w http.ResponseWriter, r *http.Request) {
 		"maxConcurrent":      lim.MaxConcurrent,
 		"maxQueue":           lim.MaxQueue,
 		"proxyUserSoftLimit": lim.PerUserSoftLimit,
+		"proxyUserHardLimit": lim.PerUserHardLimit,
+		"providerLimits":     lim.ProviderLimits,
 		"myInflight":         st.MyInflight,
 		"myQueued":           st.MyQueued,
 		"myNextPosition":     st.MyNextPosition,
@@ -471,11 +473,16 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Concurrency control: acquire a slot (FIFO queue when full), honoring client cancel.
-	switch err := p.q.Acquire(r.Context(), 0, userID); {
+	// AcquireUser enforces the per-user hard cap so one user's fan-out cannot fill the queue,
+	// and tags the request with its upstream provider for per-provider limiting.
+	switch err := p.q.AcquireUser(r.Context(), 0, userID, activeUpstream.Mode); {
 	case err == nil:
 		// acquired
 	case errors.Is(err, queue.ErrClientAbort):
 		w.WriteHeader(499) // client disconnected while queued; no body
+		return
+	case errors.Is(err, queue.ErrUserLimit):
+		httpx.Error(w, http.StatusTooManyRequests, "你当前并行的请求过多，请等待已有请求完成后再试。")
 		return
 	case errors.Is(err, queue.ErrQueueFull):
 		httpx.Error(w, http.StatusTooManyRequests, "服务繁忙，排队人数过多，请稍后重试。")
@@ -486,7 +493,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Hold the slot until the full response body has been streamed (ReverseProxy.ServeHTTP
 	// blocks until the copy finishes or the connection breaks), then release.
-	defer p.q.Release(userID)
+	defer p.q.Release(userID, activeUpstream.Mode)
 
 	rp := &httputil.ReverseProxy{
 		Transport:     p.transport,
@@ -535,10 +542,14 @@ func (p *Proxy) handleInternalReverse(w http.ResponseWriter, r *http.Request, en
 		}
 	}
 
-	switch err := p.q.Acquire(r.Context(), 0, userID); {
+	// This path is always the built-in ChatGPT reverse upstream → provider "reverse".
+	switch err := p.q.AcquireUser(r.Context(), 0, userID, "reverse"); {
 	case err == nil:
 	case errors.Is(err, queue.ErrClientAbort):
 		w.WriteHeader(499)
+		return
+	case errors.Is(err, queue.ErrUserLimit):
+		httpx.Error(w, http.StatusTooManyRequests, "你当前并行的请求过多，请等待已有请求完成后再试。")
 		return
 	case errors.Is(err, queue.ErrQueueFull):
 		httpx.Error(w, http.StatusTooManyRequests, "服务繁忙，排队人数过多，请稍后重试。")
@@ -547,7 +558,7 @@ func (p *Proxy) handleInternalReverse(w http.ResponseWriter, r *http.Request, en
 		httpx.Error(w, http.StatusTooManyRequests, "服务繁忙，排队等待超时，请稍后重试。")
 		return
 	}
-	defer p.q.Release(userID)
+	defer p.q.Release(userID, "reverse")
 
 	p.reverse.ServeProxy(w, r, endpoint)
 }

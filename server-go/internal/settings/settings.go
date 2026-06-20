@@ -19,6 +19,7 @@ type Payload struct {
 	MaxConcurrent             int      `json:"maxConcurrent"`
 	MaxQueue                  int      `json:"maxQueue"`
 	ProxyUserSoftLimit        int      `json:"proxyUserSoftLimit"`
+	ProxyUserHardLimit        int      `json:"proxyUserHardLimit"`
 	ReverseAccountConcurrency int      `json:"reverseAccountConcurrency"`
 	StreamFallbackEnabled     bool     `json:"streamFallbackEnabled"`
 	RequestTimeoutSeconds     int      `json:"requestTimeoutSeconds"`
@@ -93,6 +94,7 @@ func (p *Provider) Payload() Payload {
 		MaxConcurrent:             config.NormalizeConcurrencyLimit(s["maxConcurrent"], p.cfg.MaxConcurrent),
 		MaxQueue:                  config.NormalizeQueueLimit(s["maxQueue"], p.cfg.ProxyQueueMax),
 		ProxyUserSoftLimit:        config.NormalizeProxyUserSoftLimit(s["proxyUserSoftLimit"], p.cfg.ProxyUserSoftLimit),
+		ProxyUserHardLimit:        config.NormalizeProxyUserHardLimit(s["proxyUserHardLimit"], p.cfg.ProxyUserHardLimit),
 		ReverseAccountConcurrency: config.NormalizeReverseAccountConcurrency(s["reverseAccountConcurrency"], p.cfg.ReverseAccountConcurrency),
 		StreamFallbackEnabled:     config.NormalizeBooleanSetting(s["streamFallbackEnabled"], p.cfg.DefaultStreamFallbackEnabled),
 		RequestTimeoutSeconds:     config.NormalizeRequestTimeoutSeconds(s["requestTimeoutSeconds"], p.cfg.DefaultRequestTimeoutSeconds),

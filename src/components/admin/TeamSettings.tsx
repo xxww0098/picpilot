@@ -180,6 +180,21 @@ export default function TeamSettings() {
               })}
             />
             <SettingCard
+              label="单用户硬上限"
+              value={data.proxyUserHardLimit}
+              unit={data.proxyUserHardLimit === 0 ? '关闭' : '个请求'}
+              disabled={saving}
+              onEdit={() => editNumber({
+                title: '单用户硬上限',
+                message: '0 表示关闭。启用后，某个用户在途+排队的请求总数达到该值时，其新的同步出图请求直接返回 429（异步任务不受限，仍会排队）。用于防止单用户 fan-out 占满队列。范围 0-100。',
+                current: data.proxyUserHardLimit,
+                min: 0,
+                max: 100,
+                toField: (val) => ({ proxyUserHardLimit: val }),
+                successMessage: '单用户硬上限已更新。',
+              })}
+            />
+            <SettingCard
               label="逆向单账号并发"
               value={data.reverseAccountConcurrency}
               unit="个请求/账号"

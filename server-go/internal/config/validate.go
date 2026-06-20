@@ -84,6 +84,9 @@ func NormalizeQueueLimit(v any, fallback int) int       { return normalizeClampe
 func NormalizeProxyUserSoftLimit(v any, fallback int) int {
 	return normalizeClamped(v, 0, 100, fallback)
 }
+func NormalizeProxyUserHardLimit(v any, fallback int) int {
+	return normalizeClamped(v, 0, 100, fallback)
+}
 func NormalizeReverseAccountConcurrency(v any, fallback int) int {
 	return normalizeClamped(v, 1, 5, clampInt(fallback, 1, 5))
 }
@@ -328,6 +331,7 @@ func ParseBatchImageLimitPatchValue(v any) (int, bool)    { return parsePatchCla
 func ParseConcurrencyPatchValue(v any) (int, bool)        { return parsePatchClamped(v, 1, 100) }
 func ParseQueuePatchValue(v any) (int, bool)              { return parsePatchClamped(v, 0, 1000) }
 func ParseProxyUserSoftLimitPatchValue(v any) (int, bool) { return parsePatchClamped(v, 0, 100) }
+func ParseProxyUserHardLimitPatchValue(v any) (int, bool) { return parsePatchClamped(v, 0, 100) }
 func ParseReverseAccountConcurrencyPatchValue(v any) (int, bool) {
 	return parsePatchClamped(v, 1, 5)
 }

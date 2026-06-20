@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -63,6 +64,8 @@ type Config struct {
 	ProxyQueueMaxWaitMs          int
 	ProxyQueueMax                int
 	ProxyUserSoftLimit           int
+	ProxyUserHardLimit           int
+	ProviderLimits               map[string]int
 	DefaultMaxBatchImages        int
 	DefaultGalleryAutoRetryCount int
 	DefaultStreamFallbackEnabled bool
@@ -157,6 +160,8 @@ func Load(logger *slog.Logger) *Config {
 		ProxyQueueMaxWaitMs:          clampInt(envInt("PROXY_QUEUE_MAX_WAIT_MS", 240000), 0, 240000),
 		ProxyQueueMax:                max(0, envInt("PROXY_QUEUE_MAX", 10)),
 		ProxyUserSoftLimit:           NormalizeProxyUserSoftLimit(os.Getenv("PROXY_USER_SOFT_LIMIT"), 3),
+		ProxyUserHardLimit:           NormalizeProxyUserHardLimit(os.Getenv("PROXY_USER_HARD_LIMIT"), 0),
+		ProviderLimits:               parseProviderLimits(os.Getenv("PROXY_PROVIDER_LIMITS")),
 		DefaultMaxBatchImages:        NormalizeBatchImageLimit(os.Getenv("DEFAULT_MAX_BATCH_IMAGES"), 10),
 		DefaultGalleryAutoRetryCount: NormalizeGalleryAutoRetryCount(os.Getenv("DEFAULT_GALLERY_AUTO_RETRY_COUNT"), 1),
 		DefaultStreamFallbackEnabled: NormalizeBooleanSetting(os.Getenv("STREAM_FALLBACK_ENABLED"), true),
@@ -175,4 +180,30 @@ func Load(logger *slog.Logger) *Config {
 	}
 
 	return cfg
+}
+
+// parseProviderLimits parses PROXY_PROVIDER_LIMITS — a JSON object mapping upstream provider
+// keys (e.g. "api", "reverse") to a max in-flight count, like {"reverse":2}. Values are
+// clamped to [1,100]; non-positive or unparseable entries are dropped. Returns nil when
+// unset or invalid (per-provider limiting disabled).
+func parseProviderLimits(raw string) map[string]int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var parsed map[string]int
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	out := make(map[string]int)
+	for k, v := range parsed {
+		if k = strings.TrimSpace(k); k == "" || v <= 0 {
+			continue
+		}
+		out[k] = clampInt(v, 1, 100)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

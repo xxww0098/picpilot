@@ -134,6 +134,8 @@ func main() {
 		MaxQueue:         sp.MaxQueue,
 		MaxWaitMs:        cfg.ProxyQueueMaxWaitMs,
 		PerUserSoftLimit: sp.ProxyUserSoftLimit,
+		PerUserHardLimit: sp.ProxyUserHardLimit,
+		ProviderLimits:   cfg.ProviderLimits,
 	})
 
 	authMod := auth.New(database, cfg, proxyQueue, settingsProvider, logger)

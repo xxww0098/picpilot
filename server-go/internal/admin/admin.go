@@ -165,6 +165,7 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 		{"maxConcurrent", "团队并发必须是 1 到 100 之间的数字。", config.ParseConcurrencyPatchValue},
 		{"maxQueue", "排队上限必须是 0 到 1000 之间的数字。", config.ParseQueuePatchValue},
 		{"proxyUserSoftLimit", "单用户软上限必须是 0 到 100 之间的数字。", config.ParseProxyUserSoftLimitPatchValue},
+		{"proxyUserHardLimit", "单用户硬上限必须是 0 到 100 之间的数字。", config.ParseProxyUserHardLimitPatchValue},
 		{"reverseAccountConcurrency", "逆向单账号并发必须是 1 到 5 之间的数字。", config.ParseReverseAccountConcurrencyPatchValue},
 		{"galleryAutoRetryCount", "失败自动重试次数必须是 0 到 5 之间的数字。", config.ParseGalleryAutoRetryCountPatchValue},
 		{"requestTimeoutSeconds", "请求超时必须是 30 到 3600 秒之间的数字。", config.ParseRequestTimeoutSecondsPatchValue},
@@ -256,10 +257,11 @@ func (m *Module) patchTeamSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Apply new limits to the live queue immediately (no restart needed).
 	eff := m.settings.Payload()
-	m.q.SetLimits(&eff.MaxConcurrent, &eff.MaxQueue, &eff.ProxyUserSoftLimit)
+	m.q.SetLimits(&eff.MaxConcurrent, &eff.MaxQueue, &eff.ProxyUserSoftLimit, &eff.ProxyUserHardLimit)
 	m.logger.Info("team service limits updated", "scope", "admin", "updatedBy", m.actor(r),
 		"maxConcurrent", eff.MaxConcurrent, "maxQueue", eff.MaxQueue,
 		"proxyUserSoftLimit", eff.ProxyUserSoftLimit,
+		"proxyUserHardLimit", eff.ProxyUserHardLimit,
 		"reverseAccountConcurrency", eff.ReverseAccountConcurrency)
 	httpx.JSON(w, http.StatusOK, eff)
 }

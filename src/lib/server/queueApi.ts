@@ -12,6 +12,8 @@ export interface QueueStats {
   maxQueue: number
   /** 单用户在途软上限，0 表示关闭 */
   proxyUserSoftLimit: number
+  /** 按上游 provider 的在途上限（如 {"reverse":2}）；未配置时缺省 */
+  providerLimits?: Record<string, number>
   /** 当前登录用户在途请求数 */
   myInflight: number
   /** 当前登录用户正在排队的请求数 */

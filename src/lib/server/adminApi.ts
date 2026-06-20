@@ -37,6 +37,7 @@ export interface AdminTeamSettings {
   maxConcurrent: number
   maxQueue: number
   proxyUserSoftLimit: number
+  proxyUserHardLimit: number
   reverseAccountConcurrency: number
   streamFallbackEnabled: boolean
   requestTimeoutSeconds: number
@@ -265,6 +266,7 @@ export function patchAdminTeamSettings(body: {
   maxConcurrent?: number
   maxQueue?: number
   proxyUserSoftLimit?: number
+  proxyUserHardLimit?: number
   reverseAccountConcurrency?: number
   streamFallbackEnabled?: boolean
   requestTimeoutSeconds?: number

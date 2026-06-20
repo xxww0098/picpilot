@@ -5,6 +5,7 @@ import {
   getAllImageIds,
   getAllTasks,
   getImage,
+  requestPersistentStorage,
 } from '../lib/shared/db'
 import { mergeAgentConversationsForStorage, normalizeAgentConversations } from '../lib/agent/agentPersistence'
 import { getPersistableTask, putTask } from '../lib/agent/taskPersistence'
@@ -38,6 +39,11 @@ import {
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
+  // Best-effort: ask the UA to make this origin's storage durable. User tasks/images live
+  // only in IndexedDB, so this guards against silent eviction under storage pressure.
+  // Fire-and-forget — never block startup on it.
+  void requestPersistentStorage()
+
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
