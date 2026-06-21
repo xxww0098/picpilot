@@ -2,7 +2,7 @@
 
 export type ApiMode = 'images' | 'responses'
 export type UpstreamMode = 'server' | 'api' | 'reverse'
-export type AppMode = 'gallery' | 'agent' | 'video' | 'workflow'
+export type AppMode = 'gallery' | 'agent' | 'video' | 'workflow' | 'canvas'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 /** 多张参考图的提交模式：each=每张各生成（N→N）；merge=合成为一次请求（N→1） */
 export type MultiImageMode = 'each' | 'merge'
@@ -352,6 +352,24 @@ export interface AgentConversation {
   assetPlan?: AgentPlatformAssetPlanItem[]
 }
 
+// ===== 画布工作区（cowart 风格无限画布）=====
+// TLDSnapshot 是 tldraw store 的序列化快照（schema + store records）。
+// 用 unknown 而非 tldraw 的具体类型，避免 types.ts 依赖 tldraw 运行时；
+// 实际读写由 src/lib/canvas/ 下的辅助函数做类型收敛。
+export interface TLDSnapshot {
+  schema: unknown
+  store: Record<string, unknown>
+}
+
+export interface CanvasDocument {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  /** tldraw store 快照；空画布为 { schema: {}, store: {} } */
+  snapshot: TLDSnapshot
+}
+
 // ===== IndexedDB 存储的图片 =====
 
 export interface StoredImage {
@@ -524,4 +542,6 @@ export interface ExportData {
     createdAt?: number
     source?: 'generated'
   }>
+  /** 画布文档（cowart 风格无限画布） */
+  canvases?: CanvasDocument[]
 }

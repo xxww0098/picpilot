@@ -1,15 +1,16 @@
-import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, StoredVideo } from '../../types'
+import type { AgentConversation, CanvasDocument, TaskRecord, StoredImage, StoredImageThumbnail, StoredVideo } from '../../types'
 import { loadImage } from '../imaging/canvasImage'
 import { logger, serializeError } from './logger'
 import { namespacedStorageKey } from './auth'
 
 const DB_NAME = namespacedStorageKey('picpilot')
-const DB_VERSION = 4
+const DB_VERSION = 5
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
 const STORE_VIDEOS = 'videos'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
+const STORE_CANVASES = 'canvases'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
@@ -49,6 +50,9 @@ function openDBConnection(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_AGENT_CONVERSATIONS)) {
         db.createObjectStore(STORE_AGENT_CONVERSATIONS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_CANVASES)) {
+        db.createObjectStore(STORE_CANVASES, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => {
@@ -128,6 +132,39 @@ export function replaceAgentConversations(conversations: AgentConversation[]): P
         const store = tx.objectStore(STORE_AGENT_CONVERSATIONS)
         store.clear()
         for (const conversation of conversations) store.put(conversation)
+        tx.oncomplete = () => resolve(undefined)
+        tx.onerror = () => reject(tx.error)
+        tx.onabort = () => reject(tx.error)
+      }),
+  )
+}
+
+// ===== Canvases（画布工作区文档）=====
+
+export function getAllCanvases(): Promise<CanvasDocument[]> {
+  return dbTransaction(STORE_CANVASES, 'readonly', (s) => s.getAll())
+}
+
+export function putCanvas(canvas: CanvasDocument): Promise<IDBValidKey> {
+  return dbTransaction(STORE_CANVASES, 'readwrite', (s) => s.put(canvas))
+}
+
+export function deleteCanvas(id: string): Promise<undefined> {
+  return dbTransaction(STORE_CANVASES, 'readwrite', (s) => s.delete(id))
+}
+
+export function clearCanvases(): Promise<undefined> {
+  return dbTransaction(STORE_CANVASES, 'readwrite', (s) => s.clear())
+}
+
+export function replaceStoredCanvases(canvases: CanvasDocument[]): Promise<undefined> {
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_CANVASES, 'readwrite')
+        const store = tx.objectStore(STORE_CANVASES)
+        store.clear()
+        for (const canvas of canvases) store.put(canvas)
         tx.oncomplete = () => resolve(undefined)
         tx.onerror = () => reject(tx.error)
         tx.onabort = () => reject(tx.error)

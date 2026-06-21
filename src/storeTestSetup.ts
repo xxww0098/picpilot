@@ -6,7 +6,7 @@
 import { vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, StoredVideo, TaskRecord } from './types'
+import type { AgentConversation, CanvasDocument, ExportData, StoredImage, StoredImageThumbnail, StoredVideo, TaskRecord } from './types'
 
 export function createDbMock() {
   const tasks = new Map<string, TaskRecord>()
@@ -14,6 +14,7 @@ export function createDbMock() {
   const thumbnails = new Map<string, StoredImageThumbnail>()
   const videos = new Map<string, StoredVideo>()
   const agentConversations = new Map<string, AgentConversation>()
+  const canvases = new Map<string, CanvasDocument>()
   let imageSeq = 0
 
   return {
@@ -43,6 +44,21 @@ export function createDbMock() {
     replaceAgentConversations: async (conversations: AgentConversation[]) => {
       agentConversations.clear()
       for (const conversation of conversations) agentConversations.set(conversation.id, conversation)
+    },
+    getAllCanvases: async () => [...canvases.values()],
+    putCanvas: async (canvas: CanvasDocument) => {
+      canvases.set(canvas.id, canvas)
+      return canvas.id
+    },
+    deleteCanvas: async (id: string) => {
+      canvases.delete(id)
+    },
+    clearCanvases: async () => {
+      canvases.clear()
+    },
+    replaceStoredCanvases: async (list: CanvasDocument[]) => {
+      canvases.clear()
+      for (const canvas of list) canvases.set(canvas.id, canvas)
     },
     getImage: async (id: string) => images.get(id),
     getImageThumbnail: async (id: string) => thumbnails.get(id),

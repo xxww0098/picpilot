@@ -58,6 +58,7 @@ export function getPersistedState(state: AppState) {
       ? { agentConversations: getPersistableAgentConversations(state.agentConversations) }
       : {}),
     activeAgentConversationId: state.activeAgentConversationId,
+    activeCanvasId: state.activeCanvasId,
     agentInputDrafts: getPersistableAgentInputDrafts(state),
     agentSidebarCollapsed: state.agentSidebarCollapsed,
     agentAssetTab: state.agentAssetTab,
@@ -85,7 +86,7 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'video' || persisted.appMode === 'workflow' ? persisted.appMode : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'video' || persisted.appMode === 'workflow' || persisted.appMode === 'canvas' ? persisted.appMode : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,

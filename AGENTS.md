@@ -33,10 +33,11 @@
 
 **出图调用链**：`src/lib/api.ts` → `src/lib/openaiCompatibleImageApi.ts` 按 API 模式分发（`src/lib/openaiCompatible/` 下 Images、Responses 流式、自定义服务商等实现）→ 同源 `fetch('/api-proxy/v1/…')` 带 JWT（上游地址与 key 永不进前端）→ 后端并发队列 → 选上游：`api`（CLIProxyAPI 等 OpenAI 兼容端点，服务端注入 key）或 `reverse`（内置账号池直连 chatgpt.com）；模式按请求选择——前端按激活档案的 `upstreamMode` 发 `X-PicPilot-Upstream-Mode` 头（画廊顶栏模型选择器切换），无效或缺省时回退 env `UPSTREAM_MODE`。
 
-**前端**：zustand 单 store（`src/store.ts`，persist 到 IndexedDB）。`App.tsx` 四个工作区：画廊（默认出图）、Agent 多轮对话、工作流画布、视频。关键模块：
+**前端**：zustand 单 store（`src/store.ts`，persist 到 IndexedDB）。`App.tsx` 五个工作区：画廊（默认出图）、Agent 多轮对话、**画布**（cowart 风格无限画布）、工作流画布、视频。关键模块：
 
 - `src/lib/agentOrchestrator.ts` —— Agent 模式编排：Responses API 对话 + 工具调用（批量出图、web 搜索），产出图自动同步进画廊；平台素材槽位（Ozon / Shopify 等）定义在 `src/lib/platforms/`。
-- `src/lib/workflow/engine.ts` —— 纯逻辑数据流引擎（无 React 依赖），`templates.ts` 平台模板、`runtime.ts` 桥接 store 与出图 API；画布组件 `src/components/workflow/WorkflowCanvas.tsx`（@xyflow/react）。
+- `src/components/canvas/` —— 画布工作区（cowart 风格）：基于 tldraw 的无限画布，支持 AI 图片占位框（frame holder → 选中 → 描述 → gpt-5.5 托管出图填入）、图生图迭代（选中图 → 基于它再生成，新图放原图旁）、**标注迭代**（在图上画红色箭头/文字批注 → 截图 → AI 读标注生成干净修订版，原图和标注保留）。画布文档（`CanvasDocument`，存 tldraw 快照）走独立 IndexedDB `canvases` store（DB_VERSION=5），图片资源复用 `images`/`thumbnails` store——落库前剥离 asset 内联 dataUrl（只留 imageId 引用），加载时 `hydrateCanvasSnapshot` 反查图片库恢复。出图复用 Agent 链路的 `callAgentResponsesApi`（强制 gpt-5.5 托管 `image_generation` 工具），但**不创建 AgentConversation/TaskRecord**，画布完全独立存储。关键文件：`CanvasWorkspace.tsx`（主组件）、`CanvasAgentPanel.tsx`（AI 输入面板）、`src/lib/canvas/canvasGenerate.ts`（出图封装）、`canvasImageAsset.ts`（tldraw image shape 操作）、`captureSnapshot.ts`（标注截图）、`placement.ts`（避障布局）、`canvasPersistence.ts`（持久化）。
+- `src/lib/workflow/engine.ts` —— 纯逻辑数据流引擎（无 React 依赖），`templates.ts` 平台模板、`runtime.ts` 桥接 store 与出图 API；画布组件 `src/components/workflow/WorkflowCanvas.tsx`（@xyflow/react，DAG 数据流画布，与画布工作区独立）。
 - `src/lib/imageModels.ts` / `chatModels.ts` —— 模型注册表；`src/lib/paramCompatibility.ts` —— 按服务商归一化参数并做批量 clamp；`src/lib/apiProfiles.ts` —— API 配置档案（`normalize*` 是恢复策略而非拒绝，勿改写成 reject 式校验）。
 
 **部署**：生产在 VPS `/opt/picpilot`（Caddy + picpilot + cliproxyapi；`picpilot` 容器 = 单镜像 Go 后端 + 前端静态文件，`server-go/Dockerfile` 多阶段构建、上下文为仓库根），发布 / 回滚用 `deploy-vps` skill；实盘 compose 模板在 `deploy/picpilot/compose.yml`，改实盘后须同步回仓库。

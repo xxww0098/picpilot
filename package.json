@@ -1,7 +1,7 @@
 {
   "name": "picpilot",
   "private": true,
-  "version": "0.1.28",
+  "version": "0.1.34",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -24,10 +24,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fflate": "^0.8.2",
+    "fractional-indexing": "^3.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "streamdown": "^2.5.0",
     "tailwind-merge": "^3.6.0",
+    "tldraw": "^5.1.1",
     "zod": "^4.4.3",
     "zustand": "^5.0.5"
   },

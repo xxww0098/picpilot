@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { namespacedStorageKey } from '../lib/shared/auth'
-import type { AgentConversation, AgentPlatformId, AppSettings, TaskRecord } from '../types'
+import type { AgentConversation, AgentPlatformId, AppSettings, CanvasDocument, TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
 import { DEFAULT_SETTINGS, normalizeSettings } from '../lib/shared/apiProfiles'
 import { dismissAllTooltips } from '../lib/ui/tooltipDismiss'
@@ -9,6 +9,8 @@ import { remapImageMentionsForOrder } from '../lib/ui/promptImageMentions'
 import { deleteImage } from '../lib/shared/db'
 import { getErrorToastMessage } from '../lib/ui/errorToast'
 import { isEmptyAgentConversation, migratePersistedState } from '../lib/agent/agentPersistence'
+import { getPersistableCanvases } from '../lib/canvas/canvasPersistence'
+import { replaceStoredCanvases } from '../lib/shared/db'
 import { putTask } from '../lib/agent/taskPersistence'
 import { evictCachedImage, resetImageCacheEntry } from './imageCache'
 import { getAgentPlatformDefinition, normalizeAgentPlatformId } from '../lib/platforms/registry'
@@ -154,7 +156,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery' || appMode === 'video' || appMode === 'workflow') {
+        if (appMode === 'gallery' || appMode === 'video' || appMode === 'workflow' || appMode === 'canvas') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -351,6 +353,11 @@ export const useStore = create<AppState>()(
       agentEditingConversationId: null,
       agentTargetAssetSlotId: null,
       agentGeneratingTitleIds: {},
+
+      // 画布工作区状态字段
+      canvases: [],
+      canvasesLoaded: false,
+      activeCanvasId: null,
       createAgentConversation: (platformId) => {
         const now = Date.now()
         const normalizedPlatformId = platformId ? normalizeAgentPlatformId(platformId) : 'generic_legacy'
@@ -439,6 +446,38 @@ export const useStore = create<AppState>()(
       setAgentEditingRoundId: (agentEditingRoundId) => set({ agentEditingRoundId }),
       setAgentEditingConversationId: (agentEditingConversationId) => set({ agentEditingConversationId }),
       setAgentTargetAssetSlotId: (agentTargetAssetSlotId) => set((s) => syncActiveInputDraft(s, { agentTargetAssetSlotId })),
+
+      // 画布工作区 action
+      setCanvases: (canvases) => set({ canvases }),
+      setCanvasesLoaded: (canvasesLoaded) => set({ canvasesLoaded }),
+      createCanvas: (title) => {
+        const id = genId()
+        const now = Date.now()
+        const canvas: CanvasDocument = {
+          id,
+          title: title?.trim() || '未命名画布',
+          createdAt: now,
+          updatedAt: now,
+          snapshot: { schema: {}, store: {} },
+        }
+        set((state) => ({
+          canvases: [...state.canvases, canvas],
+          activeCanvasId: id,
+        }))
+        return id
+      },
+      setActiveCanvasId: (id) => set({ activeCanvasId: id }),
+      renameCanvas: (id, title) => set((state) => ({
+        canvases: state.canvases.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c)),
+      })),
+      deleteCanvas: (id) => set((state) => {
+        const remaining = state.canvases.filter((c) => c.id !== id)
+        const nextActive = state.activeCanvasId === id ? (remaining[remaining.length - 1]?.id ?? null) : state.activeCanvasId
+        return { canvases: remaining, activeCanvasId: nextActive }
+      }),
+      updateCanvasSnapshot: (id, snapshot) => set((state) => ({
+        canvases: state.canvases.map((c) => (c.id === id ? { ...c, snapshot, updatedAt: Date.now() } : c)),
+      })),
 
       // Tasks
       tasks: [],
@@ -650,6 +689,56 @@ export function isAgentConversationPersistQueued() {
 export function getLastStoredAgentConversations() {
   return lastStoredAgentConversations
 }
+
+// ===== 画布文档持久化（仿 agentConversations 的 subscribe + flush 模式）=====
+
+let lastStoredCanvases = useStore.getState().canvases
+let canvasPersistRunning = false
+let canvasPersistQueued = false
+let canvasPersistenceReady = false
+
+export function isCanvasPersistenceReady() {
+  return canvasPersistenceReady
+}
+
+export function setCanvasPersistenceReady(ready: boolean) {
+  canvasPersistenceReady = ready
+}
+
+export function isCanvasPersistQueued() {
+  return canvasPersistQueued
+}
+
+export function getLastStoredCanvases() {
+  return lastStoredCanvases
+}
+
+export async function flushCanvasesToIndexedDB() {
+  if (canvasPersistRunning) {
+    canvasPersistQueued = true
+    return
+  }
+  canvasPersistRunning = true
+  try {
+    do {
+      canvasPersistQueued = false
+      const canvases = useStore.getState().canvases
+      await replaceStoredCanvases(getPersistableCanvases(canvases))
+      lastStoredCanvases = canvases
+    } while (canvasPersistQueued || useStore.getState().canvases !== lastStoredCanvases)
+  } finally {
+    canvasPersistRunning = false
+  }
+}
+
+useStore.subscribe((state) => {
+  if (state.canvases === lastStoredCanvases) return
+  if (!canvasPersistenceReady) {
+    canvasPersistQueued = true
+    return
+  }
+  void flushCanvasesToIndexedDB()
+})
 
 // ===== Actions =====
 

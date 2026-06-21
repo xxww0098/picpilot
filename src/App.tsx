@@ -24,6 +24,7 @@ import { useGlobalClickSuppression } from './lib/ui/clickSuppression'
 const AgentWorkspace = lazy(() => import('./components/workspaces/AgentWorkspace'))
 const VideoWorkspace = lazy(() => import('./components/workspaces/VideoWorkspace'))
 const WorkflowCanvas = lazy(() => import('./components/workflow/WorkflowCanvas'))
+const CanvasWorkspace = lazy(() => import('./components/canvas/CanvasWorkspace'))
 const SettingsModal = lazy(() => import('./components/modals/SettingsModal'))
 const LogPanel = lazy(() => import('./components/modals/LogPanel'))
 // 遮罩编辑器较重（canvas + 图像处理），首屏不需要：首次打开时再加载，加载后保持挂载（行为同此前的常驻挂载）。
@@ -177,6 +178,16 @@ export default function App() {
         >
           <VideoWorkspace />
         </Suspense>
+      ) : appMode === 'canvas' ? (
+        <Suspense
+          fallback={
+            <div className="flex min-h-[50vh] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+              加载画布工作区…
+            </div>
+          }
+        >
+          <CanvasWorkspace />
+        </Suspense>
       ) : (
         <main data-home-main data-drag-select-surface className="pb-48">
           <div className="safe-area-x max-w-7xl mx-auto">
@@ -186,7 +197,7 @@ export default function App() {
           </div>
         </main>
       )}
-      {appMode !== 'workflow' && <InputBar />}
+      {appMode !== 'workflow' && appMode !== 'canvas' && <InputBar />}
       <DetailModal />
       <Lightbox />
       {showSettings && (

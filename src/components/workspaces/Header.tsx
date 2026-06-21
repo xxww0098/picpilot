@@ -293,6 +293,13 @@ export default function Header() {
             </button>
             <button
               type="button"
+              onClick={() => setAppMode('canvas')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'canvas' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+            >
+              画布
+            </button>
+            <button
+              type="button"
               onClick={() => setAppMode('video')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'video' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
@@ -437,6 +444,7 @@ export default function Header() {
 const MOBILE_VIEW_OPTIONS: { value: AppMode; label: string }[] = [
   { value: 'gallery', label: '画廊' },
   { value: 'agent', label: '对话' },
+  { value: 'canvas', label: '画布' },
   { value: 'video', label: '视频' },
   { value: 'workflow', label: '工作流' },
 ]

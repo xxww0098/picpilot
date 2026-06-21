@@ -4,6 +4,7 @@ import type {
   AgentPlatformId,
   AppSettings,
   AppMode,
+  CanvasDocument,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -86,6 +87,19 @@ export interface AppState {
   setAgentEditingRoundId: (id: string | null) => void
   setAgentEditingConversationId: (id: string | null) => void
   setAgentTargetAssetSlotId: (slotId: string | null) => void
+
+  // 画布工作区（cowart 风格无限画布）
+  canvases: CanvasDocument[]
+  canvasesLoaded: boolean
+  activeCanvasId: string | null
+  createCanvas: (title?: string) => string
+  setActiveCanvasId: (id: string | null) => void
+  renameCanvas: (id: string, title: string) => void
+  deleteCanvas: (id: string) => void
+  /** 用 tldraw 最新快照覆盖内存中的画布文档（不立即落库，由 subscribe flush 异步写） */
+  updateCanvasSnapshot: (id: string, snapshot: CanvasDocument['snapshot']) => void
+  setCanvases: (canvases: CanvasDocument[]) => void
+  setCanvasesLoaded: (loaded: boolean) => void
 
   // 任务列表
   tasks: TaskRecord[]

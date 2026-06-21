@@ -1,13 +1,16 @@
-import type { InputImage } from '../types'
+import type { CanvasDocument, InputImage } from '../types'
 import {
   deleteImage,
   getAllAgentConversations,
+  getAllCanvases,
   getAllImageIds,
   getAllTasks,
   getImage,
   requestPersistentStorage,
 } from '../lib/shared/db'
 import { mergeAgentConversationsForStorage, normalizeAgentConversations } from '../lib/agent/agentPersistence'
+import { getPersistableCanvases, hydrateCanvasSnapshot, mergeCanvasesForStorage, normalizeCanvases } from '../lib/canvas/canvasPersistence'
+import { replaceStoredCanvases } from '../lib/shared/db'
 import { getPersistableTask, putTask } from '../lib/agent/taskPersistence'
 import { remapImageMentionsForOrder } from '../lib/ui/promptImageMentions'
 import { cacheImage, scheduleThumbnailBackfill } from './imageCache'
@@ -27,8 +30,12 @@ import {
 } from './persistence'
 import {
   flushAgentConversationsToIndexedDB,
+  flushCanvasesToIndexedDB,
   getLastStoredAgentConversations,
+  getLastStoredCanvases,
   isAgentConversationPersistQueued,
+  isCanvasPersistQueued,
+  setCanvasPersistenceReady,
   useStore,
 } from './coreStore'
 import {
@@ -80,6 +87,35 @@ export async function initStore() {
   if (shouldRewritePersistedLocalState) {
     useStore.setState({})
   }
+
+  // 加载画布文档：IndexedDB 读出 → 规范化 → 恢复图片 asset dataUrl → 合并内存态
+  const storedCanvases = normalizeCanvases(await getAllCanvases())
+  const hydratedCanvases: CanvasDocument[] = []
+  for (const canvas of storedCanvases) {
+    const snapshot = await hydrateCanvasSnapshot(canvas.snapshot)
+    hydratedCanvases.push({ ...canvas, snapshot })
+  }
+  const memoryCanvases = useStore.getState().canvases
+  const loadedCanvases = mergeCanvasesForStorage(hydratedCanvases, memoryCanvases)
+  const activeCanvasId =
+    useStore.getState().activeCanvasId && loadedCanvases.some((c) => c.id === useStore.getState().activeCanvasId)
+      ? useStore.getState().activeCanvasId
+      : loadedCanvases[loadedCanvases.length - 1]?.id ?? null
+  if (loadedCanvases.length > 0 || memoryCanvases.length > 0) {
+    useStore.setState({
+      canvases: loadedCanvases,
+      canvasesLoaded: true,
+      ...(activeCanvasId ? { activeCanvasId } : {}),
+    })
+    await replaceStoredCanvases(getPersistableCanvases(loadedCanvases))
+  } else {
+    useStore.setState({ canvasesLoaded: true })
+  }
+  setCanvasPersistenceReady(true)
+  if (isCanvasPersistQueued() || useStore.getState().canvases !== getLastStoredCanvases()) {
+    await flushCanvasesToIndexedDB()
+  }
+
   const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const tasks = markedTasks.map(getPersistableTask)

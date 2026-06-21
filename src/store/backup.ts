@@ -15,6 +15,8 @@ import {
   mergeImportedAgentConversations,
   normalizeAgentConversations,
 } from '../lib/agent/agentPersistence'
+import { getPersistableCanvases, mergeCanvasesForStorage, normalizeCanvases } from '../lib/canvas/canvasPersistence'
+import { replaceStoredCanvases } from '../lib/shared/db'
 import { mergeImportedSettings } from '../lib/shared/apiProfiles'
 import { bytesToDataUrl, dataUrlToBytes, formatExportFileTime } from '../lib/imaging/exportZip'
 import { getUserFacingErrorMessage } from '../lib/shared/userFacingText'
@@ -41,7 +43,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks ? await getAllImages() : []
     const videos = options.exportTasks ? await getAllVideos() : []
-    const { settings, agentConversations } = useStore.getState()
+    const { settings, agentConversations, canvases } = useStore.getState()
     const exportedAt = Date.now()
     const imageCreatedAtFallback = new Map<string, number>()
     const videoCreatedAtFallback = new Map<string, number>()
@@ -143,6 +145,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     if (options.exportTasks) {
       manifest.tasks = tasks
       manifest.agentConversations = getPersistableAgentConversations(agentConversations)
+      manifest.canvases = getPersistableCanvases(canvases)
       manifest.imageFiles = imageFiles
       manifest.thumbnailFiles = thumbnailFiles
       manifest.videoFiles = videoFiles
@@ -258,6 +261,20 @@ export async function importData(file: File, options: ImportOptions = { importCo
         }
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)
+
+      // 导入画布文档（合并，按 updatedAt 取新；图片 asset dataUrl 在 init 时由 hydrate 恢复）
+      const importedCanvases = normalizeCanvases(data.canvases ?? [])
+      if (importedCanvases.length > 0) {
+        useStore.setState((state) => {
+          const canvases = mergeCanvasesForStorage(state.canvases, importedCanvases)
+          const activeCanvasId = state.activeCanvasId && canvases.some((c) => c.id === state.activeCanvasId)
+            ? state.activeCanvasId
+            : canvases[canvases.length - 1]?.id ?? null
+          return { canvases, activeCanvasId }
+        })
+        await replaceStoredCanvases(getPersistableCanvases(useStore.getState().canvases))
+      }
+
       scheduleThumbnailBackfill(importedImageIds)
     }
 
