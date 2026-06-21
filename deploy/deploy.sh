@@ -27,6 +27,10 @@ caddy_compose() {
   docker compose -p "$CADDY_PROJECT" -f "$CADDY_DIR/compose.yml" "$@"
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-upstream-check.sh
+source "$SCRIPT_DIR/lib-upstream-check.sh"
+
 resolve_version() {
   if [[ -n "${1:-}" ]]; then
     echo "$1"
@@ -89,13 +93,15 @@ verify_deploy() {
   code=$(curl -sk --resolve image.xxww.online:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://image.xxww.online/)
   [[ "$code" == "200" ]] || { echo "❌ image.xxww.online → HTTP $code" >&2; exit 1; }
 
-  docker exec caddy wget -qO- --timeout=5 http://cliproxyapi:8317/v1/models 2>/dev/null | grep -q '"data"' || {
-    echo "❌ caddy 无法访问 cliproxyapi:8317" >&2
+  upstream_models_ok_caddy || {
+    echo "❌ caddy 无法访问 cliproxyapi:8317（检查 API_PROXY_API_KEY 与 cliproxyapi api-keys）" >&2
     exit 1
   }
 
-  code=$(curl -sk --resolve api.xxww.online:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://api.xxww.online/v1/models)
-  [[ "$code" == "200" ]] || { echo "❌ api.xxww.online → HTTP $code" >&2; exit 1; }
+  upstream_models_ok_public || {
+    echo "❌ api.xxww.online /v1/models 鉴权失败（API_PROXY_API_KEY 须与 cliproxyapi api-keys 一致）" >&2
+    exit 1
+  }
 
   echo "✅ 部署成功: $version"
   echo "   image.xxww.online → HTTP 200"

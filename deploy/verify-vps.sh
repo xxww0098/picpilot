@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-upstream-check.sh
+source "$SCRIPT_DIR/lib-upstream-check.sh"
+
 PASS=0
 FAIL=0
 
@@ -55,11 +59,11 @@ check "picpilot 使用 go-server" \
 check "image.xxww.online HTTP 200" \
   bash -c "[[ \"\$(curl -sk --resolve image.xxww.online:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://image.xxww.online/)\" == \"200\" ]]"
 
-check "api.xxww.online HTTP 200" \
-  bash -c "[[ \"\$(curl -sk --resolve api.xxww.online:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://api.xxww.online/v1/models)\" == \"200\" ]]"
+check "api.xxww.online /v1/models（带 API Key）" \
+  upstream_models_ok_public
 
-check "caddy → cliproxyapi 可达" \
-  bash -c "docker exec caddy wget -qO- --timeout=5 http://cliproxyapi:8317/v1/models 2>/dev/null | grep -q '\"data\"'"
+check "caddy → cliproxyapi 可达（带 API Key）" \
+  upstream_models_ok_caddy
 
 check "cliproxyapi-logs 已链接" \
   bash -c "[[ -L /opt/picpilot/data/cliproxyapi-logs && -d /opt/picpilot/data/cliproxyapi-logs ]]"
